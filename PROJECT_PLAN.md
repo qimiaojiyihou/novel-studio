@@ -14,7 +14,7 @@
 - 产品形态：第一阶段直接做桌面应用，使用 Vue 3 前端；后续复用核心服务和数据协议，扩展网页应用。
 - 桌面技术：Electron 负责桌面壳、主进程能力、文件访问、密钥保护和内置服务适配；Vue 3 + JavaScript + Vite 负责界面。
 - 本地数据：以 SQLite 作为项目元数据、设定、章节卡、正文版本和任务记录的本地存储。
-- Go 服务：作为独立本地服务层的预留实现，不作为桌面应用的启动前置条件。桌面内置模式可以先由 Electron 主进程完成同等能力。
+- Go 服务：作为正式桌面版本随安装包发布的独立本地服务层，由 Electron 负责启动和管理；开发、Mock 和故障回退模式可以由 Electron 主进程直接提供基础能力。
 - 模型接入：通过统一模型适配器接入本地模型、DeepSeek、GPT、Kimi 以及其他 OpenAI 兼容接口。
 - 模型分工：正文默认优先使用本地模型；大纲、人物、世界观、章节卡、状态提取和局部重写可按任务选择本地模型或外部模型。
 - 本地模型管理：由软件或管理员维护连接；同一类型本地模型只保留一个当前生效版本，允许后续替换并保留历史记录。
@@ -85,7 +85,7 @@ Novel Studio 不把模型参数作为创作入口，而是把创作意图转化�
 - 自动替用户决定所有故事内容；
 - 复杂的出版排版和商业投稿流程；
 - 将所有外部模型强制绑定为固定供应商；
-- 依赖 Go 服务才能运行的桌面基础功能。
+- 要求用户额外安装 Go 环境才能运行的桌面基础功能。
 
 ## 4. 运行形态设计
 
@@ -94,10 +94,10 @@ Novel Studio 不把模型参数作为创作入口，而是把创作意图转化�
 | 模式 | 是否需要 Go | 主要用途 | 能力范围 |
 |---|---:|---|---|
 | Mock 模式 | 否 | UI 开发、流程演示、自动化测试 | 使用固定样例和模拟流式输出 |
-| 桌面内置模式 | 否 | 第一版桌面应用 | Electron 主进程提供存储、模型适配、文件和任务能力 |
-| Go 服务模式 | 是，可选 | 本地模型管理、长任务、知识库和后续网页复用 | Go 提供 HTTP/WebSocket 服务，桌面和网页都可连接 |
+| 桌面内置模式 | 否 | Mock、开发和 Go 服务故障回退 | Electron 主进程提供存储、模型适配、文件和任务能力 |
+| Go 服务模式 | 是，随包发布 | 正式桌面版本、本地模型、长任务、知识库和后续网页复用 | Go 提供 HTTP/WebSocket 服务，由 Electron 随应用启动和管理 |
 
-桌面应用在没有 Go 服务时仍然可用。这里的“没有 Go”表示不启动独立 Go 进程，并不表示没有应用服务层；Electron 主进程仍然承担后端性质的职责。
+正式桌面安装包内置 Go 服务二进制，用户不需要单独安装 Go。开发、Mock 和故障回退模式可以不启动 Go 进程，由 Electron 主进程提供同等的基础能力。
 
 ### 4.2 推荐演进路径
 
@@ -105,7 +105,7 @@ Novel Studio 不把模型参数作为创作入口，而是把创作意图转化�
 flowchart LR
     UI[Vue 3 创作界面] --> PORT[统一 AppService 接口]
     PORT --> EMBED[Electron 内置服务\nJavaScript + SQLite]
-    PORT --> GOSVC[可选 Go 本地服务\nHTTP/WebSocket]
+    PORT --> GOSVC[随包 Go 本地服务\nHTTP/WebSocket]
     EMBED --> STORE[(SQLite + 项目文件)]
     GOSVC --> STORE2[(SQLite / 本地资源)]
     EMBED --> MODELS[模型适配器]
@@ -114,7 +114,7 @@ flowchart LR
     API --> GOSVC
 ```
 
-从第一天开始，界面只依赖 `AppService` 能力接口，不直接依赖 Electron API 或 Go API。这样可以先用内置模式完成产品，再逐步把高耗时和本地模型相关能力移动到 Go。
+从第一天开始，界面只依赖 `AppService` 能力接口，不直接依赖 Electron API 或 Go API。开发环境先用 Mock 或内置模式，正式安装包默认启动随包 Go 服务；两者对前端保持同一套能力协议。
 
 ### 4.3 后续网页应用
 
@@ -160,7 +160,24 @@ flowchart LR
 
 中心区域永远优先服务于正文阅读和编辑；模型控制放在上下文栏和操作抽屉中，避免用户面对参数面板才能写作。
 
-### 5.3 视觉方向
+### 5.3 正文编辑器选型
+
+Novel Studio 的正文编辑器采用 CodeMirror 6，整体路线参考 Vela：
+
+- 主编辑器使用 CodeMirror 6，正文以纯文本 / Markdown 字符串作为规范内容；
+- Vue 3 中通过 CodeMirror 核心模块封装 `NovelEditor`，不把编辑器实例和业务状态直接混在页面组件中；
+- 使用 Markdown 语言扩展、自动换行、搜索替换、撤销重做、中文长文阅读样式和快捷键；
+- 编辑器支持选区事件，选中文本后显示“润色、扩写、续写、改对白、局部重写”等 AI 操作；
+- AI 结果先以预览形式出现，用户确认后通过编辑器事务替换选区，并创建正文版本；
+- 版本差异使用 Monaco Editor `DiffEditor`，支持并排和内联两种查看方式；
+- 三方合并使用单独的合并界面，不把合并逻辑塞进正文编辑器本身；
+- Tiptap / Milkdown 暂不作为正文主编辑器，除非以后把复杂富文本节点、批注和嵌入卡片提升为核心需求。
+
+选择 CodeMirror 6 的原因是正文的核心任务是长文本输入、滚动、选区操作、纯文本版本和 Markdown 交换，而不是复杂排版。正文数据以字符串保存，便于 TXT、Markdown、JSON、Word 转换、模型局部重写和跨平台网页复用。
+
+参考 Vela 的实现：主正文使用 CodeMirror 6，版本差异使用 Monaco DiffEditor；相关实现位于 `/Users/weiqifeng/Desktop/code/vela/src/components/editor/CodeMirrorEditor.tsx`、`/Users/weiqifeng/Desktop/code/vela/src/components/editor/MonacoDiffViewer.tsx`。
+
+### 5.4 视觉方向
 
 产品面对的是长时间阅读和写作，不采用高饱和、仪表盘式的 AI 工具视觉。
 
@@ -305,6 +322,13 @@ flowchart LR
 | 章后状态提取 | 本地模型或低成本外部模型 | 是 |
 | 连续性检查 | 本地或外部模型 | 是 |
 
+模型适配器需要区分两类协议：
+
+- `chat_completions`：发送 `messages` 到 `/chat/completions`，用于 DeepSeek、Kimi、本地 OpenAI 兼容接口和大多数自定义接入；
+- `responses`：发送 `input`、`instructions` 和 `reasoning` 配置到 `/responses`，用于 OpenAI 官方模型的高级能力。
+
+两类协议在内部统一转换成 `GenerationResult`，前端不感知供应商的请求格式差异。
+
 ### 8.2 本地模型
 
 - 本地模型连接由软件或管理员维护；
@@ -326,6 +350,47 @@ flowchart LR
 
 API Key 只由 Electron 主进程或 Go 服务访问，Vue 渲染进程不直接持有明文密钥。配置中应记录提供方、模型名、endpoint、上下文能力、默认参数和是否允许用于正文。
 
+### 8.3.1 首版官方预设
+
+以下是基于 2026-08-17 官方文档整理的首版预设。表中的“软件默认”是 Novel Studio 为小说规划任务设置的起始值；供应商未明确支持或固定的参数不主动发送。
+
+| 提供方 | Base URL | 默认模型 | 协议 | 软件默认 | 关键兼容规则 |
+|---|---|---|---|---|---|
+| DeepSeek | `https://api.deepseek.com` | `deepseek-v4-flash` | Chat Completions | `stream: true`、thinking 开启、`reasoning_effort: high`、结构化任务使用 `json_object` | thinking 模式不发送 `temperature` / `top_p`；`deepseek-v4-pro` 作为高质量备选 |
+| GPT | `https://api.openai.com/v1` | `gpt-5.4` | Responses 优先；兼容 Chat Completions | `stream: true`、`reasoning.effort: medium`、规划任务 `max_output_tokens: 8192` | GPT-5.4 支持 Responses 和 Chat Completions；官方模型快照可作为可复现配置 |
+| Kimi | `https://api.moonshot.cn/v1` | `kimi-k3` | Chat Completions | `stream: true`、`reasoning_effort: max`、规划任务 `max_tokens: 8192` | K3 固定 `temperature: 1.0`、`top_p: 0.95`、`n: 1`，软件不显式发送这些字段 |
+
+具体说明：
+
+- DeepSeek 当前官方 API 提供 `deepseek-v4-flash` 和 `deepseek-v4-pro`，thinking 默认开启；常规请求的推理强度默认为 `high`。Novel Studio 默认使用 Flash，复杂总纲、连续性审查和高质量结构化规划可切换 Pro。
+- GPT 首版使用 `gpt-5.4` 作为稳定预设，而不是把 ChatGPT 专用模型名写入配置。官方页面显示 GPT-5.4 支持 1M 上下文、128K 最大输出，并同时支持 Chat Completions 和 Responses；软件默认只在任务级设置输出上限，不把 128K 当作一次正文生成目标。
+- Kimi 当前官方快速开始推荐 `kimi-k3`，其 API 兼容 OpenAI 格式，支持 1M 上下文；K3 始终保留推理，通过顶层 `reasoning_effort` 控制强度。
+- 供应商的模型别名、上下文长度和可用参数会变化，模型配置必须允许用户刷新模型列表或手动修改模型 ID。
+
+官方资料：
+
+- [DeepSeek Chat Completions API](https://api-docs.deepseek.com/api/create-chat-completion/)
+- [DeepSeek Thinking Mode](https://api-docs.deepseek.com/guides/thinking_mode/)
+- [OpenAI GPT-5.4 Model](https://developers.openai.com/api/docs/models/gpt-5.4)
+- [Kimi 快速开始](https://platform.kimi.com/docs/overview)
+- [Kimi 模型参数参考](https://platform.kimi.com/docs/api/models-overview)
+
+### 8.3.2 自定义 OpenAI 兼容接入
+
+用户可以在“添加模型”中自定义任何 OpenAI 形式的接口：
+
+- 显示名称和提供方名称；
+- `base_url`，例如 `https://example.com/v1`；
+- API 路径模式：默认 `/chat/completions`，可自定义完整路径；
+- API Key 和额外请求头；
+- 模型 ID；
+- 协议类型：Chat Completions 或 Responses；
+- 是否支持流式输出、JSON 输出、工具调用和 reasoning 参数；
+- 上下文长度、最大输出长度、超时、重试和代理设置；
+- 供应商自定义 `extra_body` 字段。
+
+保存后先执行“测试连接”，检查模型列表、普通文本、流式输出和结构化 JSON 四项能力，并把探测结果记录在 `ModelProfile.capabilities` 中。请求构造器只发送该模型声明支持的字段，避免把 DeepSeek、Kimi 的专用参数误传给其他兼容服务。
+
 ### 8.4 参数策略
 
 普通用户看到的是“创作策略”和少量可理解的选项：
@@ -336,7 +401,7 @@ API Key 只由 Electron 主进程或 Go 服务访问，Vue 渲染进程不直接
 - 更重视文风；
 - 生成长度。
 
-高级用户可以展开温度、Top P、重复惩罚、最大输出长度、随机种子和超时。每次任务保存实际使用的参数快照，避免后续无法复现结果。
+高级用户可以展开温度、Top P、重复惩罚、最大输出长度、随机种子、推理强度和超时。对于供应商固定或不支持的参数，界面显示为只读说明，不提供无效输入。每次任务保存实际使用的参数快照，避免后续无法复现结果。
 
 ## 9. 数据结构与版本策略
 
@@ -452,16 +517,38 @@ Vue 渲染进程通过受控 IPC 调用，不直接访问 Node 文件系统和 A
 
 ### 11.3 Go 实现
 
-Go 服务作为同一能力接口的另一种实现，优先承担：
+Go 服务作为正式桌面版本随包发布的本地服务层，优先承担：
 
 - 本地模型进程管理；
 - 长时间生成任务和队列；
 - 知识库索引与检索；
 - 资源占用监控；
 - 未来网页应用的 API 服务；
-- 多平台后台服务和独立升级。
+- 多平台后台服务和独立升级；
+- 为未来网页版本提供同一套 HTTP/WebSocket API。
 
-Go 服务应尽量使用稳定的 JSON/HTTP 和 WebSocket 协议，桌面端可以选择内置启动或连接到用户已运行的服务。
+Go 服务应尽量使用稳定的 JSON/HTTP 和 WebSocket 协议。桌面安装包使用 Electron Builder 的额外资源机制携带 Go 二进制，推荐目录约定为：
+
+```text
+resources/
+└── novel-studio-service/
+    ├── darwin-arm64/novel-studio-service
+    ├── darwin-x64/novel-studio-service
+    ├── win32-x64/novel-studio-service.exe
+    └── linux-x64/novel-studio-service
+```
+
+Electron 主进程负责：
+
+1. 根据当前平台选择随包二进制；
+2. 生成临时端口和服务数据目录；
+3. 通过 `child_process.spawn` 启动 Go 服务；
+4. 等待 `/health` 返回成功后再让 Vue 页面进入可用状态；
+5. 将服务地址注入 `AppService`，并转发流式任务事件；
+6. 退出应用时优雅停止服务，异常时记录日志并尝试重启；
+7. 开发环境允许使用本地 `go run`、MockProvider 或 Electron 内置模式。
+
+Go 服务本身不直接管理 API Key 的 UI 展示；密钥通过受控 IPC 或本地安全存储交给服务使用，日志中必须脱敏。
 
 ## 12. 安全与隐私设计
 
@@ -496,7 +583,7 @@ Go 服务应尽量使用稳定的 JSON/HTTP 和 WebSocket 协议，桌面端可�
 ### 阶段 0：设计基线（当前）
 
 - 形成产品定位、运行形态和数据边界；
-- 确认 Vue 3、Electron、SQLite 和可选 Go 服务路线；
+- 确认 Vue 3、Electron、SQLite 和 Go 随包发布路线；
 - 固定 `AppService`、任务类型和模型适配器抽象；
 - 输出本规划文档。
 
@@ -540,8 +627,10 @@ Go 服务应尽量使用稳定的 JSON/HTTP 和 WebSocket 协议，桌面端可�
 
 - 接入最终本地模型；
 - 增加本地模型健康检查和资源状态；
-- 将长任务、知识库或本地模型管理迁移到 Go；
-- 保持 Electron 内置模式可作为故障回退。
+- 将长任务、知识库和本地模型管理放入随包 Go 服务；
+- 完成 Electron 对 Go 子进程的启动、健康检查、重启和优雅退出；
+- 生成 macOS、Windows、Linux 对应的 Go 服务二进制并纳入桌面安装包；
+- 保持 Electron 内置模式可作为开发和故障回退。
 
 ### 阶段 6：发布与网页版本评估
 
@@ -589,23 +678,22 @@ Go 服务应尽量使用稳定的 JSON/HTTP 和 WebSocket 协议，桌面端可�
 ### P0：进入正式实现前确定
 
 - Electron 具体版本和打包方案；
-- SQLite 驱动以及编辑器组件选型；
+- SQLite 驱动以及 CodeMirror 6 / Monaco DiffEditor 的依赖封装；
 - 首版支持的操作系统范围；
 - 自有 JSON Schema 的首个正式版本；
-- 正文编辑器是否需要 Markdown 原生编辑、富文本编辑，或两者兼容。
+- Go 服务的随包目录和开发环境启动脚本。
 
 ### P1：接入真实模型前确定
 
 - 本地模型最终 endpoint 和协议；
 - 本地模型默认上下文长度与最大输出长度；
-- DeepSeek、GPT、Kimi 的首版连接方式和预设字段；
 - 哪些任务默认禁止发送到外部模型；
 - 生成任务的并发数、超时和重试策略。
 
 ### P2：发布和网页阶段确定
 
-- Go 服务是否随桌面安装包一起提供；
 - Go 服务与 Electron 的启动、升级和端口发现方式；
+- Go 服务版本与桌面应用版本的兼容矩阵；
 - 网页版是否需要账号、云同步和多人协作；
 - 云端 API Key 的托管方式；
 - 开源版本的许可证、默认配置和社区扩展机制。
@@ -621,7 +709,7 @@ Go 服务应尽量使用稳定的 JSON/HTTP 和 WebSocket 协议，桌面端可�
 - 所有项目数据都必须带 schema 版本；
 - 不把最终本地模型的名称、特殊参数或专用 prompt 写死在业务组件中；
 - 先完成 Mock 工作流，再接真实模型；
-- Go 是可替换的服务实现，不是第一版桌面应用的硬依赖。
+- Go 服务是正式桌面版本的随包服务实现；开发和故障回退模式仍保留 Electron 内置服务。
 
 ## 18. 当前结论
 
