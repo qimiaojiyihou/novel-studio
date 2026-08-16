@@ -12,7 +12,7 @@
 
 - 产品定位：面向小说创作者的“小说创作工作台”，降低大纲、章节规划、模型参数和长篇连续写作的使用门槛。
 - 产品形态：第一阶段直接做桌面应用，使用 Vue 3 前端；后续复用核心服务和数据协议，扩展网页应用。
-- 桌面技术：Electron 负责桌面壳、主进程能力、文件访问、密钥保护和内置服务适配；Vue 3 + TypeScript 负责界面。
+- 桌面技术：Electron 负责桌面壳、主进程能力、文件访问、密钥保护和内置服务适配；Vue 3 + JavaScript + Vite 负责界面。
 - 本地数据：以 SQLite 作为项目元数据、设定、章节卡、正文版本和任务记录的本地存储。
 - Go 服务：作为独立本地服务层的预留实现，不作为桌面应用的启动前置条件。桌面内置模式可以先由 Electron 主进程完成同等能力。
 - 模型接入：通过统一模型适配器接入本地模型、DeepSeek、GPT、Kimi 以及其他 OpenAI 兼容接口。
@@ -104,7 +104,7 @@ Novel Studio 不把模型参数作为创作入口，而是把创作意图转化�
 ```mermaid
 flowchart LR
     UI[Vue 3 创作界面] --> PORT[统一 AppService 接口]
-    PORT --> EMBED[Electron 内置服务\nTypeScript + SQLite]
+    PORT --> EMBED[Electron 内置服务\nJavaScript + SQLite]
     PORT --> GOSVC[可选 Go 本地服务\nHTTP/WebSocket]
     EMBED --> STORE[(SQLite + 项目文件)]
     GOSVC --> STORE2[(SQLite / 本地资源)]
@@ -502,7 +502,7 @@ Go 服务应尽量使用稳定的 JSON/HTTP 和 WebSocket 协议，桌面端可�
 
 ### 阶段 1：桌面骨架与 Mock 工作流
 
-- 创建 Vue 3 + TypeScript + Electron 工程；
+- 创建 Vue 3 + JavaScript + Vite + Electron 工程；
 - 实现项目、卷、章节和基础设定数据结构；
 - 实现三栏编辑器壳；
 - 实现 MockProvider 和生成任务状态；
@@ -629,7 +629,7 @@ Novel Studio 的产品设计和总体技术设计已经完成，可以进入“�
 
 下一步适合先实现：
 
-1. Vue 3 + Electron 工程骨架；
+1. Vue 3 + JavaScript + Vite + Electron 工程骨架；
 2. SQLite 数据结构和 `schema_version`；
 3. `AppService` 接口与 MockProvider；
 4. 项目首页、故事基础、结构规划和三栏正文编辑器；
