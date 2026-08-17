@@ -1,0 +1,64 @@
+{
+  "name": "novel-studio",
+  "version": "0.1.0",
+  "description": "A local-first novel creation studio powered by structured AI workflows.",
+  "private": true,
+  "type": "module",
+  "main": "electron/main.js",
+  "scripts": {
+    "dev": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .\"",
+    "build": "vite build",
+    "build:go": "node scripts/build-go-service.mjs",
+    "build:app": "npm run build:go && npm run build && electron-builder",
+    "preview": "vite preview",
+    "check": "node --check electron/main.js && node --check electron/preload.cjs && node --check scripts/build-go-service.mjs"
+  },
+  "dependencies": {
+    "@codemirror/commands": "^6.10.1",
+    "@codemirror/lang-markdown": "^6.5.0",
+    "@codemirror/search": "^6.5.10",
+    "@codemirror/state": "^6.5.2",
+    "@codemirror/view": "^6.36.5",
+    "@lezer/highlight": "^1.2.1",
+    "monaco-editor": "^0.52.2",
+    "vue": "^3.5.24"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.2.1",
+    "concurrently": "^9.1.2",
+    "cross-env": "^7.0.3",
+    "electron": "^41.2.0",
+    "electron-builder": "^26.8.1",
+    "vite": "^6.1.0",
+    "wait-on": "^8.0.3"
+  },
+  "build": {
+    "appId": "com.qimiaojiyihou.novelstudio",
+    "productName": "Novel Studio",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/novel-studio-service",
+        "to": "novel-studio-service",
+        "filter": ["**/*"]
+      }
+    ],
+    "mac": {
+      "target": ["dmg", "zip"],
+      "category": "public.app-category.productivity"
+    },
+    "win": {
+      "target": ["nsis"]
+    },
+    "linux": {
+      "target": ["AppImage"]
+    }
+  }
+}
