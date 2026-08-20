@@ -1,4 +1,4 @@
-export const LATEST_SCHEMA_VERSION = 3
+export const LATEST_SCHEMA_VERSION = 4
 
 const migrations = [
   {
@@ -124,6 +124,16 @@ const migrations = [
           FROM projects
           ORDER BY updated_at DESC
           LIMIT 1;
+      `)
+    },
+  },
+  {
+    version: 4,
+    name: 'project-archive-state',
+    up(database) {
+      database.exec(`
+        ALTER TABLE projects ADD COLUMN archived_at TEXT NOT NULL DEFAULT '';
+        CREATE INDEX projects_archived_at_idx ON projects(archived_at);
       `)
     },
   },

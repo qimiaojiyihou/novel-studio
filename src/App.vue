@@ -27,23 +27,42 @@
       <aside class="structure-panel panel-dark">
         <div class="panel-heading">
           <span class="eyebrow">WORKSPACE</span>
-          <button class="quiet-button" title="添加章节" :disabled="taskIsRunning()" @click="addChapter">＋</button>
+          <button class="quiet-button" title="添加章节" :disabled="taskIsRunning()" @click="openNewChapter">＋</button>
         </div>
         <button class="project-summary project-switch-trigger" @click="toggleProjectMenu">
           <div class="project-title">{{ project.title }}</div>
-          <div class="project-meta">{{ project.genre }} · {{ projects.length }} 个项目 <span>⌄</span></div>
+          <div class="project-meta">{{ project.genre }} · {{ activeProjects.length }} 个创作中项目 <span>⌄</span></div>
         </button>
         <div v-if="projectMenuOpen" class="project-shelf">
-          <div class="project-shelf-label">选择作品</div>
-          <button
-            v-for="item in projects"
-            :key="item.id"
-            :class="{ active: item.id === project.id }"
-            @click="switchProject(item.id)"
-          >
-            <span>{{ item.title }}</span>
-            <small>{{ item.chapterCount }} 章 · {{ item.characterCount }} 字</small>
-          </button>
+          <div class="project-shelf-label">创作中的作品</div>
+          <div v-for="item in activeProjects" :key="item.id" class="project-shelf-row" :class="{ active: item.id === project.id }">
+            <button class="project-select" @click="switchProject(item.id)">
+              <span>{{ item.title }}</span>
+              <small>{{ item.chapterCount }} 章 · {{ item.characterCount }} 字</small>
+            </button>
+            <button class="row-more" :aria-label="`管理《${item.title}》`" @click.stop="toggleProjectActions(item.id)">⋯</button>
+            <div v-if="projectActionId === item.id" class="row-action-menu project-action-menu" @click.stop>
+              <button @click="openEditProject(item)">编辑项目信息</button>
+              <button @click="askArchiveProject(item)">归档项目</button>
+              <button class="danger" @click="askDeleteProject(item)">删除项目</button>
+            </div>
+          </div>
+          <div v-if="archivedProjects.length" class="project-archive-block">
+            <button class="archive-toggle" @click="archiveListOpen = !archiveListOpen">
+              <span>已归档 · {{ archivedProjects.length }}</span><span>{{ archiveListOpen ? '−' : '+' }}</span>
+            </button>
+            <div v-if="archiveListOpen" class="archive-list">
+              <div v-for="item in archivedProjects" :key="item.id" class="project-shelf-row archived">
+                <div class="archived-project-copy"><span>{{ item.title }}</span><small>{{ item.chapterCount }} 章 · {{ item.characterCount }} 字</small></div>
+                <button class="archive-restore" @click="restoreArchivedProject(item)">恢复</button>
+                <button class="row-more" :aria-label="`管理归档项目《${item.title}》`" @click.stop="toggleProjectActions(item.id)">⋯</button>
+                <div v-if="projectActionId === item.id" class="row-action-menu project-action-menu" @click.stop>
+                  <button @click="restoreArchivedProject(item)">恢复到项目架</button>
+                  <button class="danger" @click="askDeleteProject(item)">删除项目</button>
+                </div>
+              </div>
+            </div>
+          </div>
           <button class="new-project-link" @click="openNewProject">＋ 新建小说项目</button>
         </div>
 
@@ -60,20 +79,29 @@
             <span class="section-count">{{ chapters.length }} 章</span>
           </div>
           <div class="chapter-list">
-            <button
-              v-for="chapter in chapters"
+            <div
+              v-for="(chapter, index) in chapters"
               :key="chapter.id"
-              class="chapter-item"
+              class="chapter-row"
               :class="{ selected: chapter.id === activeChapter?.id }"
-              @click="selectChapter(chapter.id)"
             >
-              <span class="chapter-number">{{ String(chapter.chapter_no).padStart(2, '0') }}</span>
-              <span class="chapter-copy">
-                <strong>{{ chapter.title }}</strong>
-                <small>{{ chapter.status === 'draft' ? '草稿' : chapter.status }}</small>
-              </span>
-              <span class="chapter-state" :class="chapter.status"></span>
-            </button>
+              <button class="chapter-item" @click="selectChapter(chapter.id)">
+                <span class="chapter-number">{{ String(chapter.chapter_no).padStart(2, '0') }}</span>
+                <span class="chapter-copy">
+                  <strong>{{ chapter.title }}</strong>
+                  <small>{{ chapter.status === 'draft' ? '草稿' : chapter.status }}</small>
+                </span>
+                <span class="chapter-state" :class="chapter.status"></span>
+              </button>
+              <button class="chapter-more" :aria-label="`管理${chapter.title}`" @click.stop="toggleChapterActions(chapter.id)">⋯</button>
+              <div v-if="chapterActionId === chapter.id" class="row-action-menu chapter-action-menu" @click.stop>
+                <button @click="openRenameChapter(chapter)">重命名</button>
+                <button :disabled="index === 0" @click="moveChapter(chapter, -1)">上移一章</button>
+                <button :disabled="index === chapters.length - 1" @click="moveChapter(chapter, 1)">下移一章</button>
+                <button @click="duplicateChapter(chapter)">复制章节</button>
+                <button class="danger" @click="askDeleteChapter(chapter)">删除章节</button>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -256,6 +284,72 @@
         </div>
       </form>
     </div>
+    <div v-if="editProjectOpen" class="project-dialog-backdrop" @mousedown.self="editProjectOpen = false">
+      <form class="project-dialog project-edit-dialog" @submit.prevent="saveProjectEdits">
+        <span class="eyebrow copper">PROJECT NOTES</span>
+        <h2>编辑项目信息</h2>
+        <p>这里修改的是作品层信息，会成为后续规划和生成的共同上下文。</p>
+        <div class="dialog-two-columns">
+          <label><span>项目名称</span><input v-model.trim="editProjectDraft.title" required autofocus /></label>
+          <label><span>题材</span><input v-model.trim="editProjectDraft.genre" placeholder="例如：都市悬疑" /></label>
+        </div>
+        <label><span>一句话想法</span><textarea v-model.trim="editProjectDraft.idea" placeholder="主角遇到了什么，以及他为什么必须行动？"></textarea></label>
+        <label><span>项目文风</span><textarea v-model.trim="editProjectDraft.style" placeholder="描述全书共同遵守的表达方式"></textarea></label>
+        <div class="project-dialog-actions">
+          <button type="button" @click="editProjectOpen = false">取消</button>
+          <button type="submit" :disabled="workspaceActionPending">{{ workspaceActionPending ? '正在保存…' : '保存修改' }}</button>
+        </div>
+      </form>
+    </div>
+    <div v-if="newChapterOpen" class="project-dialog-backdrop" @mousedown.self="newChapterOpen = false">
+      <form class="project-dialog chapter-create-dialog" @submit.prevent="createNewChapter">
+        <span class="eyebrow copper">NEXT CHAPTER</span>
+        <h2>添加下一章</h2>
+        <p>选择一个起点。无论从哪里开始，章节内容都可以继续手工修改。</p>
+        <label><span>章节名称</span><input v-model.trim="newChapterDraft.title" autofocus :placeholder="`第 ${chapters.length + 1} 章`" /></label>
+        <div class="chapter-mode-list" role="radiogroup" aria-label="章节创建方式">
+          <button type="button" :class="{ selected: newChapterDraft.mode === 'blank' }" @click="newChapterDraft.mode = 'blank'">
+            <b>空白章</b><span>从一张干净稿纸开始</span>
+          </button>
+          <button type="button" :class="{ selected: newChapterDraft.mode === 'copy-plan' }" @click="newChapterDraft.mode = 'copy-plan'">
+            <b>继承本章规划</b><span>复制章节卡与场景计划，不复制正文</span>
+          </button>
+          <button type="button" :class="{ selected: newChapterDraft.mode === 'ai-plan' }" @click="newChapterDraft.mode = 'ai-plan'">
+            <b>让 AI 起草规划</b><span>新建空白章后立即生成章节卡</span>
+          </button>
+        </div>
+        <div class="project-dialog-actions">
+          <button type="button" @click="newChapterOpen = false">取消</button>
+          <button type="submit" :disabled="workspaceActionPending">{{ workspaceActionPending ? '正在添加…' : '添加章节' }}</button>
+        </div>
+      </form>
+    </div>
+    <div v-if="renameChapterOpen" class="project-dialog-backdrop" @mousedown.self="renameChapterOpen = false">
+      <form class="project-dialog compact-dialog" @submit.prevent="saveChapterRename">
+        <span class="eyebrow copper">CHAPTER LABEL</span>
+        <h2>重命名章节</h2>
+        <p>章节编号由结构顺序维护，这里只修改标题。</p>
+        <label><span>章节标题</span><input v-model.trim="renameChapterDraft.title" required autofocus /></label>
+        <div class="project-dialog-actions">
+          <button type="button" @click="renameChapterOpen = false">取消</button>
+          <button type="submit" :disabled="workspaceActionPending">保存标题</button>
+        </div>
+      </form>
+    </div>
+    <div v-if="confirmDialog.visible" class="project-dialog-backdrop confirm-backdrop" @mousedown.self="closeConfirmation">
+      <section class="project-dialog confirm-dialog" role="alertdialog" aria-modal="true" :aria-label="confirmDialog.title">
+        <span class="eyebrow" :class="{ copper: confirmDialog.danger }">{{ confirmDialog.danger ? 'IRREVERSIBLE ACTION' : 'CONFIRM ACTION' }}</span>
+        <h2>{{ confirmDialog.title }}</h2>
+        <p>{{ confirmDialog.body }}</p>
+        <div class="confirm-note" v-if="confirmDialog.note">{{ confirmDialog.note }}</div>
+        <div class="project-dialog-actions">
+          <button type="button" :disabled="workspaceActionPending" @click="closeConfirmation">取消</button>
+          <button type="button" class="confirm-button" :class="{ danger: confirmDialog.danger }" :disabled="workspaceActionPending" @click="runConfirmedAction">
+            {{ workspaceActionPending ? '正在处理…' : confirmDialog.confirmLabel }}
+          </button>
+        </div>
+      </section>
+    </div>
   </div>
 </template>
 
@@ -285,13 +379,24 @@ const toast = ref('')
 const loadError = ref('')
 const settingsOpen = ref(false)
 const projectMenuOpen = ref(false)
+const projectActionId = ref('')
+const chapterActionId = ref('')
+const archiveListOpen = ref(false)
 const newProjectOpen = ref(false)
 const projectCreating = ref(false)
+const editProjectOpen = ref(false)
+const newChapterOpen = ref(false)
+const renameChapterOpen = ref(false)
+const workspaceActionPending = ref(false)
 const versionsOpen = ref(false)
 const versionsLoading = ref(false)
 const versionRestoring = ref(false)
 const revisions = ref([])
 const newProjectDraft = reactive({ title: '', genre: '', idea: '' })
+const editProjectDraft = reactive({ id: '', title: '', genre: '', idea: '', style: '' })
+const newChapterDraft = reactive({ title: '', mode: 'blank' })
+const renameChapterDraft = reactive({ id: '', title: '' })
+const confirmDialog = reactive({ visible: false, title: '', body: '', note: '', confirmLabel: '确认', danger: false })
 const selectionTools = reactive({ visible: false, text: '', from: 0, to: 0, left: 0, top: 0, bottom: 0 })
 const selectionPreview = reactive({
   visible: false,
@@ -311,8 +416,11 @@ let closeRequestCleanup = null
 let runtimeInfoCleanup = null
 let closeInProgress = false
 let activeGeneration = null
+let confirmationRunner = null
 
 const activeChapter = computed(() => chapters.value.find((chapter) => chapter.id === activeChapterId.value) || chapters.value[0])
+const activeProjects = computed(() => projects.value.filter((item) => !item.archived && !item.archived_at))
+const archivedProjects = computed(() => projects.value.filter((item) => item.archived || item.archived_at))
 const runtimeLabel = computed(() => {
   if (runtime.goServiceStatus === 'ready') return 'Go 服务已连接'
   if (runtime.goServiceStatus === 'starting') return 'Go 启动中 · 内置可用'
@@ -355,6 +463,8 @@ function applyWorkspace(loaded) {
   activeTab.value = 'manuscript'
   versionsOpen.value = false
   revisions.value = []
+  projectActionId.value = ''
+  chapterActionId.value = ''
 }
 
 onMounted(async () => {
@@ -429,6 +539,7 @@ async function switchProject(projectId) {
 
 async function toggleProjectMenu() {
   projectMenuOpen.value = !projectMenuOpen.value
+  projectActionId.value = ''
   if (!projectMenuOpen.value) return
   try {
     projects.value = await appService.listProjects()
@@ -438,8 +549,17 @@ async function toggleProjectMenu() {
   }
 }
 
+function toggleProjectActions(projectId) {
+  projectActionId.value = projectActionId.value === projectId ? '' : projectId
+}
+
+function toggleChapterActions(chapterId) {
+  chapterActionId.value = chapterActionId.value === chapterId ? '' : chapterId
+}
+
 function openNewProject() {
   projectMenuOpen.value = false
+  projectActionId.value = ''
   newProjectDraft.title = ''
   newProjectDraft.genre = ''
   newProjectDraft.idea = ''
@@ -462,18 +582,227 @@ async function createNewProject() {
   }
 }
 
-async function addChapter() {
+function openEditProject(item) {
+  projectActionId.value = ''
+  projectMenuOpen.value = false
+  Object.assign(editProjectDraft, {
+    id: item.id,
+    title: item.title || '',
+    genre: item.genre || '',
+    idea: item.idea || '',
+    style: item.style || '',
+  })
+  editProjectOpen.value = true
+}
+
+async function saveProjectEdits() {
+  if (!editProjectDraft.id || !editProjectDraft.title || workspaceActionPending.value) return
+  workspaceActionPending.value = true
+  try {
+    const updated = await appService.updateProject({ ...editProjectDraft })
+    if (updated.id === project.id) Object.assign(project, updated)
+    projects.value = await appService.listProjects()
+    editProjectOpen.value = false
+    showToast(`《${updated.title}》的项目信息已更新`)
+  } catch (error) {
+    showToast(`保存项目信息失败：${error.message}`)
+  } finally {
+    workspaceActionPending.value = false
+  }
+}
+
+function askArchiveProject(item) {
+  projectActionId.value = ''
+  requestConfirmation({
+    title: `归档《${item.title}》？`,
+    body: '项目会离开创作中的作品列表，正文、规划与版本历史都会完整保留。',
+    note: '之后可以从项目架的“已归档”区域恢复。',
+    confirmLabel: '归档项目',
+    run: async () => {
+      if (item.id === project.id) await saveManuscript({ createRevision: false, source: 'project-archive' })
+      const loaded = await appService.archiveProject(item.id)
+      if (item.id === project.id) applyWorkspace(loaded)
+      else projects.value = await appService.listProjects()
+      projectMenuOpen.value = true
+      showToast(`《${item.title}》已归档`)
+    },
+  })
+}
+
+async function restoreArchivedProject(item) {
+  if (workspaceActionPending.value) return
+  workspaceActionPending.value = true
+  try {
+    await appService.restoreProject(item.id)
+    projects.value = await appService.listProjects()
+    projectActionId.value = ''
+    showToast(`《${item.title}》已恢复到项目架`)
+  } catch (error) {
+    showToast(`恢复项目失败：${error.message}`)
+  } finally {
+    workspaceActionPending.value = false
+  }
+}
+
+function askDeleteProject(item) {
+  projectActionId.value = ''
+  requestConfirmation({
+    title: `永久删除《${item.title}》？`,
+    body: `将删除这个项目的 ${item.chapterCount} 个章节、正文、章节规划与全部版本历史。`,
+    note: '此操作完成后不能从项目架恢复。',
+    confirmLabel: '永久删除',
+    danger: true,
+    run: async () => {
+      if (item.id === project.id) await saveManuscript({ createRevision: false, source: 'before-project-delete' })
+      const loaded = await appService.deleteProject(item.id)
+      if (item.id === project.id) applyWorkspace(loaded)
+      else projects.value = await appService.listProjects()
+      projectMenuOpen.value = true
+      showToast(`《${item.title}》已删除`)
+    },
+  })
+}
+
+function openNewChapter() {
   if (!project.id || runningTask.value) return
+  chapterActionId.value = ''
+  newChapterDraft.title = ''
+  newChapterDraft.mode = 'blank'
+  newChapterOpen.value = true
+}
+
+async function createNewChapter() {
+  if (!project.id || workspaceActionPending.value) return
+  workspaceActionPending.value = true
+  const shouldGeneratePlan = newChapterDraft.mode === 'ai-plan'
   try {
     await saveManuscript({ createRevision: false, source: 'chapter-create' })
-    const chapter = await appService.createChapter({ projectId: project.id })
+    const chapter = await appService.createChapter({
+      projectId: project.id,
+      title: newChapterDraft.title,
+      mode: newChapterDraft.mode === 'copy-plan' ? 'copy-plan' : 'blank',
+      sourceChapterId: newChapterDraft.mode === 'copy-plan' ? activeChapter.value?.id : '',
+    })
     chapters.value.push(chapter)
     activeChapterId.value = chapter.id
     activeTab.value = 'manuscript'
     projects.value = await appService.listProjects()
+    newChapterOpen.value = false
     showToast(`第 ${chapter.chapter_no} 章已添加`)
   } catch (error) {
     showToast(`添加章节失败：${error.message}`)
+    return
+  } finally {
+    workspaceActionPending.value = false
+  }
+  if (shouldGeneratePlan) await runGeneration('chapter_card')
+}
+
+function openRenameChapter(chapter) {
+  chapterActionId.value = ''
+  renameChapterDraft.id = chapter.id
+  renameChapterDraft.title = chapter.title
+  renameChapterOpen.value = true
+}
+
+async function saveChapterRename() {
+  if (!renameChapterDraft.id || !renameChapterDraft.title || workspaceActionPending.value) return
+  workspaceActionPending.value = true
+  try {
+    const updated = await appService.updateChapter({ id: renameChapterDraft.id, title: renameChapterDraft.title })
+    replaceChapter(updated)
+    renameChapterOpen.value = false
+    lastSavedAt.value = new Date().toISOString()
+    showToast(`章节已重命名为“${updated.title}”`)
+  } catch (error) {
+    showToast(`章节重命名失败：${error.message}`)
+  } finally {
+    workspaceActionPending.value = false
+  }
+}
+
+async function moveChapter(chapter, direction) {
+  if (workspaceActionPending.value || runningTask.value) return
+  const from = chapters.value.findIndex((item) => item.id === chapter.id)
+  const to = from + direction
+  if (from < 0 || to < 0 || to >= chapters.value.length) return
+  workspaceActionPending.value = true
+  chapterActionId.value = ''
+  try {
+    await saveManuscript({ createRevision: false, source: 'chapter-reorder' })
+    const ids = chapters.value.map((item) => item.id)
+    ids.splice(to, 0, ids.splice(from, 1)[0])
+    chapters.value = await appService.reorderChapters({ projectId: project.id, chapterIds: ids })
+    projects.value = await appService.listProjects()
+    showToast(`“${chapter.title}”已${direction < 0 ? '上移' : '下移'}`)
+  } catch (error) {
+    showToast(`调整章节顺序失败：${error.message}`)
+  } finally {
+    workspaceActionPending.value = false
+  }
+}
+
+async function duplicateChapter(chapter) {
+  if (workspaceActionPending.value || runningTask.value) return
+  workspaceActionPending.value = true
+  chapterActionId.value = ''
+  try {
+    if (chapter.id === activeChapter.value?.id) await saveManuscript({ createRevision: false, source: 'chapter-duplicate' })
+    const result = await appService.duplicateChapter(chapter.id)
+    chapters.value = result.chapters
+    activeChapterId.value = result.chapter.id
+    activeTab.value = 'manuscript'
+    projects.value = await appService.listProjects()
+    showToast(`“${chapter.title}”已复制为新章节`)
+  } catch (error) {
+    showToast(`复制章节失败：${error.message}`)
+  } finally {
+    workspaceActionPending.value = false
+  }
+}
+
+function askDeleteChapter(chapter) {
+  chapterActionId.value = ''
+  requestConfirmation({
+    title: `删除第 ${chapter.chapter_no} 章？`,
+    body: `“${chapter.title}”的正文、章节卡、场景计划和版本历史都会一并删除。`,
+    note: '删除后，其余章节会自动重新编号。',
+    confirmLabel: '删除章节',
+    danger: true,
+    run: async () => {
+      if (chapter.id === activeChapter.value?.id) await saveManuscript({ createRevision: false, source: 'before-chapter-delete' })
+      const result = await appService.deleteChapter(chapter.id)
+      chapters.value = result.chapters
+      activeChapterId.value = result.activeChapterId
+      activeTab.value = 'manuscript'
+      projects.value = await appService.listProjects()
+      showToast(`“${chapter.title}”已删除，章节编号已更新`)
+    },
+  })
+}
+
+function requestConfirmation({ title, body, note = '', confirmLabel, danger = false, run }) {
+  Object.assign(confirmDialog, { visible: true, title, body, note, confirmLabel, danger })
+  confirmationRunner = run
+}
+
+function closeConfirmation() {
+  if (workspaceActionPending.value) return
+  confirmDialog.visible = false
+  confirmationRunner = null
+}
+
+async function runConfirmedAction() {
+  if (!confirmationRunner || workspaceActionPending.value) return
+  workspaceActionPending.value = true
+  try {
+    await confirmationRunner()
+    confirmDialog.visible = false
+    confirmationRunner = null
+  } catch (error) {
+    showToast(error.message)
+  } finally {
+    workspaceActionPending.value = false
   }
 }
 

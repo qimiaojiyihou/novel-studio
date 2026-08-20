@@ -13,11 +13,29 @@ export const appService = {
   updateProject(patch) {
     return electronApi.updateProject(patch)
   },
+  archiveProject(projectId) {
+    return electronApi.archiveProject(projectId)
+  },
+  restoreProject(projectId) {
+    return electronApi.restoreProject(projectId)
+  },
+  deleteProject(projectId) {
+    return electronApi.deleteProject(projectId)
+  },
   createChapter(input) {
     return electronApi.createChapter(input)
   },
   updateChapter(patch) {
     return electronApi.updateChapter(patch)
+  },
+  reorderChapters(input) {
+    return electronApi.reorderChapters(input)
+  },
+  duplicateChapter(chapterId) {
+    return electronApi.duplicateChapter(chapterId)
+  },
+  deleteChapter(chapterId) {
+    return electronApi.deleteChapter(chapterId)
   },
   createRevision(payload) {
     return electronApi.createRevision(payload)

@@ -19,7 +19,10 @@ function createLegacySchema(database) {
 
 function seedWorkspace(database) {
   const now = '2026-08-20T00:00:00.000Z'
-  database.prepare('INSERT INTO projects VALUES (?, ?, ?, ?, ?, ?, ?)').run('project-1', '测试项目', '都市', '想法', '', now, now)
+  database.prepare(`
+    INSERT INTO projects (id, title, genre, idea, style, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run('project-1', '测试项目', '都市', '想法', '', now, now)
   database.prepare('INSERT INTO chapters VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run('chapter-1', 'project-1', 1, '第一章', 'draft', '{}', '', '正文', now)
   database.prepare('INSERT INTO revisions VALUES (?, ?, ?, ?, ?)').run('revision-1', 'chapter-1', '旧正文', 'manual', now)
   database.prepare('INSERT INTO model_profiles VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run('model-1', 'custom', '测试模型', 'http://127.0.0.1/v1', 'test', '', 1, now, now)
@@ -36,6 +39,8 @@ test('fresh database migrates to the latest schema with foreign keys enabled', (
     assert.deepEqual(database.prepare('PRAGMA foreign_key_check').all(), [])
     assert.equal(database.prepare('SELECT COUNT(*) AS count FROM schema_migrations').get().count, LATEST_SCHEMA_VERSION)
     assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'app_settings'").get())
+    assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'projects_archived_at_idx'").get())
+    assert.ok(database.prepare("PRAGMA table_info(projects)").all().some((column) => column.name === 'archived_at'))
   } finally {
     database.close()
   }
@@ -60,6 +65,7 @@ test('legacy data is preserved and project deletion cascades to chapters and rev
     runMigrations(database)
     assert.equal(database.prepare('SELECT manuscript FROM chapters WHERE id = ?').get('chapter-1').manuscript, '正文')
     assert.equal(database.prepare('SELECT content FROM revisions WHERE id = ?').get('revision-1').content, '旧正文')
+    assert.equal(database.prepare('SELECT archived_at FROM projects WHERE id = ?').get('project-1').archived_at, '')
     assert.equal(database.prepare("SELECT value FROM app_settings WHERE key = 'active_project_id'").get().value, 'project-1')
     database.prepare('DELETE FROM projects WHERE id = ?').run('project-1')
     assert.equal(database.prepare('SELECT COUNT(*) AS count FROM chapters').get().count, 0)

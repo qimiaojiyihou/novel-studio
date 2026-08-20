@@ -5,10 +5,14 @@ import { spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import {
+  archiveProject,
   createChapter,
   createProject,
   createRevision,
+  deleteChapter,
   deleteModelProfile,
+  deleteProject,
+  duplicateChapter,
   getDatabaseInfo,
   getModelApiKey,
   listProjects,
@@ -16,6 +20,8 @@ import {
   loadModelSettings,
   loadWorkspace,
   openDatabase,
+  reorderChapters,
+  restoreProject,
   restoreRevision,
   saveModelProfile,
   updateChapter,
@@ -145,8 +151,14 @@ function registerIpc() {
   ipcMain.handle('projects:list', listProjects)
   ipcMain.handle('project:create', (_event, input) => createProject(input))
   ipcMain.handle('project:update', (_event, patch) => updateProject(patch))
+  ipcMain.handle('project:archive', (_event, projectId) => archiveProject(projectId))
+  ipcMain.handle('project:restore', (_event, projectId) => restoreProject(projectId))
+  ipcMain.handle('project:delete', (_event, projectId) => deleteProject(projectId))
   ipcMain.handle('chapter:create', (_event, input) => createChapter(input))
   ipcMain.handle('chapter:update', (_event, patch) => updateChapter(patch))
+  ipcMain.handle('chapters:reorder', (_event, input) => reorderChapters(input))
+  ipcMain.handle('chapter:duplicate', (_event, chapterId) => duplicateChapter(chapterId))
+  ipcMain.handle('chapter:delete', (_event, chapterId) => deleteChapter(chapterId))
   ipcMain.handle('revision:create', (_event, payload) => createRevision(payload))
   ipcMain.handle('revisions:list', (_event, chapterId) => listRevisions(chapterId))
   ipcMain.handle('revision:restore', (_event, payload) => restoreRevision(payload))

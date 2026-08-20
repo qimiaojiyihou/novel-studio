@@ -49,6 +49,88 @@ test('chapter numbering is sequential inside each project', () => {
   database.close()
 })
 
+test('projects can be edited, archived, restored and deleted without losing the active workspace', () => {
+  const { database, repository } = testRepository()
+  const first = repository.createProject({ title: '第一本书', genre: '悬疑' })
+  const second = repository.createProject({ title: '第二本书' })
+
+  const renamed = repository.updateProject({ id: first.project.id, title: '改名后的第一本书', idea: '新的核心想法' })
+  assert.equal(renamed.title, '改名后的第一本书')
+
+  const afterArchive = repository.archiveProject(second.project.id)
+  assert.equal(afterArchive.project.id, first.project.id)
+  assert.equal(repository.listProjects().find((project) => project.id === second.project.id).archived, true)
+  assert.throws(() => repository.setActiveProject(second.project.id), /先恢复/)
+  assert.throws(() => repository.archiveProject(first.project.id), /至少保留一个未归档项目/)
+
+  repository.restoreProject(second.project.id)
+  assert.equal(repository.listProjects().find((project) => project.id === second.project.id).archived, false)
+  repository.deleteProject(second.project.id)
+  assert.equal(repository.listProjects().length, 1)
+  assert.equal(repository.loadWorkspace().project.id, first.project.id)
+  assert.throws(() => repository.deleteProject(first.project.id), /至少保留一个未归档项目/)
+  database.close()
+})
+
+test('deleting the active project selects another available workspace', () => {
+  const { database, repository } = testRepository()
+  const first = repository.createProject({ title: '保留项目' })
+  const active = repository.createProject({ title: '待删除项目' })
+  assert.equal(repository.activeProjectId(), active.project.id)
+
+  const loaded = repository.deleteProject(active.project.id)
+  assert.equal(loaded.project.id, first.project.id)
+  assert.equal(repository.activeProjectId(), first.project.id)
+  assert.equal(repository.listProjects().length, 1)
+  database.close()
+})
+
+test('chapters can be planned from a template, reordered, duplicated and deleted', () => {
+  const { database, repository } = testRepository()
+  const workspace = repository.createProject({ title: '章节管理测试' })
+  const first = workspace.chapters[0]
+  repository.updateChapter({
+    id: first.id,
+    manuscript: '第一章正文',
+    scenePlan: '场景计划',
+    card: { goal: '取得邀请函' },
+  })
+  const second = repository.createChapter({
+    projectId: workspace.project.id,
+    title: '承接规划',
+    mode: 'copy-plan',
+    sourceChapterId: first.id,
+  })
+  assert.equal(second.card.goal, '取得邀请函')
+  assert.equal(second.scene_plan, '场景计划')
+  assert.equal(second.manuscript, '')
+  assert.equal(repository.updateChapter({ id: second.id, title: '   ' }).title, '第 2 章')
+
+  const third = repository.createChapter({ projectId: workspace.project.id, title: '第三章' })
+  const reordered = repository.reorderChapters({
+    projectId: workspace.project.id,
+    chapterIds: [third.id, first.id, second.id],
+  })
+  assert.deepEqual(reordered.map((chapter) => [chapter.chapter_no, chapter.id]), [[1, third.id], [2, first.id], [3, second.id]])
+  assert.throws(() => repository.reorderChapters({ projectId: workspace.project.id, chapterIds: [first.id] }), /排序列表/)
+
+  const duplicated = repository.duplicateChapter(first.id)
+  assert.equal(duplicated.chapter.manuscript, '第一章正文')
+  assert.equal(duplicated.chapter.card.goal, '取得邀请函')
+  assert.deepEqual(duplicated.chapters.map((chapter) => chapter.chapter_no), [1, 2, 3, 4])
+  assert.equal(duplicated.chapters[2].id, duplicated.chapter.id)
+
+  repository.createRevision({ chapterId: duplicated.chapter.id, content: '副本版本' })
+  const afterDelete = repository.deleteChapter(duplicated.chapter.id)
+  assert.deepEqual(afterDelete.chapters.map((chapter) => chapter.chapter_no), [1, 2, 3])
+  assert.equal(database.prepare('SELECT COUNT(*) AS count FROM revisions WHERE chapter_id = ?').get(duplicated.chapter.id).count, 0)
+
+  repository.deleteChapter(third.id)
+  repository.deleteChapter(second.id)
+  assert.throws(() => repository.deleteChapter(first.id), /至少保留一个章节/)
+  database.close()
+})
+
 test('restoring a revision atomically preserves the current manuscript', () => {
   const { database, repository } = testRepository()
   const workspace = repository.createProject({ title: '版本测试' })

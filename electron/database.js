@@ -149,8 +149,32 @@ export function updateProject(patch) {
   return workspaceStore().updateProject(patch)
 }
 
+export function archiveProject(projectId) {
+  return workspaceStore().archiveProject(projectId)
+}
+
+export function restoreProject(projectId) {
+  return workspaceStore().restoreProject(projectId)
+}
+
+export function deleteProject(projectId) {
+  return workspaceStore().deleteProject(projectId)
+}
+
 export function updateChapter(patch) {
   return workspaceStore().updateChapter(patch)
+}
+
+export function reorderChapters(input) {
+  return workspaceStore().reorderChapters(input)
+}
+
+export function duplicateChapter(chapterId) {
+  return workspaceStore().duplicateChapter(chapterId)
+}
+
+export function deleteChapter(chapterId) {
+  return workspaceStore().deleteChapter(chapterId)
 }
 
 export function createRevision(input) {
