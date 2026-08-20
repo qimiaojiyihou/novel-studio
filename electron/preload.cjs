@@ -1,10 +1,15 @@
 const { contextBridge, ipcRenderer } = require('electron')
 
 contextBridge.exposeInMainWorld('novelStudio', {
-  loadWorkspace: () => ipcRenderer.invoke('workspace:load'),
+  loadWorkspace: (projectId) => ipcRenderer.invoke('workspace:load', projectId),
+  listProjects: () => ipcRenderer.invoke('projects:list'),
+  createProject: (input) => ipcRenderer.invoke('project:create', input),
   updateProject: (patch) => ipcRenderer.invoke('project:update', patch),
+  createChapter: (input) => ipcRenderer.invoke('chapter:create', input),
   updateChapter: (patch) => ipcRenderer.invoke('chapter:update', patch),
   createRevision: (payload) => ipcRenderer.invoke('revision:create', payload),
+  listRevisions: (chapterId) => ipcRenderer.invoke('revisions:list', chapterId),
+  restoreRevision: (payload) => ipcRenderer.invoke('revision:restore', payload),
   loadModelSettings: () => ipcRenderer.invoke('models:load'),
   saveModelProfile: (profile) => ipcRenderer.invoke('models:save', profile),
   deleteModelProfile: (id) => ipcRenderer.invoke('models:delete', id),

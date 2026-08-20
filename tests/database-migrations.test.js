@@ -34,7 +34,8 @@ test('fresh database migrates to the latest schema with foreign keys enabled', (
     assert.equal(getSchemaVersion(database), LATEST_SCHEMA_VERSION)
     assert.equal(database.prepare('PRAGMA foreign_keys').get().foreign_keys, 1)
     assert.deepEqual(database.prepare('PRAGMA foreign_key_check').all(), [])
-    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM schema_migrations').get().count, 2)
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM schema_migrations').get().count, LATEST_SCHEMA_VERSION)
+    assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'app_settings'").get())
   } finally {
     database.close()
   }
@@ -45,7 +46,7 @@ test('migrations are idempotent', () => {
   try {
     runMigrations(database)
     runMigrations(database)
-    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM schema_migrations').get().count, 2)
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM schema_migrations').get().count, LATEST_SCHEMA_VERSION)
   } finally {
     database.close()
   }
@@ -59,6 +60,7 @@ test('legacy data is preserved and project deletion cascades to chapters and rev
     runMigrations(database)
     assert.equal(database.prepare('SELECT manuscript FROM chapters WHERE id = ?').get('chapter-1').manuscript, '正文')
     assert.equal(database.prepare('SELECT content FROM revisions WHERE id = ?').get('revision-1').content, '旧正文')
+    assert.equal(database.prepare("SELECT value FROM app_settings WHERE key = 'active_project_id'").get().value, 'project-1')
     database.prepare('DELETE FROM projects WHERE id = ?').run('project-1')
     assert.equal(database.prepare('SELECT COUNT(*) AS count FROM chapters').get().count, 0)
     assert.equal(database.prepare('SELECT COUNT(*) AS count FROM revisions').get().count, 0)

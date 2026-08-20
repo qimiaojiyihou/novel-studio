@@ -1,4 +1,4 @@
-export const LATEST_SCHEMA_VERSION = 2
+export const LATEST_SCHEMA_VERSION = 3
 
 const migrations = [
   {
@@ -109,6 +109,24 @@ const migrations = [
       `)
     },
   },
+  {
+    version: 3,
+    name: 'active-project-setting',
+    up(database) {
+      database.exec(`
+        CREATE TABLE app_settings (
+          key TEXT PRIMARY KEY,
+          value TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        INSERT INTO app_settings (key, value, updated_at)
+          SELECT 'active_project_id', id, updated_at
+          FROM projects
+          ORDER BY updated_at DESC
+          LIMIT 1;
+      `)
+    },
+  },
 ]
 
 function readForeignKeyCheck(database) {
@@ -158,4 +176,3 @@ export function runMigrations(database, { now = () => new Date().toISOString() }
   }
   return getSchemaVersion(database)
 }
-

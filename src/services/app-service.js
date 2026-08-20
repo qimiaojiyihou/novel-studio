@@ -1,17 +1,32 @@
 const electronApi = window.novelStudio
 
 export const appService = {
-  loadWorkspace() {
-    return electronApi.loadWorkspace()
+  loadWorkspace(projectId) {
+    return electronApi.loadWorkspace(projectId)
+  },
+  listProjects() {
+    return electronApi.listProjects()
+  },
+  createProject(input) {
+    return electronApi.createProject(input)
   },
   updateProject(patch) {
     return electronApi.updateProject(patch)
+  },
+  createChapter(input) {
+    return electronApi.createChapter(input)
   },
   updateChapter(patch) {
     return electronApi.updateChapter(patch)
   },
   createRevision(payload) {
     return electronApi.createRevision(payload)
+  },
+  listRevisions(chapterId) {
+    return electronApi.listRevisions(chapterId)
+  },
+  restoreRevision(payload) {
+    return electronApi.restoreRevision(payload)
   },
   loadModelSettings() {
     return electronApi.loadModelSettings()

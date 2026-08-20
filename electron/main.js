@@ -5,13 +5,18 @@ import { spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import {
+  createChapter,
+  createProject,
   createRevision,
   deleteModelProfile,
   getDatabaseInfo,
   getModelApiKey,
+  listProjects,
+  listRevisions,
   loadModelSettings,
   loadWorkspace,
   openDatabase,
+  restoreRevision,
   saveModelProfile,
   updateChapter,
   updateProject,
@@ -136,10 +141,15 @@ function stopGoService() {
 }
 
 function registerIpc() {
-  ipcMain.handle('workspace:load', () => loadWorkspace())
+  ipcMain.handle('workspace:load', (_event, projectId) => loadWorkspace(projectId))
+  ipcMain.handle('projects:list', listProjects)
+  ipcMain.handle('project:create', (_event, input) => createProject(input))
   ipcMain.handle('project:update', (_event, patch) => updateProject(patch))
+  ipcMain.handle('chapter:create', (_event, input) => createChapter(input))
   ipcMain.handle('chapter:update', (_event, patch) => updateChapter(patch))
   ipcMain.handle('revision:create', (_event, payload) => createRevision(payload))
+  ipcMain.handle('revisions:list', (_event, chapterId) => listRevisions(chapterId))
+  ipcMain.handle('revision:restore', (_event, payload) => restoreRevision(payload))
   ipcMain.handle('models:load', () => loadModelSettings())
   ipcMain.handle('models:save', (_event, profile) => saveModelProfile(profile))
   ipcMain.handle('models:delete', (_event, id) => deleteModelProfile(id))
@@ -147,7 +157,7 @@ function registerIpc() {
   ipcMain.handle('generation:start', async (event, payload) => {
     const taskId = String(payload?.taskId || '')
     if (!taskId) throw new Error('生成任务缺少 taskId')
-    const workspace = loadWorkspace()
+    const workspace = loadWorkspace(payload?.projectId)
     const chapter = workspace.chapters.find((item) => item.id === payload?.chapterId) || workspace.chapters[0]
     const modelSettings = loadModelSettings()
     const modelProfileId = payload?.modelProfileId || modelSettings.routes[payload?.task] || 'local-default'

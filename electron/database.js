@@ -3,16 +3,10 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { getSchemaVersion, runMigrations } from './database-migrations.js'
+import { createWorkspaceRepository } from './workspace-repository.js'
 
 let database
-
-function parseJson(value, fallback) {
-  try {
-    return value ? JSON.parse(value) : fallback
-  } catch {
-    return fallback
-  }
-}
+let workspaceRepository
 
 function timestamp() {
   return new Date().toISOString()
@@ -50,7 +44,13 @@ export function openDatabase() {
   runMigrations(database)
   seedDatabase()
   seedModelProfiles()
+  workspaceRepository = createWorkspaceRepository(database)
   return database
+}
+
+function workspaceStore() {
+  openDatabase()
+  return workspaceRepository
 }
 
 export function getDatabaseInfo() {
@@ -129,55 +129,40 @@ function seedModelProfiles() {
   }
 }
 
-export function loadWorkspace() {
-  openDatabase()
-  const project = database.prepare('SELECT * FROM projects ORDER BY created_at LIMIT 1').get()
-  const chapters = database.prepare('SELECT * FROM chapters WHERE project_id = ? ORDER BY chapter_no').all(project.id)
-  return {
-    project,
-    chapters: chapters.map((chapter) => ({
-      ...chapter,
-      card: parseJson(chapter.card_json, {}),
-    })),
-  }
+export function loadWorkspace(projectId = '') {
+  return workspaceStore().loadWorkspace(projectId)
+}
+
+export function listProjects() {
+  return workspaceStore().listProjects()
+}
+
+export function createProject(input) {
+  return workspaceStore().createProject(input)
+}
+
+export function createChapter(input) {
+  return workspaceStore().createChapter(input)
 }
 
 export function updateProject(patch) {
-  openDatabase()
-  const allowed = ['title', 'genre', 'idea', 'style']
-  const entries = Object.entries(patch || {}).filter(([key]) => allowed.includes(key))
-  if (!entries.length) return loadWorkspace().project
-  const values = entries.map(([, value]) => value)
-  const assignments = entries.map(([key]) => `${key} = ?`).join(', ')
-  values.push(timestamp(), patch.id || 'project-demo')
-  database.prepare(`UPDATE projects SET ${assignments}, updated_at = ? WHERE id = ?`).run(...values)
-  return loadWorkspace().project
+  return workspaceStore().updateProject(patch)
 }
 
 export function updateChapter(patch) {
-  openDatabase()
-  const chapterId = patch.id || 'chapter-001'
-  const updates = []
-  const values = []
-  if (typeof patch.title === 'string') { updates.push('title = ?'); values.push(patch.title) }
-  if (typeof patch.status === 'string') { updates.push('status = ?'); values.push(patch.status) }
-  if (typeof patch.manuscript === 'string') { updates.push('manuscript = ?'); values.push(patch.manuscript) }
-  if (typeof patch.scenePlan === 'string') { updates.push('scene_plan = ?'); values.push(patch.scenePlan) }
-  if (patch.card && typeof patch.card === 'object') { updates.push('card_json = ?'); values.push(JSON.stringify(patch.card)) }
-  if (!updates.length) return loadWorkspace().chapters.find((chapter) => chapter.id === chapterId)
-  values.push(timestamp(), chapterId)
-  database.prepare(`UPDATE chapters SET ${updates.join(', ')}, updated_at = ? WHERE id = ?`).run(...values)
-  return loadWorkspace().chapters.find((chapter) => chapter.id === chapterId)
+  return workspaceStore().updateChapter(patch)
 }
 
-export function createRevision({ chapterId = 'chapter-001', content = '', source = 'manual' }) {
-  openDatabase()
-  const id = `revision-${Date.now()}`
-  database.prepare(`
-    INSERT INTO revisions (id, chapter_id, content, source, created_at)
-    VALUES (?, ?, ?, ?, ?)
-  `).run(id, chapterId, content, source, timestamp())
-  return { id, chapterId, content, source }
+export function createRevision(input) {
+  return workspaceStore().createRevision(input)
+}
+
+export function listRevisions(chapterId) {
+  return workspaceStore().listRevisions(chapterId)
+}
+
+export function restoreRevision(input) {
+  return workspaceStore().restoreRevision(input)
 }
 
 export function loadModelSettings() {

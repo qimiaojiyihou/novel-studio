@@ -27,11 +27,24 @@
       <aside class="structure-panel panel-dark">
         <div class="panel-heading">
           <span class="eyebrow">WORKSPACE</span>
-          <button class="quiet-button" title="添加章节">＋</button>
+          <button class="quiet-button" title="添加章节" :disabled="taskIsRunning()" @click="addChapter">＋</button>
         </div>
-        <div class="project-summary">
+        <button class="project-summary project-switch-trigger" @click="toggleProjectMenu">
           <div class="project-title">{{ project.title }}</div>
-          <div class="project-meta">{{ project.genre }} · 本地项目</div>
+          <div class="project-meta">{{ project.genre }} · {{ projects.length }} 个项目 <span>⌄</span></div>
+        </button>
+        <div v-if="projectMenuOpen" class="project-shelf">
+          <div class="project-shelf-label">选择作品</div>
+          <button
+            v-for="item in projects"
+            :key="item.id"
+            :class="{ active: item.id === project.id }"
+            @click="switchProject(item.id)"
+          >
+            <span>{{ item.title }}</span>
+            <small>{{ item.chapterCount }} 章 · {{ item.characterCount }} 字</small>
+          </button>
+          <button class="new-project-link" @click="openNewProject">＋ 新建小说项目</button>
         </div>
 
         <nav class="side-nav" aria-label="项目导航">
@@ -82,6 +95,7 @@
             </div>
           </div>
           <div class="editor-heading-actions">
+            <button class="outline-button" @click="openVersionHistory">版本历史</button>
             <button class="outline-button" @click="saveManuscript">保存版本</button>
             <button v-if="runningTask" class="cancel-generation-button" :disabled="generationCancelPending" @click="cancelGeneration">
               {{ generationCancelPending ? '正在取消…' : '取消生成' }}
@@ -218,6 +232,30 @@
       @accept="acceptCandidate"
       @discard="discardCandidate"
     />
+    <VersionHistory
+      :visible="versionsOpen"
+      :revisions="revisions"
+      :chapter-title="activeChapter?.title || ''"
+      :current-content="editorText"
+      :loading="versionsLoading"
+      :restoring="versionRestoring"
+      @close="versionsOpen = false"
+      @restore="restoreVersion"
+    />
+    <div v-if="newProjectOpen" class="project-dialog-backdrop" @mousedown.self="newProjectOpen = false">
+      <form class="project-dialog" @submit.prevent="createNewProject">
+        <span class="eyebrow copper">NEW MANUSCRIPT</span>
+        <h2>建立新的小说项目</h2>
+        <p>先写下最小起点。故事基础、人物和世界观可以之后继续补充。</p>
+        <label><span>项目名称</span><input v-model.trim="newProjectDraft.title" required autofocus placeholder="例如：雾港来信" /></label>
+        <label><span>题材</span><input v-model.trim="newProjectDraft.genre" placeholder="例如：都市悬疑" /></label>
+        <label><span>一句话想法</span><textarea v-model.trim="newProjectDraft.idea" placeholder="主角遇到了什么，以及他为什么必须行动？"></textarea></label>
+        <div class="project-dialog-actions">
+          <button type="button" @click="newProjectOpen = false">取消</button>
+          <button type="submit" :disabled="projectCreating">{{ projectCreating ? '正在建立…' : '建立项目' }}</button>
+        </div>
+      </form>
+    </div>
   </div>
 </template>
 
@@ -226,11 +264,13 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import DiffReview from './components/DiffReview.vue'
 import ModelSettings from './components/ModelSettings.vue'
 import NovelEditor from './components/NovelEditor.vue'
+import VersionHistory from './components/VersionHistory.vue'
 import { appService } from './services/app-service.js'
 import { countChinese, formatRelativeTime } from './services/format.js'
 
 const workspaceReady = ref(false)
 const workspace = ref(null)
+const projects = ref([])
 const chapters = ref([])
 const activeChapterId = ref('')
 const editorText = ref('')
@@ -244,6 +284,14 @@ const isDirty = ref(false)
 const toast = ref('')
 const loadError = ref('')
 const settingsOpen = ref(false)
+const projectMenuOpen = ref(false)
+const newProjectOpen = ref(false)
+const projectCreating = ref(false)
+const versionsOpen = ref(false)
+const versionsLoading = ref(false)
+const versionRestoring = ref(false)
+const revisions = ref([])
+const newProjectDraft = reactive({ title: '', genre: '', idea: '' })
 const selectionTools = reactive({ visible: false, text: '', from: 0, to: 0, left: 0, top: 0, bottom: 0 })
 const selectionPreview = reactive({
   visible: false,
@@ -298,16 +346,24 @@ function modelDetail(task) {
   return profile.apiKeyConfigured ? `${profile.provider} · API Key 已配置` : `${profile.provider} · 待配置 API Key`
 }
 
+function applyWorkspace(loaded) {
+  workspace.value = loaded
+  Object.assign(project, loaded.project || {})
+  projects.value = loaded.projects || []
+  chapters.value = loaded.chapters || []
+  activeChapterId.value = loaded.chapters?.[0]?.id || ''
+  activeTab.value = 'manuscript'
+  versionsOpen.value = false
+  revisions.value = []
+}
+
 onMounted(async () => {
   closeRequestCleanup = appService.onCloseRequest(handleCloseRequest)
   runtimeInfoCleanup = appService.onRuntimeInfo((info) => Object.assign(runtime, info))
   window.addEventListener('beforeunload', handleBrowserBeforeUnload)
   try {
     const loaded = await appService.loadWorkspace()
-    workspace.value = loaded
-    Object.assign(project, loaded.project)
-    chapters.value = loaded.chapters
-    activeChapterId.value = loaded.chapters[0]?.id || ''
+    applyWorkspace(loaded)
     const info = await appService.getRuntimeInfo()
     Object.assign(runtime, info)
     const loadedModels = await appService.loadModelSettings()
@@ -352,6 +408,107 @@ async function selectChapter(id) {
   await saveManuscript({ createRevision: false, source: 'chapter-switch' })
   activeChapterId.value = id
   activeTab.value = 'manuscript'
+  versionsOpen.value = false
+}
+
+async function switchProject(projectId) {
+  if (projectId === project.id || runningTask.value) {
+    projectMenuOpen.value = false
+    return
+  }
+  try {
+    await saveManuscript({ createRevision: false, source: 'project-switch' })
+    const loaded = await appService.loadWorkspace(projectId)
+    applyWorkspace(loaded)
+    projectMenuOpen.value = false
+    showToast(`已切换到《${loaded.project.title}》`)
+  } catch (error) {
+    showToast(`切换项目失败：${error.message}`)
+  }
+}
+
+async function toggleProjectMenu() {
+  projectMenuOpen.value = !projectMenuOpen.value
+  if (!projectMenuOpen.value) return
+  try {
+    projects.value = await appService.listProjects()
+  } catch (error) {
+    projectMenuOpen.value = false
+    showToast(`读取项目列表失败：${error.message}`)
+  }
+}
+
+function openNewProject() {
+  projectMenuOpen.value = false
+  newProjectDraft.title = ''
+  newProjectDraft.genre = ''
+  newProjectDraft.idea = ''
+  newProjectOpen.value = true
+}
+
+async function createNewProject() {
+  if (!newProjectDraft.title || projectCreating.value) return
+  projectCreating.value = true
+  try {
+    await saveManuscript({ createRevision: false, source: 'project-create' })
+    const loaded = await appService.createProject({ ...newProjectDraft })
+    applyWorkspace(loaded)
+    newProjectOpen.value = false
+    showToast(`《${loaded.project.title}》已建立，可以开始第一章`)
+  } catch (error) {
+    showToast(`建立项目失败：${error.message}`)
+  } finally {
+    projectCreating.value = false
+  }
+}
+
+async function addChapter() {
+  if (!project.id || runningTask.value) return
+  try {
+    await saveManuscript({ createRevision: false, source: 'chapter-create' })
+    const chapter = await appService.createChapter({ projectId: project.id })
+    chapters.value.push(chapter)
+    activeChapterId.value = chapter.id
+    activeTab.value = 'manuscript'
+    projects.value = await appService.listProjects()
+    showToast(`第 ${chapter.chapter_no} 章已添加`)
+  } catch (error) {
+    showToast(`添加章节失败：${error.message}`)
+  }
+}
+
+async function openVersionHistory() {
+  if (!activeChapter.value || runningTask.value) return
+  versionsOpen.value = true
+  versionsLoading.value = true
+  try {
+    await saveManuscript({ createRevision: false, source: 'version-history-open' })
+    revisions.value = await appService.listRevisions(activeChapter.value.id)
+  } catch (error) {
+    versionsOpen.value = false
+    showToast(`读取版本失败：${error.message}`)
+  } finally {
+    versionsLoading.value = false
+  }
+}
+
+async function restoreVersion(revisionId) {
+  if (!activeChapter.value || versionRestoring.value) return
+  versionRestoring.value = true
+  try {
+    const result = await appService.restoreRevision({ chapterId: activeChapter.value.id, revisionId })
+    replaceChapter(result.chapter)
+    editorText.value = result.chapter.manuscript || ''
+    isDirty.value = false
+    saveState.value = 'saved'
+    lastSavedAt.value = new Date().toISOString()
+    revisions.value = await appService.listRevisions(activeChapter.value.id)
+    showToast(result.preservedRevisionId ? '版本已恢复，恢复前正文已自动保存' : '当前正文已经是这个版本')
+  } catch (error) {
+    showToast(`恢复版本失败：${error.message}`)
+  } finally {
+    versionRestoring.value = false
+  }
 }
 
 async function saveChapterTitle() {
@@ -414,6 +571,7 @@ async function runGeneration(task) {
     }
     const result = await executeGeneration({
       task,
+      projectId: project.id,
       chapterId: activeChapter.value.id,
       instruction: instruction.value,
       modelProfileId: modelSettings.routes[task],
@@ -539,6 +697,7 @@ async function rewriteSelection(mode) {
     }
     const result = await executeGeneration({
       task: 'rewrite',
+      projectId: project.id,
       chapterId: activeChapter.value.id,
       selectedText: text,
       rewriteMode: mode,
