@@ -1,4 +1,4 @@
-export const LATEST_SCHEMA_VERSION = 5
+export const LATEST_SCHEMA_VERSION = 6
 
 const migrations = [
   {
@@ -182,6 +182,52 @@ const migrations = [
         CREATE INDEX planning_documents_project_idx ON planning_documents(project_id);
         CREATE INDEX planning_entities_project_kind_idx ON planning_entities(project_id, kind);
         CREATE INDEX planning_candidates_project_status_idx ON planning_candidates(project_id, status, created_at);
+      `)
+    },
+  },
+  {
+    version: 6,
+    name: 'knowledge-and-continuity-ledger',
+    up(database) {
+      database.exec(`
+        CREATE TABLE knowledge_items (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          kind TEXT NOT NULL CHECK(kind IN ('fact', 'timeline', 'foreshadow')),
+          title TEXT NOT NULL,
+          content_json TEXT NOT NULL DEFAULT '{}',
+          source_type TEXT NOT NULL DEFAULT 'manual' CHECK(source_type IN ('manual', 'planning', 'chapter')),
+          source_id TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open', 'resolved', 'archived')),
+          position INTEGER NOT NULL CHECK(position > 0),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+        );
+        CREATE TABLE continuity_checks (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          chapter_id TEXT,
+          kind TEXT NOT NULL,
+          severity TEXT NOT NULL CHECK(severity IN ('info', 'warning', 'critical')),
+          title TEXT NOT NULL,
+          detail TEXT NOT NULL DEFAULT '',
+          source_json TEXT NOT NULL DEFAULT '{}',
+          origin TEXT NOT NULL DEFAULT 'system' CHECK(origin IN ('system', 'manual')),
+          status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open', 'resolved', 'dismissed')),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          resolved_at TEXT NOT NULL DEFAULT '',
+          FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
+          FOREIGN KEY(chapter_id) REFERENCES chapters(id) ON DELETE CASCADE
+        );
+        CREATE INDEX knowledge_items_project_kind_idx ON knowledge_items(project_id, kind, status, position);
+        CREATE INDEX knowledge_items_source_idx ON knowledge_items(project_id, source_type, source_id);
+        CREATE UNIQUE INDEX knowledge_items_derived_source_idx
+          ON knowledge_items(project_id, kind, source_type, source_id)
+          WHERE source_type != 'manual' AND source_id != '';
+        CREATE INDEX continuity_checks_project_status_idx ON continuity_checks(project_id, status, severity, updated_at);
+        CREATE INDEX continuity_checks_chapter_idx ON continuity_checks(chapter_id);
       `)
     },
   },

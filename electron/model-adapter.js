@@ -14,7 +14,7 @@ function compactJson(value, limit = 12000) {
   return content.length > limit ? content.slice(0, limit) + '…' : content
 }
 
-function contextFor({ project, chapter, planningCenter, instruction }) {
+function contextFor({ project, chapter, planningCenter, knowledgeCenter, instruction }) {
   const planning = planningCenter ? {
     foundation: planningCenter.documents?.foundation?.content || {},
     worldOverview: planningCenter.documents?.world?.content || {},
@@ -22,6 +22,12 @@ function contextFor({ project, chapter, planningCenter, instruction }) {
     characters: (planningCenter.characters || []).map((item) => ({ title: item.title, ...item.data })),
     worldElements: (planningCenter.worldElements || []).map((item) => ({ title: item.title, ...item.data })),
     volumes: (planningCenter.volumes || []).map((item) => ({ title: item.title, ...item.data })),
+  } : null
+  const knowledge = knowledgeCenter ? {
+    facts: (knowledgeCenter.facts || []).filter((item) => item.status === 'open').map((item) => ({ title: item.title, ...item.content })),
+    timeline: (knowledgeCenter.timeline || []).filter((item) => item.status === 'open').map((item) => ({ title: item.title, ...item.content })),
+    foreshadows: (knowledgeCenter.foreshadows || []).filter((item) => item.status === 'open').map((item) => ({ title: item.title, ...item.content })),
+    openChecks: (knowledgeCenter.checks || []).filter((check) => check.status === 'open').map((check) => ({ severity: check.severity, title: check.title, detail: check.detail })),
   } : null
   return [
     '项目：' + (project?.title || '未命名小说'),
@@ -32,6 +38,7 @@ function contextFor({ project, chapter, planningCenter, instruction }) {
     '章节卡：' + JSON.stringify(chapter?.card || {}),
     '场景计划：' + (chapter?.scene_plan || '暂无'),
     planning ? '已确认故事规划：' + compactJson(planning) : '',
+    knowledge ? '已确认知识与连续性：' + compactJson(knowledge) : '',
     instruction ? '本次补充要求：' + instruction : '',
   ].filter(Boolean).join('\n')
 }

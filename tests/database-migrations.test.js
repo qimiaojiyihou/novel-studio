@@ -44,6 +44,8 @@ test('fresh database migrates to the latest schema with foreign keys enabled', (
     assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'planning_documents'").get())
     assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'planning_entities'").get())
     assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'planning_candidates'").get())
+    assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'knowledge_items'").get())
+    assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'continuity_checks'").get())
   } finally {
     database.close()
   }

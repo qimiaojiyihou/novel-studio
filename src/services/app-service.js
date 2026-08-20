@@ -70,6 +70,30 @@ export const appService = {
   resolvePlanningCandidate(payload) {
     return electronApi.resolvePlanningCandidate(payload)
   },
+  loadKnowledgeCenter(projectId) {
+    return electronApi.loadKnowledgeCenter(projectId)
+  },
+  syncKnowledgeSources(projectId) {
+    return electronApi.syncKnowledgeSources(projectId)
+  },
+  refreshContinuityChecks(projectId) {
+    return electronApi.refreshContinuityChecks(projectId)
+  },
+  createKnowledgeItem(payload) {
+    return electronApi.createKnowledgeItem(payload)
+  },
+  updateKnowledgeItem(payload) {
+    return electronApi.updateKnowledgeItem(payload)
+  },
+  reorderKnowledgeItems(payload) {
+    return electronApi.reorderKnowledgeItems(payload)
+  },
+  deleteKnowledgeItem(itemId) {
+    return electronApi.deleteKnowledgeItem(itemId)
+  },
+  resolveContinuityCheck(payload) {
+    return electronApi.resolveContinuityCheck(payload)
+  },
   loadModelSettings() {
     return electronApi.loadModelSettings()
   },

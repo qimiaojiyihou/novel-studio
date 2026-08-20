@@ -7,11 +7,13 @@ import { fileURLToPath } from 'node:url'
 import {
   archiveProject,
   createChapter,
+  createKnowledgeItem,
   createPlanningCandidate,
   createPlanningEntity,
   createProject,
   createRevision,
   deleteChapter,
+  deleteKnowledgeItem,
   deleteModelProfile,
   deletePlanningEntity,
   deleteProject,
@@ -21,20 +23,26 @@ import {
   listProjects,
   listRevisions,
   loadPlanningCenter,
+  loadKnowledgeCenter,
   loadModelSettings,
   loadWorkspace,
   openDatabase,
   reorderChapters,
+  reorderKnowledgeItems,
   reorderPlanningEntities,
   restoreProject,
   restoreRevision,
   resolvePlanningCandidate,
+  resolveContinuityCheck,
   savePlanningDocument,
   saveModelProfile,
   updateChapter,
+  updateKnowledgeItem,
   updateProject,
   updatePlanningEntity,
   updateTaskRoute,
+  refreshContinuityChecks,
+  syncKnowledgeSources,
 } from './database.js'
 import { createModelGateway } from './model-gateway.js'
 
@@ -178,6 +186,14 @@ function registerIpc() {
   ipcMain.handle('planning:entity-delete', (_event, entityId) => deletePlanningEntity(entityId))
   ipcMain.handle('planning:candidate-create', (_event, payload) => createPlanningCandidate(payload))
   ipcMain.handle('planning:candidate-resolve', (_event, payload) => resolvePlanningCandidate(payload))
+  ipcMain.handle('knowledge:load', (_event, projectId) => loadKnowledgeCenter(projectId))
+  ipcMain.handle('knowledge:sync', (_event, projectId) => syncKnowledgeSources(projectId))
+  ipcMain.handle('knowledge:checks-refresh', (_event, projectId) => refreshContinuityChecks(projectId))
+  ipcMain.handle('knowledge:item-create', (_event, payload) => createKnowledgeItem(payload))
+  ipcMain.handle('knowledge:item-update', (_event, payload) => updateKnowledgeItem(payload))
+  ipcMain.handle('knowledge:items-reorder', (_event, payload) => reorderKnowledgeItems(payload))
+  ipcMain.handle('knowledge:item-delete', (_event, itemId) => deleteKnowledgeItem(itemId))
+  ipcMain.handle('knowledge:check-resolve', (_event, payload) => resolveContinuityCheck(payload))
   ipcMain.handle('models:load', () => loadModelSettings())
   ipcMain.handle('models:save', (_event, profile) => saveModelProfile(profile))
   ipcMain.handle('models:delete', (_event, id) => deleteModelProfile(id))
@@ -188,13 +204,14 @@ function registerIpc() {
     const workspace = loadWorkspace(payload?.projectId)
     const chapter = workspace.chapters.find((item) => item.id === payload?.chapterId) || workspace.chapters[0]
     const planningCenter = workspace.project ? loadPlanningCenter(workspace.project.id) : null
+    const knowledgeCenter = workspace.project ? loadKnowledgeCenter(workspace.project.id) : null
     const modelSettings = loadModelSettings()
     const modelProfileId = payload?.modelProfileId || modelSettings.routes[payload?.task] || 'local-default'
     const modelProfile = modelSettings.profiles.find((profile) => profile.id === modelProfileId)
     const apiKey = getModelApiKey(modelProfileId)
     try {
       return await modelGateway.generate(
-        { ...payload, project: workspace.project, chapter, planningCenter, modelProfile, apiKey },
+        { ...payload, project: workspace.project, chapter, planningCenter, knowledgeCenter, modelProfile, apiKey },
         {
           taskId,
           onEvent: (generationEvent) => {

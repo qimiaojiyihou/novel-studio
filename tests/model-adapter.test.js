@@ -109,3 +109,19 @@ test('planning field generation returns a reviewable text candidate', async () =
   assert.ok(result.text.includes('主角'))
   assert.equal(prepared.messages[0].content.includes('只返回这个规划字段'), true)
 })
+
+test('generation context includes confirmed knowledge and open continuity checks', () => {
+  const prepared = prepareModelTask({
+    ...baseInput,
+    knowledgeCenter: {
+      facts: [{ status: 'open', title: '旧稿规则', content: { statement: '只能由原作者修改' } }],
+      timeline: [{ status: 'open', title: '第一章', content: { event: '主角拿到钥匙' } }],
+      foreshadows: [],
+      checks: [{ status: 'open', severity: 'warning', title: '缺少场景计划', detail: '第二章尚未拆分' }],
+    },
+  })
+  const userMessage = prepared.messages.find((message) => message.role === 'user').content
+  assert.match(userMessage, /旧稿规则/)
+  assert.match(userMessage, /只能由原作者修改/)
+  assert.match(userMessage, /缺少场景计划/)
+})

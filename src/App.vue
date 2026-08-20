@@ -72,7 +72,7 @@
           <button class="nav-item" :class="{ active: workspaceView === 'characters' }" @click="setWorkspaceView('characters')"><span class="nav-glyph">◎</span>人物与关系</button>
           <button class="nav-item" :class="{ active: workspaceView === 'world' }" @click="setWorkspaceView('world')"><span class="nav-glyph">◍</span>世界观</button>
           <button class="nav-item" :class="{ active: workspaceView === 'outline' }" @click="setWorkspaceView('outline')"><span class="nav-glyph">▤</span>结构规划</button>
-          <button class="nav-item nav-item-disabled" title="将在连续性阶段开放"><span class="nav-glyph">⌁</span>知识与连续性</button>
+          <button class="nav-item" :class="{ active: workspaceView === 'knowledge' }" @click="setWorkspaceView('knowledge')"><span class="nav-glyph">⌁</span>知识与连续性</button>
         </nav>
 
         <div class="chapter-section">
@@ -243,6 +243,12 @@
         </div>
       </aside>
       </template>
+      <KnowledgeCenter
+        v-else-if="workspaceView === 'knowledge'"
+        ref="knowledgeCenterRef"
+        :project="project"
+        @toast="showToast"
+      />
       <PlanningCenter
         v-else
         ref="planningCenterRef"
@@ -370,6 +376,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import DiffReview from './components/DiffReview.vue'
+import KnowledgeCenter from './components/KnowledgeCenter.vue'
 import ModelSettings from './components/ModelSettings.vue'
 import NovelEditor from './components/NovelEditor.vue'
 import PlanningCenter from './components/PlanningCenter.vue'
@@ -386,6 +393,7 @@ const editorText = ref('')
 const activeTab = ref('manuscript')
 const workspaceView = ref('writing')
 const planningCenterRef = ref(null)
+const knowledgeCenterRef = ref(null)
 const instruction = ref('')
 const runningTask = ref('')
 const generationCancelPending = ref(false)
@@ -529,11 +537,16 @@ onBeforeUnmount(() => {
   window.removeEventListener('beforeunload', handleBrowserBeforeUnload)
 })
 
+async function flushPlanningMemory() {
+  await planningCenterRef.value?.flushSaves?.()
+  await knowledgeCenterRef.value?.flushSaves?.()
+}
+
 async function selectChapter(id) {
   if (id === activeChapterId.value && workspaceView.value === 'writing') return
   if (selectionPreview.visible) discardSelectionPreview()
   if (workspaceView.value === 'writing') await saveManuscript({ createRevision: false, source: 'chapter-switch' })
-  else await planningCenterRef.value?.flushSaves?.()
+  else await flushPlanningMemory()
   activeChapterId.value = id
   activeTab.value = 'manuscript'
   workspaceView.value = 'writing'
@@ -544,7 +557,7 @@ async function setWorkspaceView(view) {
   if (workspaceView.value === view) return
   try {
     if (workspaceView.value === 'writing') await saveManuscript({ createRevision: false, source: 'workspace-view-switch' })
-    else await planningCenterRef.value?.flushSaves?.()
+    else await flushPlanningMemory()
     workspaceView.value = view
     projectMenuOpen.value = false
   } catch (error) {
@@ -558,7 +571,7 @@ async function switchProject(projectId) {
     return
   }
   try {
-    await planningCenterRef.value?.flushSaves?.()
+    await flushPlanningMemory()
     await saveManuscript({ createRevision: false, source: 'project-switch' })
     const loaded = await appService.loadWorkspace(projectId)
     applyWorkspace(loaded)
@@ -602,7 +615,7 @@ async function createNewProject() {
   if (!newProjectDraft.title || projectCreating.value) return
   projectCreating.value = true
   try {
-    await planningCenterRef.value?.flushSaves?.()
+    await flushPlanningMemory()
     await saveManuscript({ createRevision: false, source: 'project-create' })
     const loaded = await appService.createProject({ ...newProjectDraft })
     applyWorkspace(loaded)
@@ -652,7 +665,7 @@ function askArchiveProject(item) {
     note: '之后可以从项目架的“已归档”区域恢复。',
     confirmLabel: '归档项目',
     run: async () => {
-      await planningCenterRef.value?.flushSaves?.()
+      await flushPlanningMemory()
       if (item.id === project.id) await saveManuscript({ createRevision: false, source: 'project-archive' })
       const loaded = await appService.archiveProject(item.id)
       if (item.id === project.id) applyWorkspace(loaded)
@@ -687,7 +700,7 @@ function askDeleteProject(item) {
     confirmLabel: '永久删除',
     danger: true,
     run: async () => {
-      await planningCenterRef.value?.flushSaves?.()
+      await flushPlanningMemory()
       if (item.id === project.id) await saveManuscript({ createRevision: false, source: 'before-project-delete' })
       const loaded = await appService.deleteProject(item.id)
       if (item.id === project.id) applyWorkspace(loaded)
@@ -1149,7 +1162,7 @@ async function handleCloseRequest() {
   }
   closeInProgress = true
   try {
-    await planningCenterRef.value?.flushSaves?.()
+    await flushPlanningMemory()
     if (candidate.visible) discardCandidate()
     if (selectionPreview.visible) discardSelectionPreview()
     if (isDirty.value) await saveManuscript({ createRevision: false, source: 'close-autosave' })

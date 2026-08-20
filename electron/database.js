@@ -3,12 +3,14 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { getSchemaVersion, runMigrations } from './database-migrations.js'
+import { createKnowledgeRepository } from './knowledge-repository.js'
 import { createPlanningRepository } from './planning-repository.js'
 import { createWorkspaceRepository } from './workspace-repository.js'
 
 let database
 let workspaceRepository
 let planningRepository
+let knowledgeRepository
 
 function timestamp() {
   return new Date().toISOString()
@@ -48,6 +50,7 @@ export function openDatabase() {
   seedModelProfiles()
   workspaceRepository = createWorkspaceRepository(database)
   planningRepository = createPlanningRepository(database)
+  knowledgeRepository = createKnowledgeRepository(database)
   return database
 }
 
@@ -59,6 +62,11 @@ function workspaceStore() {
 function planningStore() {
   openDatabase()
   return planningRepository
+}
+
+function knowledgeStore() {
+  openDatabase()
+  return knowledgeRepository
 }
 
 export function getDatabaseInfo() {
@@ -225,6 +233,38 @@ export function createPlanningCandidate(input) {
 
 export function resolvePlanningCandidate(input) {
   return planningStore().resolveCandidate(input)
+}
+
+export function loadKnowledgeCenter(projectId) {
+  return knowledgeStore().loadKnowledgeCenter(projectId)
+}
+
+export function syncKnowledgeSources(projectId) {
+  return knowledgeStore().syncPlanningSources(projectId)
+}
+
+export function refreshContinuityChecks(projectId) {
+  return knowledgeStore().refreshContinuityChecks(projectId)
+}
+
+export function createKnowledgeItem(input) {
+  return knowledgeStore().createItem(input)
+}
+
+export function updateKnowledgeItem(input) {
+  return knowledgeStore().updateItem(input)
+}
+
+export function reorderKnowledgeItems(input) {
+  return knowledgeStore().reorderItems(input)
+}
+
+export function deleteKnowledgeItem(itemId) {
+  return knowledgeStore().deleteItem(itemId)
+}
+
+export function resolveContinuityCheck(input) {
+  return knowledgeStore().resolveCheck(input)
 }
 
 export function loadModelSettings() {
