@@ -128,3 +128,13 @@ func (registry *taskRegistry) cancelAll() {
 		task.cancel()
 	}
 }
+
+func (registry *taskRegistry) removeAfter(task *modelTask, retention time.Duration) {
+	time.AfterFunc(retention, func() {
+		registry.mu.Lock()
+		defer registry.mu.Unlock()
+		if registry.tasks[task.id] == task {
+			delete(registry.tasks, task.id)
+		}
+	})
+}

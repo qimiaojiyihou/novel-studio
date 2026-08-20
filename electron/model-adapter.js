@@ -63,54 +63,215 @@ function parseJsonObject(value) {
   }
 }
 
-function shapeResult(task, content, modelProfile) {
-  const base = {
-    task,
-    generatedAt: now(),
-    execution: 'remote',
-    model: {
-      profileId: modelProfile.id,
-      provider: modelProfile.provider,
-      name: modelProfile.name,
-      model: modelProfile.model,
-    },
+function mockContentFor(task, result) {
+  if (task === 'chapter_card') return JSON.stringify(result.card)
+  if (task === 'scene_plan') return result.scenePlan || ''
+  if (task === 'chapter') return result.manuscript || ''
+  return result.text || ''
+}
+
+function normalizedModel(modelProfile) {
+  return {
+    profileId: modelProfile?.id || 'mock-provider',
+    provider: modelProfile?.provider || 'mock',
+    name: modelProfile?.name || 'MockProvider',
+    model: modelProfile?.model || 'mock-v0.1',
   }
-  if (task === 'chapter_card') return { ...base, card: parseJsonObject(content) }
-  if (task === 'scene_plan') return { ...base, scenePlan: String(content).trim() }
-  if (task === 'rewrite') return { ...base, text: String(content).trim() }
+}
+
+export class GenerationCancelledError extends Error {
+  constructor() {
+    super('生成任务已取消')
+    this.name = 'GenerationCancelledError'
+  }
+}
+
+export function prepareModelTask(input) {
+  const { task, modelProfile, apiKey } = input
+  const provider = modelProfile?.provider || 'mock'
+  const needsKey = provider !== 'local' && provider !== 'mock'
+  const missingConfiguration = !modelProfile?.baseUrl || !modelProfile?.model || (needsKey && !apiKey)
+  const prepared = {
+    task,
+    endpoint: modelProfile?.baseUrl || '',
+    apiKey: apiKey || '',
+    model: modelProfile?.model || '',
+    messages: messagesFor(task, input),
+    temperature: task === 'rewrite' ? 0.55 : 0.78,
+    modelProfile: normalizedModel(modelProfile),
+    execution: missingConfiguration ? 'mock' : 'remote',
+    fallbackReason: '',
+    mockContent: '',
+    mockDelayMs: Number.isFinite(input.mockDelayMs) ? input.mockDelayMs : 8,
+  }
+  if (!missingConfiguration) return prepared
+
+  const mockResult = generateMock(input)
+  prepared.mockContent = mockContentFor(task, mockResult)
+  prepared.fallbackReason = !modelProfile
+    ? '任务路由没有可用模型'
+    : needsKey
+      ? '外部模型尚未填写完整配置'
+      : '本地模型尚未填写 Base URL 或模型名称'
+  return prepared
+}
+
+export function shapeModelResult(prepared, content, gateway = 'embedded') {
+  const base = {
+    task: prepared.task,
+    generatedAt: now(),
+    execution: prepared.execution,
+    gateway,
+    model: prepared.modelProfile,
+  }
+  if (prepared.fallbackReason) base.fallbackReason = prepared.fallbackReason
+  if (prepared.task === 'chapter_card') return { ...base, card: parseJsonObject(content) }
+  if (prepared.task === 'scene_plan') return { ...base, scenePlan: String(content).trim() }
+  if (prepared.task === 'rewrite') return { ...base, text: String(content).trim() }
   return { ...base, manuscript: String(content).trim() }
 }
 
-export async function generateModelTask(input) {
-  const { task, modelProfile, apiKey } = input
-  const needsKey = modelProfile?.provider !== 'local'
-  const missingConfiguration = !modelProfile?.baseUrl || !modelProfile?.model || (needsKey && !apiKey)
-  if (missingConfiguration) {
-    return {
-      ...generateMock(input),
-      execution: 'mock',
-      fallbackReason: needsKey ? '外部模型尚未填写完整配置' : '本地模型尚未填写 Base URL 或模型名称',
+function throwIfCancelled(signal) {
+  if (signal?.aborted) throw new GenerationCancelledError()
+}
+
+async function streamMock(prepared, signal, onDelta) {
+  const runes = Array.from(prepared.mockContent)
+  for (let index = 0; index < runes.length; index += 4) {
+    throwIfCancelled(signal)
+    if (prepared.mockDelayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, prepared.mockDelayMs))
+      throwIfCancelled(signal)
+    }
+    onDelta(runes.slice(index, index + 4).join(''))
+  }
+  return prepared.mockContent
+}
+
+function requestSignal(externalSignal, timeoutMilliseconds) {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(new Error('模型请求超时')), timeoutMilliseconds)
+  const cancel = () => controller.abort(externalSignal?.reason)
+  if (externalSignal?.aborted) cancel()
+  else externalSignal?.addEventListener('abort', cancel, { once: true })
+  return {
+    signal: controller.signal,
+    dispose() {
+      clearTimeout(timeout)
+      externalSignal?.removeEventListener('abort', cancel)
+    },
+  }
+}
+
+async function readSSEContent(response, signal, onDelta) {
+  if (!response.body) throw new Error('模型接口没有返回响应流')
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let content = ''
+  let finished = false
+
+  const consumeBlock = (block) => {
+    const data = block.split(/\r?\n/)
+      .filter((line) => line.startsWith('data:'))
+      .map((line) => line.slice(5).trim())
+      .join('\n')
+    if (!data) return
+    if (data === '[DONE]') {
+      finished = true
+      return
+    }
+    let payload
+    try {
+      payload = JSON.parse(data)
+    } catch {
+      throw new Error('模型流返回了无法解析的数据')
+    }
+    for (const choice of payload.choices || []) {
+      const delta = choice.delta?.content || ''
+      if (!delta) continue
+      content += delta
+      onDelta(delta)
     }
   }
 
-  const headers = { 'Content-Type': 'application/json' }
-  if (apiKey) headers.Authorization = 'Bearer ' + apiKey
-  const response = await fetch(endpointFor(modelProfile.baseUrl), {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({
-      model: modelProfile.model,
-      messages: messagesFor(task, input),
-      temperature: task === 'rewrite' ? 0.55 : 0.78,
-    }),
-    signal: AbortSignal.timeout(120000),
-  })
-  if (!response.ok) {
-    const detail = await response.text()
-    throw new Error(modelProfile.name + ' 请求失败（' + response.status + '）：' + detail.slice(0, 180))
+  while (!finished) {
+    throwIfCancelled(signal)
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n')
+    let boundary = buffer.indexOf('\n\n')
+    while (boundary >= 0) {
+      consumeBlock(buffer.slice(0, boundary))
+      buffer = buffer.slice(boundary + 2)
+      if (finished) break
+      boundary = buffer.indexOf('\n\n')
+    }
   }
-  const payload = await response.json()
-  const content = payload.choices?.[0]?.message?.content
-  if (!content) throw new Error(modelProfile.name + ' 没有返回可用内容')
-  return shapeResult(task, content, modelProfile)
+  buffer += decoder.decode()
+  if (!finished && buffer.trim()) consumeBlock(buffer)
+  return content
+}
+
+async function requestRemote(prepared, signal, onDelta) {
+  const linkedSignal = requestSignal(signal, 120000)
+  try {
+    const headers = { 'Content-Type': 'application/json' }
+    if (prepared.apiKey) headers.Authorization = 'Bearer ' + prepared.apiKey
+    const response = await fetch(endpointFor(prepared.endpoint), {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        model: prepared.model,
+        messages: prepared.messages,
+        temperature: prepared.temperature,
+        stream: true,
+      }),
+      signal: linkedSignal.signal,
+    })
+    if (!response.ok) {
+      const detail = await response.text()
+      throw new Error(prepared.modelProfile.name + ' 请求失败（' + response.status + '）：' + detail.slice(0, 180))
+    }
+    const contentType = response.headers.get('content-type') || ''
+    if (contentType.includes('text/event-stream')) {
+      const content = await readSSEContent(response, linkedSignal.signal, onDelta)
+      if (!content) throw new Error(prepared.modelProfile.name + ' 没有返回可用内容')
+      return content
+    }
+    const payload = await response.json()
+    const content = payload.choices?.[0]?.message?.content
+    if (!content) throw new Error(prepared.modelProfile.name + ' 没有返回可用内容')
+    onDelta(content)
+    return content
+  } catch (error) {
+    if (signal?.aborted) throw new GenerationCancelledError()
+    throw error
+  } finally {
+    linkedSignal.dispose()
+  }
+}
+
+export async function runEmbeddedModelTask(prepared, { taskId = '', signal, onEvent = () => {} } = {}) {
+  const emit = (event) => onEvent({ taskId, createdAt: now(), gateway: 'embedded', ...event })
+  emit({ type: 'started' })
+  try {
+    const onDelta = (delta) => emit({ type: 'delta', delta })
+    const content = prepared.execution === 'mock'
+      ? await streamMock(prepared, signal, onDelta)
+      : await requestRemote(prepared, signal, onDelta)
+    emit({ type: 'completed', content })
+    return shapeModelResult(prepared, content, 'embedded')
+  } catch (error) {
+    if (error instanceof GenerationCancelledError || signal?.aborted) {
+      emit({ type: 'cancelled' })
+      throw new GenerationCancelledError()
+    }
+    emit({ type: 'failed', error: error.message })
+    throw error
+  }
+}
+
+export async function generateModelTask(input, options = {}) {
+  return runEmbeddedModelTask(prepareModelTask(input), options)
 }

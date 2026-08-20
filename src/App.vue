@@ -83,6 +83,9 @@
           </div>
           <div class="editor-heading-actions">
             <button class="outline-button" @click="saveManuscript">保存版本</button>
+            <button v-if="runningTask" class="cancel-generation-button" :disabled="generationCancelPending" @click="cancelGeneration">
+              {{ generationCancelPending ? '正在取消…' : '取消生成' }}
+            </button>
             <button class="primary-button" @click="runGeneration('chapter')" :disabled="taskIsRunning()">
               <span v-if="isTaskRunning('chapter')" class="spinner"></span>
               {{ isTaskRunning('chapter') ? '生成中' : '生成正文' }}
@@ -138,6 +141,16 @@
             </div>
             <button class="selection-review-undo" @click="discardSelectionPreview">撤销</button>
             <button class="selection-review-accept" @click="acceptSelectionPreview">接受</button>
+          </div>
+
+          <div v-if="streamPreview.visible" class="generation-strip" aria-live="polite">
+            <div class="generation-strip-head">
+              <span class="generation-pulse"></span>
+              <strong>{{ generationTaskLabel(streamPreview.task) }}</strong>
+              <span>{{ streamPreview.gateway === 'go-service' ? 'Go 流式服务' : '内置流式服务' }}</span>
+              <small>{{ countChinese(streamPreview.content) }} 字抵达</small>
+            </div>
+            <pre>{{ streamPreview.content || streamPreview.status }}</pre>
           </div>
         </div>
       </section>
@@ -224,6 +237,7 @@ const editorText = ref('')
 const activeTab = ref('manuscript')
 const instruction = ref('')
 const runningTask = ref('')
+const generationCancelPending = ref(false)
 const lastSavedAt = ref('')
 const saveState = ref('saved')
 const isDirty = ref(false)
@@ -239,16 +253,23 @@ const selectionPreview = reactive({
   replacementText: '',
 })
 const candidate = reactive({ visible: false, original: '', content: '', title: '', subtitle: '' })
+const streamPreview = reactive({ visible: false, task: '', status: '', content: '', gateway: 'embedded' })
 const runtime = reactive({ goServiceStatus: 'embedded-fallback', mode: 'embedded' })
 const project = reactive({ title: '', genre: '', idea: '', style: '' })
 const modelSettings = reactive({ profiles: [], routes: {} })
 let autosaveTimer = null
 let savePromise = null
 let closeRequestCleanup = null
+let runtimeInfoCleanup = null
 let closeInProgress = false
+let activeGeneration = null
 
 const activeChapter = computed(() => chapters.value.find((chapter) => chapter.id === activeChapterId.value) || chapters.value[0])
-const runtimeLabel = computed(() => runtime.mode === 'go-service' ? 'Go 服务已连接' : '内置服务模式')
+const runtimeLabel = computed(() => {
+  if (runtime.goServiceStatus === 'ready') return 'Go 服务已连接'
+  if (runtime.goServiceStatus === 'starting') return 'Go 启动中 · 内置可用'
+  return '内置服务模式'
+})
 const saveLabel = computed(() => {
   if (saveState.value === 'dirty') return '有未保存修改'
   if (saveState.value === 'saving') return '正在保存…'
@@ -279,6 +300,7 @@ function modelDetail(task) {
 
 onMounted(async () => {
   closeRequestCleanup = appService.onCloseRequest(handleCloseRequest)
+  runtimeInfoCleanup = appService.onRuntimeInfo((info) => Object.assign(runtime, info))
   window.addEventListener('beforeunload', handleBrowserBeforeUnload)
   try {
     const loaded = await appService.loadWorkspace()
@@ -318,7 +340,9 @@ watch(editorText, (value) => {
 
 onBeforeUnmount(() => {
   if (autosaveTimer) window.clearTimeout(autosaveTimer)
+  void activeGeneration?.cancel()
   closeRequestCleanup?.()
+  runtimeInfoCleanup?.()
   window.removeEventListener('beforeunload', handleBrowserBeforeUnload)
 })
 
@@ -388,7 +412,7 @@ async function runGeneration(task) {
     } else if (task === 'chapter' && originalManuscript) {
       await saveManuscript({ createRevision: true, source: 'before-ai-generation', forceRevision: true })
     }
-    const result = await appService.generateMock({
+    const result = await executeGeneration({
       task,
       chapterId: activeChapter.value.id,
       instruction: instruction.value,
@@ -414,7 +438,7 @@ async function runGeneration(task) {
       showToast('正文候选稿已生成，请确认差异')
     }
   } catch (error) {
-    showToast(`生成失败：${error.message}`)
+    showToast(generationErrorMessage(error, '生成失败'))
   } finally {
     runningTask.value = ''
   }
@@ -422,7 +446,71 @@ async function runGeneration(task) {
 
 function executionLabel(result) {
   const name = result.model?.name || 'MockProvider'
-  return result.execution === 'remote' ? name : `${name} · Mock 回退`
+  const gateway = result.gateway === 'go-service' ? 'Go 服务' : '内置服务'
+  return result.execution === 'remote' ? `${name} · ${gateway}` : `${name} · Mock 回退 · ${gateway}`
+}
+
+function generationTaskLabel(task) {
+  return {
+    chapter: '正文正在落稿',
+    chapter_card: '章节卡正在成形',
+    scene_plan: '场景计划正在展开',
+    rewrite: '局部候选正在改写',
+  }[task] || '内容正在生成'
+}
+
+function handleGenerationEvent(event) {
+  if (!event) return
+  streamPreview.gateway = event.gateway || streamPreview.gateway
+  if (event.type === 'gateway-fallback') {
+    streamPreview.status = 'Go 服务暂时未响应，已接续到内置服务…'
+    return
+  }
+  if (event.type === 'started') {
+    streamPreview.status = '模型已接收任务，等待第一段内容…'
+    return
+  }
+  if (event.type === 'delta') {
+    streamPreview.content += event.delta || ''
+    streamPreview.status = '内容持续抵达中…'
+    return
+  }
+  if (event.type === 'cancelled') streamPreview.status = '生成已取消'
+  if (event.type === 'failed') streamPreview.status = event.error || '生成任务执行失败'
+}
+
+async function executeGeneration(payload) {
+  streamPreview.visible = true
+  streamPreview.task = payload.task
+  streamPreview.status = '正在建立生成任务…'
+  streamPreview.content = ''
+  streamPreview.gateway = runtime.mode === 'go-service' ? 'go-service' : 'embedded'
+  const generation = appService.startGeneration(payload, handleGenerationEvent)
+  activeGeneration = generation
+  try {
+    return await generation.promise
+  } finally {
+    if (activeGeneration?.taskId === generation.taskId) activeGeneration = null
+    generationCancelPending.value = false
+    streamPreview.visible = false
+  }
+}
+
+async function cancelGeneration() {
+  if (!activeGeneration || generationCancelPending.value) return
+  generationCancelPending.value = true
+  streamPreview.status = '正在停止模型任务…'
+  try {
+    await activeGeneration.cancel()
+  } catch (error) {
+    generationCancelPending.value = false
+    showToast(`取消失败：${error.message}`)
+  }
+}
+
+function generationErrorMessage(error, prefix) {
+  const message = error instanceof Error ? error.message : String(error)
+  return message.includes('取消') ? '生成已取消，原稿保持不变' : `${prefix}：${message}`
 }
 
 function handleSelection(selection) {
@@ -449,7 +537,7 @@ async function rewriteSelection(mode) {
     if (isDirty.value || originalDocument) {
       await saveManuscript({ createRevision: true, source: 'before-ai-rewrite', forceRevision: true })
     }
-    const result = await appService.generateMock({
+    const result = await executeGeneration({
       task: 'rewrite',
       chapterId: activeChapter.value.id,
       selectedText: text,
@@ -466,7 +554,7 @@ async function rewriteSelection(mode) {
     selectionTools.visible = false
     showToast(`${mode}候选已生成，请接受或撤销 · ${executionLabel(result)}`)
   } catch (error) {
-    showToast(`局部重写失败：${error.message}`)
+    showToast(generationErrorMessage(error, '局部重写失败'))
   } finally {
     runningTask.value = ''
   }

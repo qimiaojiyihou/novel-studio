@@ -51,3 +51,26 @@ func TestProviderForwardsOpenAICompatibleStreamingRequest(t *testing.T) {
 		t.Fatalf("unexpected streamed content %q / %q", streamed.String(), content)
 	}
 }
+
+func TestProviderAcceptsNonStreamingOpenAICompatibleResponse(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"完整响应"}}]}`)
+	}))
+	defer upstream.Close()
+
+	var streamed strings.Builder
+	content, err := newProviderClient().generate(context.Background(), taskRequest{
+		Endpoint: upstream.URL,
+		Model:    "provider-model",
+		Messages: []chatMessage{{Role: "user", Content: "生成正文"}},
+	}, func(delta string) {
+		streamed.WriteString(delta)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if content != "完整响应" || streamed.String() != content {
+		t.Fatalf("unexpected response content %q / %q", streamed.String(), content)
+	}
+}

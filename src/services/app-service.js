@@ -25,11 +25,24 @@ export const appService = {
   updateTaskRoute(payload) {
     return electronApi.updateTaskRoute(payload)
   },
-  generateMock(payload) {
-    return electronApi.generateMock(payload)
+  startGeneration(payload, onEvent = () => {}) {
+    const taskId = globalThis.crypto?.randomUUID?.() || `task-${Date.now()}-${Math.random().toString(16).slice(2)}`
+    const unsubscribe = electronApi.onGenerationEvent((event) => {
+      if (event?.taskId === taskId) onEvent(event)
+    })
+    const promise = electronApi.startGeneration({ ...payload, taskId })
+      .finally(unsubscribe)
+    return {
+      taskId,
+      promise,
+      cancel: () => electronApi.cancelGeneration(taskId),
+    }
   },
   getRuntimeInfo() {
     return electronApi.getRuntimeInfo()
+  },
+  onRuntimeInfo(callback) {
+    return electronApi.onRuntimeInfo(callback)
   },
   onCloseRequest(callback) {
     return electronApi.onCloseRequest(callback)

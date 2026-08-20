@@ -17,7 +17,7 @@ import (
 func main() {
 	port := flag.Int("port", 0, "HTTP port; 0 selects a free port")
 	dataDir := flag.String("data-dir", ".", "service data directory")
-	authToken := flag.String("auth-token", "", "bearer token required by protected API routes")
+	authToken := flag.String("auth-token", os.Getenv("NOVEL_STUDIO_SERVICE_TOKEN"), "bearer token required by protected API routes")
 	flag.Parse()
 
 	if err := os.MkdirAll(*dataDir, 0o755); err != nil {

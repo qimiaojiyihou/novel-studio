@@ -2,6 +2,7 @@ import { app, BrowserWindow, ipcMain } from 'electron'
 import path from 'node:path'
 import fs from 'node:fs'
 import { spawn } from 'node:child_process'
+import { randomBytes } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import {
   createRevision,
@@ -16,13 +17,53 @@ import {
   updateProject,
   updateTaskRoute,
 } from './database.js'
-import { generateModelTask } from './model-adapter.js'
+import { createModelGateway } from './model-gateway.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 let goServiceProcess = null
 let goServiceStatus = 'not-started'
+let goServiceBaseUrl = ''
+let goServiceAuthToken = ''
 let mainWindow = null
 let closeResponsePending = false
+
+const modelGateway = createModelGateway({
+  getGoRuntime: () => ({
+    status: goServiceStatus,
+    baseUrl: goServiceBaseUrl,
+    authToken: goServiceAuthToken,
+  }),
+  onGoUnavailable: (error) => {
+    console.error('[GoService] gateway unavailable, using embedded adapter', error)
+    goServiceBaseUrl = ''
+    setGoServiceStatus('error')
+  },
+})
+
+function runtimeInfo() {
+  return {
+    mode: goServiceStatus === 'ready' ? 'go-service' : 'embedded',
+    goServiceStatus,
+    database: getDatabaseInfo(),
+    editor: 'codemirror-6',
+    generation: {
+      streaming: true,
+      cancellation: true,
+      fallback: 'embedded',
+    },
+  }
+}
+
+function publishRuntimeInfo() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('runtime:changed', runtimeInfo())
+  }
+}
+
+function setGoServiceStatus(status) {
+  goServiceStatus = status
+  publishRuntimeInfo()
+}
 
 function serviceBinaryCandidates() {
   const platform = process.platform === 'win32' ? 'win32' : process.platform
@@ -38,43 +79,60 @@ function serviceBinaryCandidates() {
 function startGoService() {
   const candidate = serviceBinaryCandidates().find((filePath) => fs.existsSync(filePath))
   if (!candidate) {
-    goServiceStatus = 'embedded-fallback'
+    setGoServiceStatus('embedded-fallback')
     return
   }
 
   try {
     const dataDirectory = path.join(app.getPath('userData'), 'service-data')
     fs.mkdirSync(dataDirectory, { recursive: true })
+    goServiceAuthToken = randomBytes(32).toString('base64url')
     goServiceProcess = spawn(candidate, ['--port', '0', '--data-dir', dataDirectory], {
       cwd: path.dirname(candidate),
+      env: { ...process.env, NOVEL_STUDIO_SERVICE_TOKEN: goServiceAuthToken },
       stdio: ['ignore', 'pipe', 'pipe'],
     })
-    goServiceStatus = 'starting'
+    setGoServiceStatus('starting')
+    let stdoutBuffer = ''
     goServiceProcess.stdout.on('data', (chunk) => {
-      const message = String(chunk).trim()
-      if (message) console.log(`[GoService] ${message}`)
-      if (message.includes('ready')) goServiceStatus = 'ready'
+      stdoutBuffer += String(chunk)
+      const lines = stdoutBuffer.split(/\r?\n/)
+      stdoutBuffer = lines.pop() || ''
+      for (const line of lines) {
+        const message = line.trim()
+        if (message) console.log(`[GoService] ${message}`)
+        const ready = message.match(/novel-studio-service ready port=(\d+)/)
+        if (ready) {
+          goServiceBaseUrl = `http://127.0.0.1:${ready[1]}`
+          setGoServiceStatus('ready')
+        }
+      }
     })
     goServiceProcess.stderr.on('data', (chunk) => console.error(`[GoService] ${String(chunk).trim()}`))
     goServiceProcess.on('error', (error) => {
-      goServiceStatus = 'error'
+      goServiceBaseUrl = ''
+      setGoServiceStatus('error')
       console.error('[GoService] failed to start', error)
     })
     goServiceProcess.on('exit', () => {
       goServiceProcess = null
-      if (goServiceStatus !== 'stopping') goServiceStatus = 'stopped'
+      goServiceBaseUrl = ''
+      if (goServiceStatus !== 'stopping') setGoServiceStatus('stopped')
     })
   } catch (error) {
-    goServiceStatus = 'error'
+    goServiceBaseUrl = ''
+    setGoServiceStatus('error')
     console.error('[GoService] spawn error', error)
   }
 }
 
 function stopGoService() {
+  void modelGateway.cancelAll()
   if (!goServiceProcess) return
-  goServiceStatus = 'stopping'
+  setGoServiceStatus('stopping')
   goServiceProcess.kill()
   goServiceProcess = null
+  goServiceBaseUrl = ''
 }
 
 function registerIpc() {
@@ -86,21 +144,32 @@ function registerIpc() {
   ipcMain.handle('models:save', (_event, profile) => saveModelProfile(profile))
   ipcMain.handle('models:delete', (_event, id) => deleteModelProfile(id))
   ipcMain.handle('models:route', (_event, payload) => updateTaskRoute(payload.task, payload.modelProfileId))
-  ipcMain.handle('generation:mock', async (_event, payload) => {
+  ipcMain.handle('generation:start', async (event, payload) => {
+    const taskId = String(payload?.taskId || '')
+    if (!taskId) throw new Error('生成任务缺少 taskId')
     const workspace = loadWorkspace()
     const chapter = workspace.chapters.find((item) => item.id === payload?.chapterId) || workspace.chapters[0]
     const modelSettings = loadModelSettings()
     const modelProfileId = payload?.modelProfileId || modelSettings.routes[payload?.task] || 'local-default'
     const modelProfile = modelSettings.profiles.find((profile) => profile.id === modelProfileId)
     const apiKey = getModelApiKey(modelProfileId)
-    return generateModelTask({ ...payload, project: workspace.project, chapter, modelProfile, apiKey })
+    try {
+      return await modelGateway.generate(
+        { ...payload, project: workspace.project, chapter, modelProfile, apiKey },
+        {
+          taskId,
+          onEvent: (generationEvent) => {
+            if (!event.sender.isDestroyed()) event.sender.send('generation:event', generationEvent)
+          },
+        },
+      )
+    } catch (error) {
+      if (error?.name === 'GenerationCancelledError') return { cancelled: true, taskId }
+      throw error
+    }
   })
-  ipcMain.handle('runtime:info', () => ({
-    mode: goServiceStatus === 'ready' || goServiceStatus === 'starting' ? 'go-service' : 'embedded',
-    goServiceStatus,
-    database: getDatabaseInfo(),
-    editor: 'codemirror-6',
-  }))
+  ipcMain.handle('generation:cancel', (_event, taskId) => modelGateway.cancel(String(taskId || '')))
+  ipcMain.handle('runtime:info', runtimeInfo)
   ipcMain.on('window:close-response', (event, payload = {}) => {
     if (!mainWindow || event.sender !== mainWindow.webContents) return
     if (!payload.saved && !payload.discard) return
@@ -164,8 +233,10 @@ app.whenReady().then(() => {
 })
 
 app.on('window-all-closed', () => {
-  stopGoService()
-  if (process.platform !== 'darwin') app.quit()
+  if (process.platform !== 'darwin') {
+    stopGoService()
+    app.quit()
+  }
 })
 
 app.on('before-quit', stopGoService)

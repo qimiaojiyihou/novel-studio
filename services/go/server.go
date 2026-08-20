@@ -15,6 +15,8 @@ import (
 
 var errTaskAlreadyExists = errors.New("task already exists")
 
+const completedTaskRetention = 10 * time.Minute
+
 type runtimeResponse struct {
 	Status    string `json:"status"`
 	Service   string `json:"service"`
@@ -125,6 +127,7 @@ func (server *serviceServer) handleCreateTask(w http.ResponseWriter, request *ht
 }
 
 func (server *serviceServer) runTask(ctx context.Context, task *modelTask, input taskRequest) {
+	defer server.tasks.removeAfter(task, completedTaskRetention)
 	task.publish(newTaskEvent(task.id, "started"))
 	content, err := server.provider.generate(ctx, input, func(delta string) {
 		event := newTaskEvent(task.id, "delta")

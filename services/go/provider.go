@@ -86,8 +86,28 @@ func (client *providerClient) generate(
 		failureBody, _ := io.ReadAll(io.LimitReader(response.Body, 32*1024))
 		return "", fmt.Errorf("模型接口返回 %s: %s", response.Status, strings.TrimSpace(string(failureBody)))
 	}
+	if !strings.Contains(response.Header.Get("Content-Type"), "text/event-stream") {
+		var payload struct {
+			Choices []struct {
+				Message chatMessage `json:"message"`
+			} `json:"choices"`
+		}
+		if err := json.NewDecoder(io.LimitReader(response.Body, 16*1024*1024)).Decode(&payload); err != nil {
+			return "", fmt.Errorf("解析模型响应: %w", err)
+		}
+		if len(payload.Choices) == 0 || payload.Choices[0].Message.Content == "" {
+			return "", errors.New("模型接口没有返回可用内容")
+		}
+		content := payload.Choices[0].Message.Content
+		onDelta(content)
+		return content, nil
+	}
 
-	return readOpenAIStream(ctx, response.Body, onDelta)
+	content, err := readOpenAIStream(ctx, response.Body, onDelta)
+	if err == nil && content == "" {
+		return "", errors.New("模型接口没有返回可用内容")
+	}
+	return content, err
 }
 
 func readOpenAIStream(ctx context.Context, reader io.Reader, onDelta func(string)) (string, error) {
