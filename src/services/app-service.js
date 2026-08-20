@@ -46,6 +46,30 @@ export const appService = {
   restoreRevision(payload) {
     return electronApi.restoreRevision(payload)
   },
+  loadPlanningCenter(projectId) {
+    return electronApi.loadPlanningCenter(projectId)
+  },
+  savePlanningDocument(payload) {
+    return electronApi.savePlanningDocument(payload)
+  },
+  createPlanningEntity(payload) {
+    return electronApi.createPlanningEntity(payload)
+  },
+  updatePlanningEntity(payload) {
+    return electronApi.updatePlanningEntity(payload)
+  },
+  reorderPlanningEntities(payload) {
+    return electronApi.reorderPlanningEntities(payload)
+  },
+  deletePlanningEntity(entityId) {
+    return electronApi.deletePlanningEntity(entityId)
+  },
+  createPlanningCandidate(payload) {
+    return electronApi.createPlanningCandidate(payload)
+  },
+  resolvePlanningCandidate(payload) {
+    return electronApi.resolvePlanningCandidate(payload)
+  },
   loadModelSettings() {
     return electronApi.loadModelSettings()
   },

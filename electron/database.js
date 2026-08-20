@@ -3,10 +3,12 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { getSchemaVersion, runMigrations } from './database-migrations.js'
+import { createPlanningRepository } from './planning-repository.js'
 import { createWorkspaceRepository } from './workspace-repository.js'
 
 let database
 let workspaceRepository
+let planningRepository
 
 function timestamp() {
   return new Date().toISOString()
@@ -45,12 +47,18 @@ export function openDatabase() {
   seedDatabase()
   seedModelProfiles()
   workspaceRepository = createWorkspaceRepository(database)
+  planningRepository = createPlanningRepository(database)
   return database
 }
 
 function workspaceStore() {
   openDatabase()
   return workspaceRepository
+}
+
+function planningStore() {
+  openDatabase()
+  return planningRepository
 }
 
 export function getDatabaseInfo() {
@@ -118,15 +126,13 @@ function seedModelProfiles() {
     }
   }
 
-  const routeCount = database.prepare('SELECT COUNT(*) AS count FROM task_routes').get()
-  if (Number(routeCount.count) === 0) {
-    const createdAt = timestamp()
-    const insert = database.prepare('INSERT INTO task_routes (task, model_profile_id, updated_at) VALUES (?, ?, ?)')
-    insert.run('chapter', 'local-default', createdAt)
-    insert.run('chapter_card', 'deepseek-default', createdAt)
-    insert.run('scene_plan', 'deepseek-default', createdAt)
-    insert.run('rewrite', 'local-default', createdAt)
-  }
+  const createdAt = timestamp()
+  const insert = database.prepare('INSERT OR IGNORE INTO task_routes (task, model_profile_id, updated_at) VALUES (?, ?, ?)')
+  insert.run('chapter', 'local-default', createdAt)
+  insert.run('planning_field', 'deepseek-default', createdAt)
+  insert.run('chapter_card', 'deepseek-default', createdAt)
+  insert.run('scene_plan', 'deepseek-default', createdAt)
+  insert.run('rewrite', 'local-default', createdAt)
 }
 
 export function loadWorkspace(projectId = '') {
@@ -187,6 +193,38 @@ export function listRevisions(chapterId) {
 
 export function restoreRevision(input) {
   return workspaceStore().restoreRevision(input)
+}
+
+export function loadPlanningCenter(projectId) {
+  return planningStore().loadPlanningCenter(projectId)
+}
+
+export function savePlanningDocument(input) {
+  return planningStore().saveDocument(input)
+}
+
+export function createPlanningEntity(input) {
+  return planningStore().createEntity(input)
+}
+
+export function updatePlanningEntity(input) {
+  return planningStore().updateEntity(input)
+}
+
+export function reorderPlanningEntities(input) {
+  return planningStore().reorderEntities(input)
+}
+
+export function deletePlanningEntity(entityId) {
+  return planningStore().deleteEntity(entityId)
+}
+
+export function createPlanningCandidate(input) {
+  return planningStore().createCandidate(input)
+}
+
+export function resolvePlanningCandidate(input) {
+  return planningStore().resolveCandidate(input)
 }
 
 export function loadModelSettings() {

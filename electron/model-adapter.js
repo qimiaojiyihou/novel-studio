@@ -9,7 +9,20 @@ function endpointFor(baseUrl) {
   return normalized.endsWith('/chat/completions') ? normalized : normalized + '/chat/completions'
 }
 
-function contextFor({ project, chapter, instruction }) {
+function compactJson(value, limit = 12000) {
+  const content = JSON.stringify(value || {})
+  return content.length > limit ? content.slice(0, limit) + '…' : content
+}
+
+function contextFor({ project, chapter, planningCenter, instruction }) {
+  const planning = planningCenter ? {
+    foundation: planningCenter.documents?.foundation?.content || {},
+    worldOverview: planningCenter.documents?.world?.content || {},
+    outline: planningCenter.documents?.outline?.content || {},
+    characters: (planningCenter.characters || []).map((item) => ({ title: item.title, ...item.data })),
+    worldElements: (planningCenter.worldElements || []).map((item) => ({ title: item.title, ...item.data })),
+    volumes: (planningCenter.volumes || []).map((item) => ({ title: item.title, ...item.data })),
+  } : null
   return [
     '项目：' + (project?.title || '未命名小说'),
     '题材：' + (project?.genre || '未设置'),
@@ -18,6 +31,7 @@ function contextFor({ project, chapter, instruction }) {
     '章节：' + (chapter?.chapter_no || 1) + ' · ' + (chapter?.title || '新章节'),
     '章节卡：' + JSON.stringify(chapter?.card || {}),
     '场景计划：' + (chapter?.scene_plan || '暂无'),
+    planning ? '已确认故事规划：' + compactJson(planning) : '',
     instruction ? '本次补充要求：' + instruction : '',
   ].filter(Boolean).join('\n')
 }
@@ -25,6 +39,25 @@ function contextFor({ project, chapter, instruction }) {
 function messagesFor(task, input) {
   const context = contextFor(input)
   const system = '你是 Novel Studio 的小说创作协作者。遵守用户给出的题材、人物和文风，只输出当前任务需要的内容，不解释过程。'
+  if (task === 'planning_field') {
+    const planning = input.planning || {}
+    return [
+      { role: 'system', content: system + '只返回这个规划字段的候选内容，不要返回字段名、标题、引号、Markdown 或解释。内容必须具体、可执行，并与已有设定一致。' },
+      {
+        role: 'user',
+        content: [
+          context,
+          `规划模块：${planning.sectionLabel || '故事规划'}`,
+          `对象：${planning.targetLabel || '当前项目'}`,
+          `字段：${planning.fieldLabel || planning.fieldKey || '当前字段'}`,
+          `当前内容：${planning.currentValue || '尚未填写'}`,
+          planning.nearbyContext ? `相关上下文：${planning.nearbyContext}` : '',
+          input.instruction ? `本次要求：${input.instruction}` : '',
+          planning.currentValue ? '请在保留有效信息的基础上给出一版更完整的候选。' : '请生成一版可以直接采用的候选。',
+        ].filter(Boolean).join('\n'),
+      },
+    ]
+  }
   if (task === 'chapter_card') {
     return [
       { role: 'system', content: system + '章节卡必须返回 JSON，不要使用 Markdown 代码围栏。字段为 goal、protagonistGoal、resistance、turningPoint、payoff、cost、ending、requiredScenes；requiredScenes 是包含 id、title、goal、result 的数组。' },
@@ -97,7 +130,7 @@ export function prepareModelTask(input) {
     apiKey: apiKey || '',
     model: modelProfile?.model || '',
     messages: messagesFor(task, input),
-    temperature: task === 'rewrite' ? 0.55 : 0.78,
+    temperature: task === 'rewrite' ? 0.55 : task === 'planning_field' ? 0.68 : 0.78,
     modelProfile: normalizedModel(modelProfile),
     execution: missingConfiguration ? 'mock' : 'remote',
     fallbackReason: '',
@@ -127,7 +160,7 @@ export function shapeModelResult(prepared, content, gateway = 'embedded') {
   if (prepared.fallbackReason) base.fallbackReason = prepared.fallbackReason
   if (prepared.task === 'chapter_card') return { ...base, card: parseJsonObject(content) }
   if (prepared.task === 'scene_plan') return { ...base, scenePlan: String(content).trim() }
-  if (prepared.task === 'rewrite') return { ...base, text: String(content).trim() }
+  if (prepared.task === 'rewrite' || prepared.task === 'planning_field') return { ...base, text: String(content).trim() }
   return { ...base, manuscript: String(content).trim() }
 }
 

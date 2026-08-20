@@ -1,6 +1,6 @@
 const now = () => new Date().toISOString()
 
-export function generateMock({ task, project, chapter, instruction = '', selectedText = '', rewriteMode = '局部重写', modelProfile }) {
+export function generateMock({ task, project, chapter, planning = {}, instruction = '', selectedText = '', rewriteMode = '局部重写', modelProfile }) {
   const title = project?.title || '未命名小说'
   const chapterTitle = chapter?.title || '新的章节'
   const idea = project?.idea || '一个普通人被迫走上改变命运的道路。'
@@ -10,6 +10,30 @@ export function generateMock({ task, project, chapter, instruction = '', selecte
     provider: modelProfile?.provider || 'mock',
     name: modelProfile?.name || 'MockProvider',
     model: modelProfile?.model || 'mock-v0.1',
+  }
+
+  if (task === 'planning_field') {
+    const current = String(planning.currentValue || '').trim()
+    const field = planning.fieldLabel || '当前设定'
+    const samples = {
+      premise: `一个长期被行业忽视的年轻创作者，意外得到进入故事中心的机会，却发现这次翻身要求他公开否定三年前保护过自己的人。`,
+      coreConflict: '主角必须借助自己不信任的行业规则完成翻身，同时守住不愿拿来交换的旧承诺；每次上升都会让这两者更难兼得。',
+      storyPromise: '读者将持续看到主角用具体作品和临场选择改写行业评价，并在每次成功后面对更昂贵、更私人化的代价。',
+      logline: `被行业遗忘的年轻人拿到一次危险的回归机会，为证明自己仍有资格站在台前，他必须在成功与旧日承诺之间连续做出无法撤回的选择。`,
+      desire: '取得一个任何人都无法再归因于运气的公开成功。',
+      secret: '他曾主动放弃过一次成名机会，但没有告诉任何人真正的原因。',
+      hardRules: '任何改变行业资源分配的机会都必须通过可追溯的公开结果兑现，私人承诺只能换来入口，不能直接换来胜利。',
+      goal: `让主角在“${chapterTitle}”中完成一个可见行动，并因此失去继续旁观的资格。`,
+      ending: '以一条改变下一章行动方向的新消息收束，同时让主角刚刚作出的承诺立即产生代价。',
+    }
+    const generated = samples[planning.fieldKey]
+      || `${field}需要同时连接人物欲望、现实阻力和后续变化：先给出一个可见目标，再设置无法绕开的代价，最后留下能被后文验证的结果。`
+    return {
+      task,
+      model,
+      generatedAt: now(),
+      text: current ? `${current.replace(/[。！？；]$/, '')}；进一步明确它会迫使人物采取可见行动，并在后续情节中留下可以兑现或反噬的结果。` : generated,
+    }
   }
 
   if (task === 'chapter_card') {

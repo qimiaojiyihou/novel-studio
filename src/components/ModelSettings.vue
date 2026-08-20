@@ -117,6 +117,7 @@ const emit = defineEmits(['close', 'save-profile', 'delete-profile', 'route-chan
 
 const taskDefinitions = [
   { id: 'chapter', label: '正文续写', description: '默认优先选择本地正文模型' },
+  { id: 'planning_field', label: '故事规划', description: '故事基础、人物、世界观与总纲的逐项生成' },
   { id: 'chapter_card', label: '章节卡', description: '将想法拆成可执行的章节合同' },
   { id: 'scene_plan', label: '场景计划', description: '把章节卡变成场景动作链' },
   { id: 'rewrite', label: '局部重写', description: '处理编辑器中选中的文字' },

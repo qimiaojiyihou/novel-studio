@@ -1,4 +1,4 @@
-export const LATEST_SCHEMA_VERSION = 4
+export const LATEST_SCHEMA_VERSION = 5
 
 const migrations = [
   {
@@ -134,6 +134,54 @@ const migrations = [
       database.exec(`
         ALTER TABLE projects ADD COLUMN archived_at TEXT NOT NULL DEFAULT '';
         CREATE INDEX projects_archived_at_idx ON projects(archived_at);
+      `)
+    },
+  },
+  {
+    version: 5,
+    name: 'story-planning-center',
+    up(database) {
+      database.exec(`
+        CREATE TABLE planning_documents (
+          project_id TEXT NOT NULL,
+          kind TEXT NOT NULL,
+          content_json TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY(project_id, kind),
+          FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+        );
+        CREATE TABLE planning_entities (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          kind TEXT NOT NULL,
+          title TEXT NOT NULL,
+          position INTEGER NOT NULL CHECK(position > 0),
+          data_json TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE(project_id, kind, position),
+          FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+        );
+        CREATE TABLE planning_candidates (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          target_type TEXT NOT NULL CHECK(target_type IN ('document', 'entity', 'chapter')),
+          target_id TEXT NOT NULL,
+          field_key TEXT NOT NULL,
+          field_label TEXT NOT NULL DEFAULT '',
+          original_value TEXT NOT NULL DEFAULT '',
+          candidate_value TEXT NOT NULL,
+          instruction TEXT NOT NULL DEFAULT '',
+          model_json TEXT NOT NULL DEFAULT '{}',
+          status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'accepted', 'discarded')),
+          created_at TEXT NOT NULL,
+          resolved_at TEXT NOT NULL DEFAULT '',
+          FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+        );
+        CREATE INDEX planning_documents_project_idx ON planning_documents(project_id);
+        CREATE INDEX planning_entities_project_kind_idx ON planning_entities(project_id, kind);
+        CREATE INDEX planning_candidates_project_status_idx ON planning_candidates(project_id, status, created_at);
       `)
     },
   },

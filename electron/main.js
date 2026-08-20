@@ -7,25 +7,33 @@ import { fileURLToPath } from 'node:url'
 import {
   archiveProject,
   createChapter,
+  createPlanningCandidate,
+  createPlanningEntity,
   createProject,
   createRevision,
   deleteChapter,
   deleteModelProfile,
+  deletePlanningEntity,
   deleteProject,
   duplicateChapter,
   getDatabaseInfo,
   getModelApiKey,
   listProjects,
   listRevisions,
+  loadPlanningCenter,
   loadModelSettings,
   loadWorkspace,
   openDatabase,
   reorderChapters,
+  reorderPlanningEntities,
   restoreProject,
   restoreRevision,
+  resolvePlanningCandidate,
+  savePlanningDocument,
   saveModelProfile,
   updateChapter,
   updateProject,
+  updatePlanningEntity,
   updateTaskRoute,
 } from './database.js'
 import { createModelGateway } from './model-gateway.js'
@@ -162,6 +170,14 @@ function registerIpc() {
   ipcMain.handle('revision:create', (_event, payload) => createRevision(payload))
   ipcMain.handle('revisions:list', (_event, chapterId) => listRevisions(chapterId))
   ipcMain.handle('revision:restore', (_event, payload) => restoreRevision(payload))
+  ipcMain.handle('planning:load', (_event, projectId) => loadPlanningCenter(projectId))
+  ipcMain.handle('planning:document-save', (_event, payload) => savePlanningDocument(payload))
+  ipcMain.handle('planning:entity-create', (_event, payload) => createPlanningEntity(payload))
+  ipcMain.handle('planning:entity-update', (_event, payload) => updatePlanningEntity(payload))
+  ipcMain.handle('planning:entities-reorder', (_event, payload) => reorderPlanningEntities(payload))
+  ipcMain.handle('planning:entity-delete', (_event, entityId) => deletePlanningEntity(entityId))
+  ipcMain.handle('planning:candidate-create', (_event, payload) => createPlanningCandidate(payload))
+  ipcMain.handle('planning:candidate-resolve', (_event, payload) => resolvePlanningCandidate(payload))
   ipcMain.handle('models:load', () => loadModelSettings())
   ipcMain.handle('models:save', (_event, profile) => saveModelProfile(profile))
   ipcMain.handle('models:delete', (_event, id) => deleteModelProfile(id))
@@ -171,13 +187,14 @@ function registerIpc() {
     if (!taskId) throw new Error('生成任务缺少 taskId')
     const workspace = loadWorkspace(payload?.projectId)
     const chapter = workspace.chapters.find((item) => item.id === payload?.chapterId) || workspace.chapters[0]
+    const planningCenter = workspace.project ? loadPlanningCenter(workspace.project.id) : null
     const modelSettings = loadModelSettings()
     const modelProfileId = payload?.modelProfileId || modelSettings.routes[payload?.task] || 'local-default'
     const modelProfile = modelSettings.profiles.find((profile) => profile.id === modelProfileId)
     const apiKey = getModelApiKey(modelProfileId)
     try {
       return await modelGateway.generate(
-        { ...payload, project: workspace.project, chapter, modelProfile, apiKey },
+        { ...payload, project: workspace.project, chapter, planningCenter, modelProfile, apiKey },
         {
           taskId,
           onEvent: (generationEvent) => {

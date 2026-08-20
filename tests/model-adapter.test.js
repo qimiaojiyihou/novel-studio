@@ -89,3 +89,23 @@ test('embedded adapter supports OpenAI-compatible SSE responses', async () => {
     globalThis.fetch = originalFetch
   }
 })
+
+test('planning field generation returns a reviewable text candidate', async () => {
+  const prepared = prepareModelTask({
+    ...baseInput,
+    task: 'planning_field',
+    planning: {
+      sectionLabel: '故事基础',
+      targetLabel: '规划测试小说',
+      fieldKey: 'coreConflict',
+      fieldLabel: '核心冲突',
+      currentValue: '',
+    },
+    modelProfile: { id: 'deepseek-default', provider: 'deepseek', name: 'DeepSeek', baseUrl: '', model: '' },
+    mockDelayMs: 0,
+  })
+  const result = await runEmbeddedModelTask(prepared)
+  assert.equal(result.task, 'planning_field')
+  assert.ok(result.text.includes('主角'))
+  assert.equal(prepared.messages[0].content.includes('只返回这个规划字段'), true)
+})

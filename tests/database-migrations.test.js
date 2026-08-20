@@ -41,6 +41,9 @@ test('fresh database migrates to the latest schema with foreign keys enabled', (
     assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'app_settings'").get())
     assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'projects_archived_at_idx'").get())
     assert.ok(database.prepare("PRAGMA table_info(projects)").all().some((column) => column.name === 'archived_at'))
+    assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'planning_documents'").get())
+    assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'planning_entities'").get())
+    assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'planning_candidates'").get())
   } finally {
     database.close()
   }
@@ -70,6 +73,7 @@ test('legacy data is preserved and project deletion cascades to chapters and rev
     database.prepare('DELETE FROM projects WHERE id = ?').run('project-1')
     assert.equal(database.prepare('SELECT COUNT(*) AS count FROM chapters').get().count, 0)
     assert.equal(database.prepare('SELECT COUNT(*) AS count FROM revisions').get().count, 0)
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM planning_documents').get().count, 0)
   } finally {
     database.close()
   }

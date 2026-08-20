@@ -67,10 +67,12 @@
         </div>
 
         <nav class="side-nav" aria-label="项目导航">
-          <button class="nav-item active"><span class="nav-glyph">◈</span>正在创作</button>
-          <button class="nav-item"><span class="nav-glyph">⌁</span>故事基础</button>
-          <button class="nav-item"><span class="nav-glyph">◎</span>人物与关系</button>
-          <button class="nav-item"><span class="nav-glyph">▤</span>知识与连续性</button>
+          <button class="nav-item" :class="{ active: workspaceView === 'writing' }" @click="setWorkspaceView('writing')"><span class="nav-glyph">◈</span>正在创作</button>
+          <button class="nav-item" :class="{ active: workspaceView === 'foundation' }" @click="setWorkspaceView('foundation')"><span class="nav-glyph">⌁</span>故事基础</button>
+          <button class="nav-item" :class="{ active: workspaceView === 'characters' }" @click="setWorkspaceView('characters')"><span class="nav-glyph">◎</span>人物与关系</button>
+          <button class="nav-item" :class="{ active: workspaceView === 'world' }" @click="setWorkspaceView('world')"><span class="nav-glyph">◍</span>世界观</button>
+          <button class="nav-item" :class="{ active: workspaceView === 'outline' }" @click="setWorkspaceView('outline')"><span class="nav-glyph">▤</span>结构规划</button>
+          <button class="nav-item nav-item-disabled" title="将在连续性阶段开放"><span class="nav-glyph">⌁</span>知识与连续性</button>
         </nav>
 
         <div class="chapter-section">
@@ -111,6 +113,7 @@
         </div>
       </aside>
 
+      <template v-if="workspaceView === 'writing'">
       <section class="editor-panel">
         <div class="editor-heading">
           <div>
@@ -239,6 +242,17 @@
           <button class="secondary-action" @click="saveManuscript"><span>⌘</span>保存当前版本</button>
         </div>
       </aside>
+      </template>
+      <PlanningCenter
+        v-else
+        ref="planningCenterRef"
+        :project="project"
+        :section="workspaceView"
+        :model-settings="modelSettings"
+        @toast="showToast"
+        @open-settings="openSettings"
+        @chapter-updated="replaceChapter"
+      />
     </main>
 
     <div v-else class="loading-screen"><div class="loading-mark">NS</div><p>{{ loadError ? '工作区打开失败：' + loadError : '正在打开你的写作桌面…' }}</p></div>
@@ -358,6 +372,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import DiffReview from './components/DiffReview.vue'
 import ModelSettings from './components/ModelSettings.vue'
 import NovelEditor from './components/NovelEditor.vue'
+import PlanningCenter from './components/PlanningCenter.vue'
 import VersionHistory from './components/VersionHistory.vue'
 import { appService } from './services/app-service.js'
 import { countChinese, formatRelativeTime } from './services/format.js'
@@ -369,6 +384,8 @@ const chapters = ref([])
 const activeChapterId = ref('')
 const editorText = ref('')
 const activeTab = ref('manuscript')
+const workspaceView = ref('writing')
+const planningCenterRef = ref(null)
 const instruction = ref('')
 const runningTask = ref('')
 const generationCancelPending = ref(false)
@@ -513,12 +530,26 @@ onBeforeUnmount(() => {
 })
 
 async function selectChapter(id) {
-  if (id === activeChapterId.value) return
+  if (id === activeChapterId.value && workspaceView.value === 'writing') return
   if (selectionPreview.visible) discardSelectionPreview()
-  await saveManuscript({ createRevision: false, source: 'chapter-switch' })
+  if (workspaceView.value === 'writing') await saveManuscript({ createRevision: false, source: 'chapter-switch' })
+  else await planningCenterRef.value?.flushSaves?.()
   activeChapterId.value = id
   activeTab.value = 'manuscript'
+  workspaceView.value = 'writing'
   versionsOpen.value = false
+}
+
+async function setWorkspaceView(view) {
+  if (workspaceView.value === view) return
+  try {
+    if (workspaceView.value === 'writing') await saveManuscript({ createRevision: false, source: 'workspace-view-switch' })
+    else await planningCenterRef.value?.flushSaves?.()
+    workspaceView.value = view
+    projectMenuOpen.value = false
+  } catch (error) {
+    showToast(`切换工作区失败：${error.message}`)
+  }
 }
 
 async function switchProject(projectId) {
@@ -527,6 +558,7 @@ async function switchProject(projectId) {
     return
   }
   try {
+    await planningCenterRef.value?.flushSaves?.()
     await saveManuscript({ createRevision: false, source: 'project-switch' })
     const loaded = await appService.loadWorkspace(projectId)
     applyWorkspace(loaded)
@@ -570,6 +602,7 @@ async function createNewProject() {
   if (!newProjectDraft.title || projectCreating.value) return
   projectCreating.value = true
   try {
+    await planningCenterRef.value?.flushSaves?.()
     await saveManuscript({ createRevision: false, source: 'project-create' })
     const loaded = await appService.createProject({ ...newProjectDraft })
     applyWorkspace(loaded)
@@ -619,6 +652,7 @@ function askArchiveProject(item) {
     note: '之后可以从项目架的“已归档”区域恢复。',
     confirmLabel: '归档项目',
     run: async () => {
+      await planningCenterRef.value?.flushSaves?.()
       if (item.id === project.id) await saveManuscript({ createRevision: false, source: 'project-archive' })
       const loaded = await appService.archiveProject(item.id)
       if (item.id === project.id) applyWorkspace(loaded)
@@ -653,6 +687,7 @@ function askDeleteProject(item) {
     confirmLabel: '永久删除',
     danger: true,
     run: async () => {
+      await planningCenterRef.value?.flushSaves?.()
       if (item.id === project.id) await saveManuscript({ createRevision: false, source: 'before-project-delete' })
       const loaded = await appService.deleteProject(item.id)
       if (item.id === project.id) applyWorkspace(loaded)
@@ -686,6 +721,7 @@ async function createNewChapter() {
     chapters.value.push(chapter)
     activeChapterId.value = chapter.id
     activeTab.value = 'manuscript'
+    workspaceView.value = 'writing'
     projects.value = await appService.listProjects()
     newChapterOpen.value = false
     showToast(`第 ${chapter.chapter_no} 章已添加`)
@@ -752,6 +788,7 @@ async function duplicateChapter(chapter) {
     chapters.value = result.chapters
     activeChapterId.value = result.chapter.id
     activeTab.value = 'manuscript'
+    workspaceView.value = 'writing'
     projects.value = await appService.listProjects()
     showToast(`“${chapter.title}”已复制为新章节`)
   } catch (error) {
@@ -1112,6 +1149,7 @@ async function handleCloseRequest() {
   }
   closeInProgress = true
   try {
+    await planningCenterRef.value?.flushSaves?.()
     if (candidate.visible) discardCandidate()
     if (selectionPreview.visible) discardSelectionPreview()
     if (isDirty.value) await saveManuscript({ createRevision: false, source: 'close-autosave' })
