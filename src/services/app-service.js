@@ -13,6 +13,18 @@ export const appService = {
   createRevision(payload) {
     return electronApi.createRevision(payload)
   },
+  loadModelSettings() {
+    return electronApi.loadModelSettings()
+  },
+  saveModelProfile(profile) {
+    return electronApi.saveModelProfile(profile)
+  },
+  deleteModelProfile(id) {
+    return electronApi.deleteModelProfile(id)
+  },
+  updateTaskRoute(payload) {
+    return electronApi.updateTaskRoute(payload)
+  },
   generateMock(payload) {
     return electronApi.generateMock(payload)
   },

@@ -4,7 +4,7 @@
 > 更新日期：2026-08-17  
 > 当前状态：第一阶段开发中；产品方向与总体架构已确定，具体本地模型、部分视觉细节和发布策略保留为可替换项。
 
-> 当前实现：已建立 Vue 3 + JavaScript + Vite + Electron 工程骨架，接入 SQLite 本地工作区、CodeMirror 6 正文编辑器、Go 服务启动管理和 Mock 生成链路；DeepSeek、GPT、Kimi 及 OpenAI 兼容适配器将在模型配置阶段接入。
+> 当前实现：已建立 Vue 3 + JavaScript + Vite + Electron 工程骨架，接入 SQLite 本地工作区、CodeMirror 6 正文编辑器、Go 服务启动管理、模型配置中心、任务路由和 OpenAI 兼容适配器；真实模型未配置时自动使用带明确提示的 Mock 回退。
 
 ## 1. 设计结论
 

@@ -19,7 +19,7 @@
           <span class="status-dot"></span>{{ runtimeLabel }}
         </span>
         <span class="save-label">{{ saveLabel }}</span>
-        <button class="icon-button" title="项目设置">⋯</button>
+        <button class="icon-button" title="模型与项目设置" @click="openSettings">⋯</button>
       </div>
     </header>
 
@@ -121,9 +121,9 @@
 
           <div v-if="selectionTools.visible && activeTab === 'manuscript'" class="selection-tools" @click.stop>
             <span class="selection-caption">已选 {{ selectionTools.text.length }} 字</span>
-            <button @click="rewriteSelection">润色</button>
-            <button @click="rewriteSelection">扩写</button>
-            <button @click="rewriteSelection">局部重写</button>
+            <button @click="rewriteSelection('润色')">润色</button>
+            <button @click="rewriteSelection('扩写')">扩写</button>
+            <button @click="rewriteSelection('局部重写')">局部重写</button>
           </div>
         </div>
       </section>
@@ -154,9 +154,9 @@
         </section>
 
         <section class="context-section model-section">
-          <div class="section-label"><span>当前模型策略</span><button class="link-button">配置</button></div>
-          <div class="model-route"><span class="model-orb local"></span><div><strong>正文 · 本地优先</strong><small>模型尚未接入，当前使用 MockProvider</small></div></div>
-          <div class="model-route"><span class="model-orb external"></span><div><strong>规划 · 可切换外部模型</strong><small>DeepSeek · GPT · Kimi · OpenAI 兼容</small></div></div>
+          <div class="section-label"><span>当前模型策略</span><button class="link-button" @click="openSettings">配置</button></div>
+          <div class="model-route"><span class="model-orb local"></span><div><strong>正文 · {{ modelName('chapter') }}</strong><small>{{ modelDetail('chapter') }}</small></div></div>
+          <div class="model-route"><span class="model-orb external"></span><div><strong>规划 · {{ modelName('chapter_card') }}</strong><small>{{ modelDetail('chapter_card') }} · 可在设置中切换</small></div></div>
         </section>
 
         <section class="context-section progress-section">
@@ -174,11 +174,20 @@
 
     <div v-else class="loading-screen"><div class="loading-mark">NS</div><p>{{ loadError ? '工作区打开失败：' + loadError : '正在打开你的写作桌面…' }}</p></div>
     <div v-if="toast" class="toast" role="status">{{ toast }}</div>
+    <ModelSettings
+      :visible="settingsOpen"
+      :settings="modelSettings"
+      @close="settingsOpen = false"
+      @save-profile="saveModelProfile"
+      @delete-profile="deleteModelProfile"
+      @route-change="changeTaskRoute"
+    />
   </div>
 </template>
 
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from 'vue'
+import ModelSettings from './components/ModelSettings.vue'
 import NovelEditor from './components/NovelEditor.vue'
 import { appService } from './services/app-service.js'
 import { countChinese, formatRelativeTime } from './services/format.js'
@@ -194,9 +203,11 @@ const runningTask = ref('')
 const lastSavedAt = ref('')
 const toast = ref('')
 const loadError = ref('')
-const selectionTools = reactive({ visible: false, text: '' })
+const settingsOpen = ref(false)
+const selectionTools = reactive({ visible: false, text: '', from: 0, to: 0 })
 const runtime = reactive({ goServiceStatus: 'embedded-fallback', mode: 'embedded' })
 const project = reactive({ title: '', genre: '', idea: '', style: '' })
+const modelSettings = reactive({ profiles: [], routes: {} })
 
 const activeChapter = computed(() => chapters.value.find((chapter) => chapter.id === activeChapterId.value) || chapters.value[0])
 const runtimeLabel = computed(() => runtime.mode === 'go-service' ? 'Go 服务已连接' : '内置服务模式')
@@ -205,6 +216,19 @@ const saveLabel = computed(() => lastSavedAt.value ? formatRelativeTime(lastSave
 function countChineseText(value) { return countChinese(value) }
 function taskIsRunning() { return Boolean(runningTask.value) }
 function isTaskRunning(task) { return runningTask.value === task }
+function selectedModel(task) {
+  const profileId = modelSettings.routes[task]
+  return modelSettings.profiles.find((profile) => profile.id === profileId)
+}
+function modelName(task) {
+  return selectedModel(task)?.name || 'MockProvider'
+}
+function modelDetail(task) {
+  const profile = selectedModel(task)
+  if (!profile) return '当前使用内置 MockProvider'
+  if (profile.provider === 'local') return profile.model ? `本地 · ${profile.model}` : '本地模型待接入'
+  return profile.apiKeyConfigured ? `${profile.provider} · API Key 已配置` : `${profile.provider} · 待配置 API Key`
+}
 
 onMounted(async () => {
   try {
@@ -215,6 +239,9 @@ onMounted(async () => {
     activeChapterId.value = loaded.chapters[0]?.id || ''
     const info = await appService.getRuntimeInfo()
     Object.assign(runtime, info)
+    const loadedModels = await appService.loadModelSettings()
+    modelSettings.profiles = loadedModels.profiles
+    modelSettings.routes = loadedModels.routes
     workspaceReady.value = true
   } catch (error) {
     loadError.value = error instanceof Error ? error.message : String(error)
@@ -258,30 +285,44 @@ async function runGeneration(task) {
   if (runningTask.value || !activeChapter.value) return
   runningTask.value = task
   try {
-    const result = await appService.generateMock({ task, chapterId: activeChapter.value.id, instruction: instruction.value })
+    const result = await appService.generateMock({
+      task,
+      chapterId: activeChapter.value.id,
+      instruction: instruction.value,
+      modelProfileId: modelSettings.routes[task],
+    })
     if (task === 'chapter_card') {
       const updated = await appService.updateChapter({ id: activeChapter.value.id, card: result.card })
       replaceChapter(updated)
       activeTab.value = 'card'
-      showToast('章节卡已生成，可以继续调整或生成场景计划')
+      showToast(`章节卡已生成 · ${executionLabel(result)}`)
     } else if (task === 'scene_plan') {
       const updated = await appService.updateChapter({ id: activeChapter.value.id, scenePlan: result.scenePlan })
       replaceChapter(updated)
       activeTab.value = 'scene'
-      showToast('场景计划已生成')
+      showToast(`场景计划已生成 · ${executionLabel(result)}`)
     } else if (task === 'chapter') {
       editorText.value = result.manuscript
       await saveManuscript()
       activeTab.value = 'manuscript'
-      showToast('Mock 正文已生成并保存为新版本')
+      showToast(`正文已生成并保存为新版本 · ${executionLabel(result)}`)
     }
+  } catch (error) {
+    showToast(`生成失败：${error.message}`)
   } finally {
     runningTask.value = ''
   }
 }
 
+function executionLabel(result) {
+  const name = result.model?.name || 'MockProvider'
+  return result.execution === 'remote' ? name : `${name} · Mock 回退`
+}
+
 function handleSelection(selection) {
   selectionTools.text = selection.text || ''
+  selectionTools.from = selection.from
+  selectionTools.to = selection.to
   selectionTools.visible = Boolean(selection.text && selection.to > selection.from)
 }
 
@@ -290,9 +331,68 @@ function closeSelectionTools() {
   selectionTools.visible = false
 }
 
-function rewriteSelection() {
-  showToast('局部重写入口已就绪，下一步接入真实模型任务')
-  selectionTools.visible = false
+async function rewriteSelection(mode) {
+  if (!selectionTools.text || !activeChapter.value || runningTask.value) return
+  const { from, to, text } = selectionTools
+  runningTask.value = 'rewrite'
+  try {
+    const result = await appService.generateMock({
+      task: 'rewrite',
+      chapterId: activeChapter.value.id,
+      selectedText: text,
+      rewriteMode: mode,
+      instruction: instruction.value,
+      modelProfileId: modelSettings.routes.rewrite,
+    })
+    editorText.value = editorText.value.slice(0, from) + result.text + editorText.value.slice(to)
+    selectionTools.visible = false
+    await saveManuscript()
+    showToast(`${mode}已完成 · ${executionLabel(result)}`)
+  } catch (error) {
+    showToast(`局部重写失败：${error.message}`)
+  } finally {
+    runningTask.value = ''
+  }
+}
+
+function openSettings() {
+  settingsOpen.value = true
+}
+
+async function refreshModelSettings() {
+  const loaded = await appService.loadModelSettings()
+  modelSettings.profiles = loaded.profiles
+  modelSettings.routes = loaded.routes
+}
+
+async function saveModelProfile(profile) {
+  try {
+    await appService.saveModelProfile(profile)
+    await refreshModelSettings()
+    showToast('模型配置已保存')
+  } catch (error) {
+    showToast(`模型配置保存失败：${error.message}`)
+  }
+}
+
+async function deleteModelProfile(id) {
+  try {
+    await appService.deleteModelProfile(id)
+    await refreshModelSettings()
+    showToast('模型配置已删除')
+  } catch (error) {
+    showToast(error.message)
+  }
+}
+
+async function changeTaskRoute(payload) {
+  try {
+    const routes = await appService.updateTaskRoute(payload)
+    modelSettings.routes = routes
+    showToast('任务路由已更新')
+  } catch (error) {
+    showToast(`任务路由更新失败：${error.message}`)
+  }
 }
 
 function showToast(message) {

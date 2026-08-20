@@ -3,8 +3,19 @@ import path from 'node:path'
 import fs from 'node:fs'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { createRevision, loadWorkspace, openDatabase, updateChapter, updateProject } from './database.js'
-import { generateMock } from './mock-provider.js'
+import {
+  createRevision,
+  deleteModelProfile,
+  getModelApiKey,
+  loadModelSettings,
+  loadWorkspace,
+  openDatabase,
+  saveModelProfile,
+  updateChapter,
+  updateProject,
+  updateTaskRoute,
+} from './database.js'
+import { generateModelTask } from './model-adapter.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 let goServiceProcess = null
@@ -68,10 +79,18 @@ function registerIpc() {
   ipcMain.handle('project:update', (_event, patch) => updateProject(patch))
   ipcMain.handle('chapter:update', (_event, patch) => updateChapter(patch))
   ipcMain.handle('revision:create', (_event, payload) => createRevision(payload))
-  ipcMain.handle('generation:mock', (_event, payload) => {
+  ipcMain.handle('models:load', () => loadModelSettings())
+  ipcMain.handle('models:save', (_event, profile) => saveModelProfile(profile))
+  ipcMain.handle('models:delete', (_event, id) => deleteModelProfile(id))
+  ipcMain.handle('models:route', (_event, payload) => updateTaskRoute(payload.task, payload.modelProfileId))
+  ipcMain.handle('generation:mock', async (_event, payload) => {
     const workspace = loadWorkspace()
     const chapter = workspace.chapters.find((item) => item.id === payload?.chapterId) || workspace.chapters[0]
-    return generateMock({ ...payload, project: workspace.project, chapter })
+    const modelSettings = loadModelSettings()
+    const modelProfileId = payload?.modelProfileId || modelSettings.routes[payload?.task] || 'local-default'
+    const modelProfile = modelSettings.profiles.find((profile) => profile.id === modelProfileId)
+    const apiKey = getModelApiKey(modelProfileId)
+    return generateModelTask({ ...payload, project: workspace.project, chapter, modelProfile, apiKey })
   })
   ipcMain.handle('runtime:info', () => ({
     mode: goServiceStatus === 'ready' || goServiceStatus === 'starting' ? 'go-service' : 'embedded',
