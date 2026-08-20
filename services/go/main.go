@@ -1,53 +1,30 @@
 package main
 
 import (
-	"encoding/json"
+	"context"
 	"flag"
 	"fmt"
 	"log"
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 	"time"
 )
-
-type runtimeResponse struct {
-	Status    string `json:"status"`
-	Service   string `json:"service"`
-	Version   string `json:"version"`
-	DataDir   string `json:"data_dir"`
-	Timestamp string `json:"timestamp"`
-}
 
 func main() {
 	port := flag.Int("port", 0, "HTTP port; 0 selects a free port")
 	dataDir := flag.String("data-dir", ".", "service data directory")
+	authToken := flag.String("auth-token", "", "bearer token required by protected API routes")
 	flag.Parse()
 
 	if err := os.MkdirAll(*dataDir, 0o755); err != nil {
 		log.Fatal(err)
 	}
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, runtimeResponse{
-			Status:    "ok",
-			Service:   "novel-studio-service",
-			Version:   "0.1.0",
-			DataDir:   filepath.Clean(*dataDir),
-			Timestamp: time.Now().UTC().Format(time.RFC3339),
-		})
-	})
-	mux.HandleFunc("/api/status", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, runtimeResponse{
-			Status:    "ready",
-			Service:   "novel-studio-service",
-			Version:   "0.1.0",
-			DataDir:   filepath.Clean(*dataDir),
-			Timestamp: time.Now().UTC().Format(time.RFC3339),
-		})
-	})
+	service := newServiceServer(filepath.Clean(*dataDir), *authToken)
 
 	listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", *port))
 	if err != nil {
@@ -57,10 +34,23 @@ func main() {
 
 	address := listener.Addr().(*net.TCPAddr)
 	fmt.Printf("novel-studio-service ready port=%d data_dir=%s\n", address.Port, filepath.Clean(*dataDir))
-	log.Fatal(http.Serve(listener, mux))
-}
 
-func writeJSON(w http.ResponseWriter, value runtimeResponse) {
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(value)
+	httpServer := &http.Server{
+		Handler:           service,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       90 * time.Second,
+	}
+	shutdownContext, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopSignals()
+	go func() {
+		<-shutdownContext.Done()
+		service.tasks.cancelAll()
+		deadline, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = httpServer.Shutdown(deadline)
+	}()
+
+	if err := httpServer.Serve(listener); err != nil && err != http.ErrServerClosed {
+		log.Fatal(err)
+	}
 }
