@@ -11,4 +11,10 @@ contextBridge.exposeInMainWorld('novelStudio', {
   updateTaskRoute: (payload) => ipcRenderer.invoke('models:route', payload),
   generateMock: (payload) => ipcRenderer.invoke('generation:mock', payload),
   getRuntimeInfo: () => ipcRenderer.invoke('runtime:info'),
+  onCloseRequest: (callback) => {
+    const listener = () => callback()
+    ipcRenderer.on('window:close-requested', listener)
+    return () => ipcRenderer.removeListener('window:close-requested', listener)
+  },
+  respondToClose: (payload) => ipcRenderer.send('window:close-response', payload),
 })

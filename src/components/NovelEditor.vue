@@ -50,7 +50,19 @@ function createState(value) {
         }
         if (update.selectionSet || update.docChanged) {
           const selection = update.state.selection.main
-          emit('selection-change', { from: selection.from, to: selection.to, text: update.state.sliceDoc(selection.from, selection.to) })
+          const start = view?.coordsAtPos(selection.from)
+          const end = view?.coordsAtPos(selection.to)
+          emit('selection-change', {
+            from: selection.from,
+            to: selection.to,
+            text: update.state.sliceDoc(selection.from, selection.to),
+            coords: start && end ? {
+              left: Math.min(start.left, end.left),
+              right: Math.max(start.right, end.right),
+              top: start.top,
+              bottom: Math.max(start.bottom, end.bottom),
+            } : null,
+          })
         }
       }),
     ],

@@ -20,6 +20,8 @@ import { generateModelTask } from './model-adapter.js'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 let goServiceProcess = null
 let goServiceStatus = 'not-started'
+let mainWindow = null
+let closeResponsePending = false
 
 function serviceBinaryCandidates() {
   const platform = process.platform === 'win32' ? 'win32' : process.platform
@@ -98,6 +100,12 @@ function registerIpc() {
     database: 'sqlite',
     editor: 'codemirror-6',
   }))
+  ipcMain.on('window:close-response', (event, payload = {}) => {
+    if (!mainWindow || event.sender !== mainWindow.webContents) return
+    if (!payload.saved && !payload.discard) return
+    closeResponsePending = true
+    mainWindow.close()
+  })
 }
 
 function createWindow() {
@@ -113,6 +121,18 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
     },
+  })
+  mainWindow = window
+  window.on('close', (event) => {
+    if (closeResponsePending || window.webContents.isLoading()) return
+    event.preventDefault()
+    window.webContents.send('window:close-requested')
+  })
+  window.on('closed', () => {
+    if (mainWindow === window) {
+      mainWindow = null
+      closeResponsePending = false
+    }
   })
 
   const devUrl = process.env.VITE_DEV_SERVER_URL

@@ -31,4 +31,10 @@ export const appService = {
   getRuntimeInfo() {
     return electronApi.getRuntimeInfo()
   },
+  onCloseRequest(callback) {
+    return electronApi.onCloseRequest(callback)
+  },
+  respondToClose(payload) {
+    return electronApi.respondToClose(payload)
+  },
 }

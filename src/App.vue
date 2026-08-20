@@ -18,7 +18,7 @@
         <span class="runtime-pill" :class="runtime.goServiceStatus">
           <span class="status-dot"></span>{{ runtimeLabel }}
         </span>
-        <span class="save-label">{{ saveLabel }}</span>
+        <span class="save-label" :class="saveState">{{ saveLabel }}</span>
         <button class="icon-button" title="模型与项目设置" @click="openSettings">⋯</button>
       </div>
     </header>
@@ -98,7 +98,7 @@
           <span class="editor-mode">CodeMirror 6 · prose</span>
         </div>
 
-        <div class="editor-body" @click="closeSelectionTools">
+        <div class="editor-body" @mousedown.self="closeSelectionTools">
           <NovelEditor
             v-if="activeTab === 'manuscript'"
             v-model="editorText"
@@ -119,11 +119,25 @@
           </div>
           <pre v-else class="artifact-view scene-plan-view">{{ activeChapter.scene_plan || '还没有场景计划。点击右侧“生成场景计划”开始。' }}</pre>
 
-          <div v-if="selectionTools.visible && activeTab === 'manuscript'" class="selection-tools" @click.stop>
+          <div
+            v-if="selectionTools.visible && activeTab === 'manuscript'"
+            class="selection-tools"
+            :style="selectionToolsStyle"
+            @mousedown.stop
+          >
             <span class="selection-caption">已选 {{ selectionTools.text.length }} 字</span>
-            <button @click="rewriteSelection('润色')">润色</button>
-            <button @click="rewriteSelection('扩写')">扩写</button>
-            <button @click="rewriteSelection('局部重写')">局部重写</button>
+            <button :disabled="taskIsRunning() || selectionPreview.visible" @click="rewriteSelection('润色')">润色</button>
+            <button :disabled="taskIsRunning() || selectionPreview.visible" @click="rewriteSelection('扩写')">扩写</button>
+            <button :disabled="taskIsRunning() || selectionPreview.visible" @click="rewriteSelection('局部重写')">局部重写</button>
+          </div>
+
+          <div v-if="selectionPreview.visible" class="selection-review" @mousedown.stop>
+            <div>
+              <strong>局部候选稿</strong>
+              <small>{{ selectionPreview.mode }} · {{ selectionPreview.replacementText.length }} 字 · 尚未保存</small>
+            </div>
+            <button class="selection-review-undo" @click="discardSelectionPreview">撤销</button>
+            <button class="selection-review-accept" @click="acceptSelectionPreview">接受</button>
           </div>
         </div>
       </section>
@@ -182,11 +196,21 @@
       @delete-profile="deleteModelProfile"
       @route-change="changeTaskRoute"
     />
+    <DiffReview
+      :visible="candidate.visible"
+      :original="candidate.original"
+      :candidate="candidate.content"
+      :title="candidate.title"
+      :subtitle="candidate.subtitle"
+      @accept="acceptCandidate"
+      @discard="discardCandidate"
+    />
   </div>
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import DiffReview from './components/DiffReview.vue'
 import ModelSettings from './components/ModelSettings.vue'
 import NovelEditor from './components/NovelEditor.vue'
 import { appService } from './services/app-service.js'
@@ -201,17 +225,40 @@ const activeTab = ref('manuscript')
 const instruction = ref('')
 const runningTask = ref('')
 const lastSavedAt = ref('')
+const saveState = ref('saved')
+const isDirty = ref(false)
 const toast = ref('')
 const loadError = ref('')
 const settingsOpen = ref(false)
-const selectionTools = reactive({ visible: false, text: '', from: 0, to: 0 })
+const selectionTools = reactive({ visible: false, text: '', from: 0, to: 0, left: 0, top: 0, bottom: 0 })
+const selectionPreview = reactive({
+  visible: false,
+  mode: '',
+  originalDocument: '',
+  originalText: '',
+  replacementText: '',
+})
+const candidate = reactive({ visible: false, original: '', content: '', title: '', subtitle: '' })
 const runtime = reactive({ goServiceStatus: 'embedded-fallback', mode: 'embedded' })
 const project = reactive({ title: '', genre: '', idea: '', style: '' })
 const modelSettings = reactive({ profiles: [], routes: {} })
+let autosaveTimer = null
+let savePromise = null
+let closeRequestCleanup = null
+let closeInProgress = false
 
 const activeChapter = computed(() => chapters.value.find((chapter) => chapter.id === activeChapterId.value) || chapters.value[0])
 const runtimeLabel = computed(() => runtime.mode === 'go-service' ? 'Go 服务已连接' : '内置服务模式')
-const saveLabel = computed(() => lastSavedAt.value ? formatRelativeTime(lastSavedAt.value) : '自动保存已开启')
+const saveLabel = computed(() => {
+  if (saveState.value === 'dirty') return '有未保存修改'
+  if (saveState.value === 'saving') return '正在保存…'
+  if (saveState.value === 'error') return '保存失败，请重试'
+  return lastSavedAt.value ? `已保存 ${formatRelativeTime(lastSavedAt.value)}` : '已保存'
+})
+const selectionToolsStyle = computed(() => ({
+  left: `${selectionTools.left || 50}%`,
+  top: `${selectionTools.bottom || 23}px`,
+}))
 
 function countChineseText(value) { return countChinese(value) }
 function taskIsRunning() { return Boolean(runningTask.value) }
@@ -231,6 +278,8 @@ function modelDetail(task) {
 }
 
 onMounted(async () => {
+  closeRequestCleanup = appService.onCloseRequest(handleCloseRequest)
+  window.addEventListener('beforeunload', handleBrowserBeforeUnload)
   try {
     const loaded = await appService.loadWorkspace()
     workspace.value = loaded
@@ -250,12 +299,33 @@ onMounted(async () => {
 })
 
 watch(activeChapter, (chapter) => {
-  if (chapter) editorText.value = chapter.manuscript || ''
+  if (!chapter) return
+  editorText.value = chapter.manuscript || ''
+  isDirty.value = false
+  saveState.value = 'saved'
 }, { immediate: true })
+
+watch(editorText, (value) => {
+  const dirty = Boolean(activeChapter.value && value !== (activeChapter.value.manuscript || ''))
+  isDirty.value = dirty
+  if (!dirty) {
+    if (saveState.value !== 'saving') saveState.value = 'saved'
+    return
+  }
+  saveState.value = 'dirty'
+  if (!selectionPreview.visible) scheduleAutosave()
+})
+
+onBeforeUnmount(() => {
+  if (autosaveTimer) window.clearTimeout(autosaveTimer)
+  closeRequestCleanup?.()
+  window.removeEventListener('beforeunload', handleBrowserBeforeUnload)
+})
 
 async function selectChapter(id) {
   if (id === activeChapterId.value) return
-  await saveManuscript()
+  if (selectionPreview.visible) discardSelectionPreview()
+  await saveManuscript({ createRevision: false, source: 'chapter-switch' })
   activeChapterId.value = id
   activeTab.value = 'manuscript'
 }
@@ -267,12 +337,39 @@ async function saveChapterTitle() {
   lastSavedAt.value = new Date().toISOString()
 }
 
-async function saveManuscript() {
-  if (!activeChapter.value) return
-  const updated = await appService.updateChapter({ id: activeChapter.value.id, manuscript: editorText.value, status: 'draft' })
-  replaceChapter(updated)
-  await appService.createRevision({ chapterId: activeChapter.value.id, content: editorText.value, source: 'manual-save' })
-  lastSavedAt.value = new Date().toISOString()
+async function saveManuscript({ createRevision = true, source = 'manual-save', forceRevision = false } = {}) {
+  if (!activeChapter.value) return false
+  if (!isDirty.value && !forceRevision) return true
+  if (savePromise) return savePromise
+  if (autosaveTimer) {
+    window.clearTimeout(autosaveTimer)
+    autosaveTimer = null
+  }
+  saveState.value = 'saving'
+  savePromise = (async () => {
+    try {
+      const chapterId = activeChapter.value.id
+      const content = editorText.value
+      const updated = await appService.updateChapter({ id: chapterId, manuscript: content, status: 'draft' })
+      replaceChapter(updated)
+      if (createRevision || forceRevision) {
+        await appService.createRevision({ chapterId, content, source })
+      }
+      lastSavedAt.value = new Date().toISOString()
+      isDirty.value = false
+      saveState.value = 'saved'
+      return true
+    } catch (error) {
+      saveState.value = 'error'
+      showToast(`保存失败：${error.message}`)
+      throw error
+    }
+  })()
+  try {
+    return await savePromise
+  } finally {
+    savePromise = null
+  }
 }
 
 function replaceChapter(updated) {
@@ -285,6 +382,12 @@ async function runGeneration(task) {
   if (runningTask.value || !activeChapter.value) return
   runningTask.value = task
   try {
+    const originalManuscript = editorText.value
+    if (isDirty.value) {
+      await saveManuscript({ createRevision: true, source: `before-ai-${task}` })
+    } else if (task === 'chapter' && originalManuscript) {
+      await saveManuscript({ createRevision: true, source: 'before-ai-generation', forceRevision: true })
+    }
     const result = await appService.generateMock({
       task,
       chapterId: activeChapter.value.id,
@@ -302,10 +405,13 @@ async function runGeneration(task) {
       activeTab.value = 'scene'
       showToast(`场景计划已生成 · ${executionLabel(result)}`)
     } else if (task === 'chapter') {
-      editorText.value = result.manuscript
-      await saveManuscript()
       activeTab.value = 'manuscript'
-      showToast(`正文已生成并保存为新版本 · ${executionLabel(result)}`)
+      candidate.original = originalManuscript
+      candidate.content = result.manuscript || ''
+      candidate.title = '正文候选稿'
+      candidate.subtitle = `生成来源：${executionLabel(result)}。请在差异视图中确认后再写入正文。`
+      candidate.visible = true
+      showToast('正文候选稿已生成，请确认差异')
     }
   } catch (error) {
     showToast(`生成失败：${error.message}`)
@@ -323,6 +429,9 @@ function handleSelection(selection) {
   selectionTools.text = selection.text || ''
   selectionTools.from = selection.from
   selectionTools.to = selection.to
+  selectionTools.left = selection.coords ? (selection.coords.left + selection.coords.right) / 2 : 0
+  selectionTools.top = selection.coords?.top || 0
+  selectionTools.bottom = selection.coords?.bottom || 0
   selectionTools.visible = Boolean(selection.text && selection.to > selection.from)
 }
 
@@ -332,10 +441,14 @@ function closeSelectionTools() {
 }
 
 async function rewriteSelection(mode) {
-  if (!selectionTools.text || !activeChapter.value || runningTask.value) return
+  if (!selectionTools.text || !activeChapter.value || runningTask.value || selectionPreview.visible) return
   const { from, to, text } = selectionTools
+  const originalDocument = editorText.value
   runningTask.value = 'rewrite'
   try {
+    if (isDirty.value || originalDocument) {
+      await saveManuscript({ createRevision: true, source: 'before-ai-rewrite', forceRevision: true })
+    }
     const result = await appService.generateMock({
       task: 'rewrite',
       chapterId: activeChapter.value.id,
@@ -344,14 +457,93 @@ async function rewriteSelection(mode) {
       instruction: instruction.value,
       modelProfileId: modelSettings.routes.rewrite,
     })
-    editorText.value = editorText.value.slice(0, from) + result.text + editorText.value.slice(to)
+    selectionPreview.mode = mode
+    selectionPreview.originalDocument = originalDocument
+    selectionPreview.originalText = text
+    selectionPreview.replacementText = result.text || ''
+    editorText.value = originalDocument.slice(0, from) + selectionPreview.replacementText + originalDocument.slice(to)
+    selectionPreview.visible = true
     selectionTools.visible = false
-    await saveManuscript()
-    showToast(`${mode}已完成 · ${executionLabel(result)}`)
+    showToast(`${mode}候选已生成，请接受或撤销 · ${executionLabel(result)}`)
   } catch (error) {
     showToast(`局部重写失败：${error.message}`)
   } finally {
     runningTask.value = ''
+  }
+}
+
+async function acceptSelectionPreview() {
+  if (!selectionPreview.visible || runningTask.value) return
+  try {
+    await saveManuscript({ createRevision: true, source: 'ai-rewrite-accepted', forceRevision: true })
+    selectionPreview.visible = false
+    showToast('局部候选已接受并保存为新版本')
+  } catch {
+    // Keep the preview open so the user can retry after the storage error is resolved.
+  }
+}
+
+function discardSelectionPreview() {
+  if (!selectionPreview.visible) return
+  editorText.value = selectionPreview.originalDocument
+  selectionPreview.visible = false
+  selectionTools.visible = false
+  showToast('已撤销局部候选，正文恢复为原稿')
+}
+
+async function acceptCandidate() {
+  if (!candidate.visible || !activeChapter.value) return
+  editorText.value = candidate.content
+  try {
+    await saveManuscript({ createRevision: true, source: 'ai-generation-accepted', forceRevision: true })
+    candidate.visible = false
+    showToast('正文候选稿已接受并保存为新版本')
+  } catch {
+    // Keep the candidate context in place; saveState already exposes the failure.
+  }
+}
+
+function discardCandidate() {
+  candidate.visible = false
+  showToast('已放弃正文候选稿，原稿保持不变')
+}
+
+function scheduleAutosave() {
+  if (autosaveTimer) window.clearTimeout(autosaveTimer)
+  autosaveTimer = window.setTimeout(async () => {
+    autosaveTimer = null
+    if (!isDirty.value || selectionPreview.visible || candidate.visible) return
+    try {
+      await saveManuscript({ createRevision: false, source: 'autosave' })
+    } catch {
+      // saveManuscript updates the visible error state and toast.
+    }
+  }, 1200)
+}
+
+function handleBrowserBeforeUnload(event) {
+  if (!isDirty.value) return
+  event.preventDefault()
+  event.returnValue = ''
+}
+
+async function handleCloseRequest() {
+  if (closeInProgress) return
+  if (runningTask.value) {
+    showToast('生成任务仍在运行，完成后再关闭窗口')
+    appService.respondToClose({ saved: false, error: 'generation-running' })
+    return
+  }
+  closeInProgress = true
+  try {
+    if (candidate.visible) discardCandidate()
+    if (selectionPreview.visible) discardSelectionPreview()
+    if (isDirty.value) await saveManuscript({ createRevision: false, source: 'close-autosave' })
+    appService.respondToClose({ saved: true })
+  } catch (error) {
+    closeInProgress = false
+    appService.respondToClose({ saved: false, error: error.message })
+    showToast(`关闭前保存失败：${error.message}`)
   }
 }
 
