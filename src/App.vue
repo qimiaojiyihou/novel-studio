@@ -66,7 +66,7 @@
 
         <div class="panel-footer">
           <div class="storage-note"><span class="storage-icon">⌂</span><span>项目保存在本机</span></div>
-          <div class="storage-note muted"><span>SQLite · schema v1</span></div>
+          <div class="storage-note muted"><span>SQLite · schema v{{ runtime.database?.schemaVersion || 1 }} · 外键{{ runtime.database?.foreignKeys ? '已启用' : '待检查' }}</span></div>
         </div>
       </aside>
 

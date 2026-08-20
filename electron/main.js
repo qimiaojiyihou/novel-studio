@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import {
   createRevision,
   deleteModelProfile,
+  getDatabaseInfo,
   getModelApiKey,
   loadModelSettings,
   loadWorkspace,
@@ -97,7 +98,7 @@ function registerIpc() {
   ipcMain.handle('runtime:info', () => ({
     mode: goServiceStatus === 'ready' || goServiceStatus === 'starting' ? 'go-service' : 'embedded',
     goServiceStatus,
-    database: 'sqlite',
+    database: getDatabaseInfo(),
     editor: 'codemirror-6',
   }))
   ipcMain.on('window:close-response', (event, payload = {}) => {
