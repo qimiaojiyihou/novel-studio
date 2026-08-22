@@ -121,9 +121,17 @@ test('chapters can be planned from a template, reordered, duplicated and deleted
   assert.equal(duplicated.chapters[2].id, duplicated.chapter.id)
 
   repository.createRevision({ chapterId: duplicated.chapter.id, content: '副本版本' })
+  database.prepare(`
+    INSERT INTO style_profiles VALUES ('style-chapter', ?, 'chapter', ?, '章节文风', '{}', '短句', ?, ?)
+  `).run(workspace.project.id, duplicated.chapter.id, '2026-08-20', '2026-08-20')
+  database.prepare(`
+    INSERT INTO prompt_bindings VALUES ('binding-chapter', ?, 'chapter', ?, 'chapter', 'builtin-chapter-v1', 1, 1, ?, ?)
+  `).run(workspace.project.id, duplicated.chapter.id, '2026-08-20', '2026-08-20')
   const afterDelete = repository.deleteChapter(duplicated.chapter.id)
   assert.deepEqual(afterDelete.chapters.map((chapter) => chapter.chapter_no), [1, 2, 3])
   assert.equal(database.prepare('SELECT COUNT(*) AS count FROM revisions WHERE chapter_id = ?').get(duplicated.chapter.id).count, 0)
+  assert.equal(database.prepare('SELECT COUNT(*) AS count FROM style_profiles WHERE scope_id = ?').get(duplicated.chapter.id).count, 0)
+  assert.equal(database.prepare('SELECT COUNT(*) AS count FROM prompt_bindings WHERE scope_id = ?').get(duplicated.chapter.id).count, 0)
 
   repository.deleteChapter(third.id)
   repository.deleteChapter(second.id)

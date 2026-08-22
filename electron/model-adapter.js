@@ -5,96 +5,10 @@ import {
   requestHeadersFor,
   requestParametersFor,
 } from './model-request-config.js'
+import { compilePrompt } from './prompt-compiler.js'
 
 function now() {
   return new Date().toISOString()
-}
-
-function compactJson(value, limit = 12000) {
-  const content = JSON.stringify(value || {})
-  return content.length > limit ? content.slice(0, limit) + '…' : content
-}
-
-function contextFor({ project, chapter, planningCenter, knowledgeCenter, longContext, instruction }) {
-  if (longContext?.text) return longContext.text
-  const planning = planningCenter ? {
-    foundation: planningCenter.documents?.foundation?.content || {},
-    worldOverview: planningCenter.documents?.world?.content || {},
-    outline: planningCenter.documents?.outline?.content || {},
-    characters: (planningCenter.characters || []).map((item) => ({ title: item.title, ...item.data })),
-    worldElements: (planningCenter.worldElements || []).map((item) => ({ title: item.title, ...item.data })),
-    volumes: (planningCenter.volumes || []).map((item) => ({ title: item.title, ...item.data })),
-  } : null
-  const knowledge = knowledgeCenter ? {
-    facts: (knowledgeCenter.facts || []).filter((item) => item.status === 'open').map((item) => ({ title: item.title, ...item.content })),
-    timeline: (knowledgeCenter.timeline || []).filter((item) => item.status === 'open').map((item) => ({ title: item.title, ...item.content })),
-    foreshadows: (knowledgeCenter.foreshadows || []).filter((item) => item.status === 'open').map((item) => ({ title: item.title, ...item.content })),
-    openChecks: (knowledgeCenter.checks || []).filter((check) => check.status === 'open').map((check) => ({ severity: check.severity, title: check.title, detail: check.detail })),
-  } : null
-  return [
-    '项目：' + (project?.title || '未命名小说'),
-    '题材：' + (project?.genre || '未设置'),
-    '故事想法：' + (project?.idea || '暂无'),
-    '项目文风：' + (project?.style || '克制、具体、以动作和对白推进。'),
-    '章节：' + (chapter?.chapter_no || 1) + ' · ' + (chapter?.title || '新章节'),
-    '章节卡：' + JSON.stringify(chapter?.card || {}),
-    '场景计划：' + (chapter?.scene_plan || '暂无'),
-    planning ? '已确认故事规划：' + compactJson(planning) : '',
-    knowledge ? '已确认知识与连续性：' + compactJson(knowledge) : '',
-    instruction ? '本次补充要求：' + instruction : '',
-  ].filter(Boolean).join('\n')
-}
-
-function messagesFor(task, input) {
-  const context = contextFor(input)
-  const system = '你是 Novel Studio 的小说创作协作者。遵守用户给出的题材、人物和文风，只输出当前任务需要的内容，不解释过程。'
-  if (task === 'connection_test') {
-    return [
-      { role: 'system', content: '这是模型连接测试。不要解释，只回复 NOVEL_STUDIO_OK。' },
-      { role: 'user', content: '回复 NOVEL_STUDIO_OK' },
-    ]
-  }
-  if (task === 'planning_field') {
-    const planning = input.planning || {}
-    return [
-      { role: 'system', content: system + '只返回这个规划字段的候选内容，不要返回字段名、标题、引号、Markdown 或解释。内容必须具体、可执行，并与已有设定一致。' },
-      {
-        role: 'user',
-        content: [
-          context,
-          `规划模块：${planning.sectionLabel || '故事规划'}`,
-          `对象：${planning.targetLabel || '当前项目'}`,
-          `字段：${planning.fieldLabel || planning.fieldKey || '当前字段'}`,
-          `当前内容：${planning.currentValue || '尚未填写'}`,
-          planning.nearbyContext ? `相关上下文：${planning.nearbyContext}` : '',
-          input.instruction ? `本次要求：${input.instruction}` : '',
-          planning.currentValue ? '请在保留有效信息的基础上给出一版更完整的候选。' : '请生成一版可以直接采用的候选。',
-        ].filter(Boolean).join('\n'),
-      },
-    ]
-  }
-  if (task === 'chapter_card') {
-    return [
-      { role: 'system', content: system + '章节卡必须返回 JSON，不要使用 Markdown 代码围栏。字段为 goal、protagonistGoal、resistance、turningPoint、payoff、cost、ending、requiredScenes；requiredScenes 是包含 id、title、goal、result 的数组。' },
-      { role: 'user', content: context + '\n请生成一张可执行的章节卡。' },
-    ]
-  }
-  if (task === 'scene_plan') {
-    return [
-      { role: 'system', content: system + '场景计划要按场景拆分，每个场景写出目标、阻力、行动和变化。' },
-      { role: 'user', content: context + '\n请生成本章场景计划。' },
-    ]
-  }
-  if (task === 'rewrite') {
-    return [
-      { role: 'system', content: system + '只返回重写后的正文，不要加标题、引号或解释。' },
-      { role: 'user', content: context + '\n重写方式：' + (input.rewriteMode || '局部重写') + '\n待处理文字：' + (input.selectedText || '') },
-    ]
-  }
-  return [
-    { role: 'system', content: system + '只返回正文，不要加标题、分析或解释。' },
-    { role: 'user', content: context + '\n请根据章节卡和场景计划继续生成本章正文。' },
-  ]
 }
 
 function parseJsonObject(value) {
@@ -185,12 +99,13 @@ export function prepareModelTask(input) {
   const parameters = parametersFor(task, modelProfile)
   const requestConfig = normalizeRequestConfig(modelProfile?.settings?.requestConfig)
   const mergedParameters = requestParametersFor(task, parameters, requestConfig)
+  const compiledPrompt = input.compiledPrompt || compilePrompt(input)
   const prepared = {
     task,
     endpoint: modelProfile?.baseUrl || '',
     apiKey: apiKey || '',
     model: modelProfile?.model || '',
-    messages: messagesFor(task, input),
+    messages: compiledPrompt.messages,
     temperature: Number(mergedParameters.temperature ?? 0),
     parameters: mergedParameters,
     requestConfig,
@@ -202,6 +117,7 @@ export function prepareModelTask(input) {
     mockContent: '',
     mockDelayMs: Number.isFinite(input.mockDelayMs) ? input.mockDelayMs : 8,
     contextDiagnostics: input.longContext?.diagnostics || null,
+    promptSnapshot: compiledPrompt.snapshot,
   }
   if (!missingConfiguration) return prepared
 
@@ -222,6 +138,12 @@ export function shapeModelResult(prepared, content, gateway = 'embedded') {
     execution: prepared.execution,
     gateway,
     model: prepared.modelProfile,
+    prompt: {
+      template: prepared.promptSnapshot?.template || null,
+      styles: prepared.promptSnapshot?.styles || null,
+      promptHash: prepared.promptSnapshot?.promptHash || '',
+      estimatedChars: prepared.promptSnapshot?.estimatedChars || 0,
+    },
   }
   if (prepared.fallbackReason) base.fallbackReason = prepared.fallbackReason
   if (prepared.contextDiagnostics) base.contextDiagnostics = prepared.contextDiagnostics

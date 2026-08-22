@@ -204,7 +204,16 @@
           <template v-else-if="structureMode === 'chapters' && selectedChapter">
             <div class="entity-editor-heading chapter-plan-heading">
               <div><span>CHAPTER {{ String(selectedChapter.chapterNo).padStart(2, '0') }}</span><h2>{{ selectedChapter.title }}</h2><p>章节规划会直接进入正文生成上下文。</p></div>
-              <span class="chapter-plan-status">{{ selectedChapter.status === 'draft' ? '草稿' : selectedChapter.status }}</span>
+              <div class="chapter-scope-tools">
+                <label>
+                  <span>所属分卷</span>
+                  <select :value="selectedChapter.card?.volumeId || ''" @change="assignChapterVolume(selectedChapter, $event.target.value)">
+                    <option value="">未归卷</option>
+                    <option v-for="volume in center.volumes" :key="volume.id" :value="volume.id">{{ volume.title }}</option>
+                  </select>
+                </label>
+                <span class="chapter-plan-status">{{ selectedChapter.status === 'draft' ? '草稿' : selectedChapter.status }}</span>
+              </div>
             </div>
             <div class="planning-field-grid">
               <PlanningField
@@ -411,6 +420,14 @@ function updateChapterField(chapter, field, value) {
   schedule(chapterTimers, chapter.id, () => saveChapter(chapter.id))
 }
 
+function assignChapterVolume(chapter, volumeId) {
+  if (volumeId) chapter.card.volumeId = volumeId
+  else delete chapter.card.volumeId
+  dirtyChapters.add(chapter.id)
+  saveState.value = 'dirty'
+  schedule(chapterTimers, chapter.id, () => saveChapter(chapter.id))
+}
+
 function schedule(timerMap, key, action) {
   if (timerMap.has(key)) clearTimeout(timerMap.get(key))
   timerMap.set(key, setTimeout(() => {
@@ -543,6 +560,7 @@ async function confirmEntityDelete() {
 function generateDocumentField(kind, field) {
   return startFieldGeneration(field, {
     targetType: 'document', targetId: kind, targetLabel: meta.value.title,
+    scopeType: 'project', scopeId: props.project.id,
     currentValue: center.value.documents[kind].content[field.key] || '',
     nearbyContext: JSON.stringify(center.value.documents[kind].content),
   })
@@ -551,6 +569,7 @@ function generateDocumentField(kind, field) {
 function generateEntityTitle(entity) {
   return startFieldGeneration({ key: 'title', label: entity.kind === 'character' ? '人物姓名 / 称谓' : entity.kind === 'world' ? '设定名称' : '分卷名称' }, {
     targetType: 'entity', targetId: entity.id, targetLabel: entity.title, currentValue: entity.title,
+    scopeType: entity.kind === 'volume' ? 'volume' : 'project', scopeId: entity.kind === 'volume' ? entity.id : props.project.id,
     nearbyContext: JSON.stringify(entity.data),
   })
 }
@@ -558,6 +577,7 @@ function generateEntityTitle(entity) {
 function generateEntityField(entity, field) {
   return startFieldGeneration(field, {
     targetType: 'entity', targetId: entity.id, targetLabel: entity.title,
+    scopeType: entity.kind === 'volume' ? 'volume' : 'project', scopeId: entity.kind === 'volume' ? entity.id : props.project.id,
     currentValue: entity.data[field.key] || '', nearbyContext: JSON.stringify(entity.data),
   })
 }
@@ -566,7 +586,7 @@ function generateChapterField(chapter, field) {
   return startFieldGeneration(field, {
     targetType: 'chapter', targetId: chapter.id, targetLabel: `第 ${chapter.chapterNo} 章 · ${chapter.title}`,
     currentValue: chapterFieldValue(chapter, field), nearbyContext: JSON.stringify({ card: chapter.card, scenePlan: chapter.scenePlan }),
-    chapterId: chapter.id,
+    chapterId: chapter.id, scopeType: 'chapter', scopeId: chapter.id,
   })
 }
 
@@ -589,6 +609,8 @@ async function startFieldGeneration(field, target) {
       fieldLabel: field.label,
       currentValue: target.currentValue,
       nearbyContext: target.nearbyContext,
+      scopeType: target.scopeType,
+      scopeId: target.scopeId,
     },
   }, handleGenerationEvent)
   activeGeneration = generation
@@ -683,7 +705,7 @@ defineExpose({ flushSaves })
 .candidate-model { padding: 2px 20px 13px; color: #a09385; font-size: 7px; }.candidate-actions { display: grid; grid-template-columns: 1fr 1.6fr; gap: 7px; padding: 0 16px 18px; }.candidate-actions button { padding: 9px; color: #776b60; border: 1px solid #c8baaa; background: transparent; font-size: 8px; }.candidate-actions .accept { color: #fff8ef; border-color: var(--copper); background: var(--copper); }
 .candidate-empty { display: grid; justify-items: center; padding: 48px 25px; color: #8d8073; text-align: center; }.candidate-empty > span { color: var(--copper); font-size: 28px; }.candidate-empty strong { margin-top: 10px; color: #5d544c; font: 14px var(--font-display); }.candidate-empty p { margin: 8px 0 0; font: 9px/1.65 var(--font-body); }
 .candidate-queue { display: grid; gap: 4px; padding: 14px 16px 25px; border-top: 1px solid #cfc3b4; }.candidate-queue > span { margin-bottom: 5px; color: #918375; font-size: 8px; }.candidate-queue button { display: grid; gap: 3px; padding: 8px 9px; color: #71675d; border: 1px solid transparent; background: rgba(255,255,255,.2); text-align: left; }.candidate-queue button.active { border-color: #c69b84; background: #fff8ef; }.candidate-queue strong { font: 10px var(--font-display); }.candidate-queue small { color: #9b8e81; font-size: 7px; }
-.entity-editor-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; margin-bottom: 25px; padding-bottom: 18px; border-bottom: 1px solid var(--line); }.chapter-plan-heading p { margin: 7px 0 0; color: #93877b; font-size: 9px; }.chapter-plan-status { padding: 5px 7px; border: 1px solid #d5b6a3; }
+.entity-editor-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; margin-bottom: 25px; padding-bottom: 18px; border-bottom: 1px solid var(--line); }.chapter-plan-heading p { margin: 7px 0 0; color: #93877b; font-size: 9px; }.chapter-scope-tools { display: flex; align-items: flex-end; gap: 10px; }.chapter-scope-tools label { display: grid; gap: 5px; color: #8d7f72; font-size: 8px; }.chapter-scope-tools select { min-width: 145px; height: 29px; padding: 0 8px; color: #5a5047; border: 1px solid #d4c5b5; outline: 0; background: rgba(255,255,255,.48); font-size: 9px; }.chapter-scope-tools select:focus { border-color: var(--copper-light); }.chapter-plan-status { padding: 5px 7px; border: 1px solid #d5b6a3; }
 .planning-confirm-backdrop { position: fixed; inset: 0; z-index: 90; display: grid; place-items: center; background: rgba(20,23,26,.7); backdrop-filter: blur(4px); }.planning-confirm { width: min(430px, 90vw); padding: 29px 31px; background: var(--paper-soft); box-shadow: 0 24px 65px rgba(10,12,14,.38); }.planning-confirm h2 { margin: 10px 0 8px; font: 23px var(--font-display); }.planning-confirm p { color: #8c7f72; font: 10px/1.65 var(--font-body); }.planning-confirm > div { display: flex; justify-content: flex-end; gap: 7px; margin-top: 20px; }.planning-confirm button { padding: 8px 11px; color: #766b61; border: 1px solid var(--line); background: transparent; font-size: 8px; }.planning-confirm button.danger { color: white; border-color: #9b4332; background: #9b4332; }
 .planning-loading { grid-column: 2 / 4; display: grid; place-items: center; color: #9b8d7e; background: var(--paper); font: 16px var(--font-display); }
 @keyframes save-pulse { 50% { opacity: .35; transform: scale(.75); } }

@@ -154,7 +154,8 @@ test('planning field generation returns a reviewable text candidate', async () =
   const result = await runEmbeddedModelTask(prepared)
   assert.equal(result.task, 'planning_field')
   assert.ok(result.text.includes('主角'))
-  assert.equal(prepared.messages[0].content.includes('只返回这个规划字段'), true)
+  assert.equal(prepared.messages[0].content.includes('只返回字段候选内容'), true)
+  assert.equal(prepared.promptSnapshot.template.task, 'planning_field')
 })
 
 test('generation context includes confirmed knowledge and open continuity checks', () => {

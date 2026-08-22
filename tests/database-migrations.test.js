@@ -51,6 +51,13 @@ test('fresh database migrates to the latest schema with foreign keys enabled', (
     assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'continuity_checks'").get())
     assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'context_profiles'").get())
     assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'chapter_memories'").get())
+    assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'prompt_templates'").get())
+    assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'prompt_template_versions'").get())
+    assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'prompt_bindings'").get())
+    assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'style_profiles'").get())
+    assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'generation_records'").get())
+    assert.equal(database.prepare("SELECT COUNT(*) AS count FROM prompt_templates WHERE kind = 'built_in'").get().count, 6)
+    assert.equal(database.prepare("SELECT COUNT(*) AS count FROM prompt_bindings WHERE scope_type = 'global'").get().count, 6)
     assert.ok(database.prepare('PRAGMA table_info(model_profiles)').all().some((column) => column.name === 'settings_json'))
   } finally {
     database.close()

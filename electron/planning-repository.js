@@ -234,10 +234,24 @@ export function createPlanningRepository(database, {
     if (!current) throw new Error('规划卡片不存在')
     assertProject(current.project_id)
     const remaining = listEntities(current.project_id, current.kind).filter((entity) => entity.id !== entityId)
+    const linkedChapters = current.kind === 'volume'
+      ? database.prepare('SELECT id, card_json FROM chapters WHERE project_id = ?').all(current.project_id)
+        .filter((chapter) => parseJson(chapter.card_json).volumeId === entityId)
+      : []
     const updatedAt = now()
     database.exec('BEGIN IMMEDIATE')
     try {
       database.prepare('DELETE FROM planning_entities WHERE id = ?').run(entityId)
+      const updateChapterCard = database.prepare('UPDATE chapters SET card_json = ?, updated_at = ? WHERE id = ?')
+      linkedChapters.forEach((chapter) => {
+        const card = parseJson(chapter.card_json)
+        delete card.volumeId
+        updateChapterCard.run(JSON.stringify(card), updatedAt, chapter.id)
+      })
+      database.prepare("DELETE FROM style_profiles WHERE project_id = ? AND scope_type = 'volume' AND scope_id = ?")
+        .run(current.project_id, entityId)
+      database.prepare("DELETE FROM prompt_bindings WHERE project_id = ? AND scope_type = 'volume' AND scope_id = ?")
+        .run(current.project_id, entityId)
       const updatePosition = database.prepare('UPDATE planning_entities SET position = ? WHERE id = ?')
       remaining.forEach((entity, index) => updatePosition.run(index + 1, entity.id))
       database.prepare(`

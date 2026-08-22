@@ -19,6 +19,7 @@ import {
   deletePlanningEntity,
   deleteProject,
   duplicateChapter,
+  finishGenerationRecord,
   getDatabaseInfo,
   getModelApiKey,
   listProjects,
@@ -33,12 +34,14 @@ import {
   reorderKnowledgeItems,
   reorderPlanningEntities,
   rebuildContextMemories,
+  resolvePromptContext,
   restoreProject,
   restoreRevision,
   resolvePlanningCandidate,
   resolveContinuityCheck,
   savePlanningDocument,
   saveModelProfile,
+  startGenerationRecord,
   updateChapter,
   updateKnowledgeItem,
   updateProject,
@@ -49,6 +52,7 @@ import {
   syncKnowledgeSources,
 } from './database.js'
 import { createModelGateway } from './model-gateway.js'
+import { compilePrompt } from './prompt-compiler.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 let goServiceProcess = null
@@ -166,6 +170,14 @@ function stopGoService() {
   goServiceBaseUrl = ''
 }
 
+function generationOutput(result = {}) {
+  if (typeof result.manuscript === 'string') return result.manuscript
+  if (typeof result.scenePlan === 'string') return result.scenePlan
+  if (typeof result.text === 'string') return result.text
+  if (result.card && typeof result.card === 'object') return JSON.stringify(result.card)
+  return ''
+}
+
 function registerIpc() {
   ipcMain.handle('workspace:load', (_event, projectId) => loadWorkspace(projectId))
   ipcMain.handle('projects:list', listProjects)
@@ -228,28 +240,72 @@ function registerIpc() {
     const chapter = workspace.chapters.find((item) => item.id === payload?.chapterId) || workspace.chapters[0]
     const planningCenter = workspace.project ? loadPlanningCenter(workspace.project.id) : null
     const knowledgeCenter = workspace.project ? loadKnowledgeCenter(workspace.project.id) : null
+    const chapterScopedTasks = new Set(['chapter', 'chapter_card', 'scene_plan', 'rewrite'])
+    const promptChapterId = payload?.chapterId || (chapterScopedTasks.has(payload?.task) ? chapter?.id : '')
+    const promptVolumeId = payload?.planning?.scopeType === 'volume' ? payload.planning.scopeId : ''
+    const promptContext = workspace.project ? resolvePromptContext({
+      projectId: workspace.project.id,
+      chapterId: promptChapterId,
+      volumeId: promptVolumeId,
+      task: payload?.task,
+    }) : null
     const longContext = workspace.project ? buildGenerationContext({
       projectId: workspace.project.id,
       chapterId: chapter?.id,
       instruction: payload?.instruction,
+      styleText: promptContext?.style?.mergedText,
       task: payload?.task,
     }) : null
     const modelSettings = loadModelSettings()
     const modelProfileId = payload?.modelProfileId || modelSettings.routes[payload?.task] || 'local-default'
     const modelProfile = modelSettings.profiles.find((profile) => profile.id === modelProfileId)
     const apiKey = getModelApiKey(modelProfileId)
+    const generationInput = {
+      ...payload,
+      project: workspace.project,
+      chapter,
+      planningCenter,
+      knowledgeCenter,
+      longContext,
+      promptContext,
+      modelProfile,
+      apiKey,
+    }
+    const compiledPrompt = compilePrompt(generationInput)
+    const generationRecord = startGenerationRecord({
+      taskId,
+      projectId: workspace.project.id,
+      chapterId: promptChapterId,
+      task: payload?.task,
+      modelProfileId: modelProfile?.id,
+      model: modelProfile ? { id: modelProfile.id, provider: modelProfile.provider, name: modelProfile.name, model: modelProfile.model } : {},
+      promptSnapshot: compiledPrompt.snapshot,
+    })
+    let generationParameters = {}
     try {
-      return await modelGateway.generate(
-        { ...payload, project: workspace.project, chapter, planningCenter, knowledgeCenter, longContext, modelProfile, apiKey },
+      const result = await modelGateway.generate(
+        { ...generationInput, compiledPrompt },
         {
           taskId,
           onEvent: (generationEvent) => {
             if (!event.sender.isDestroyed()) event.sender.send('generation:event', generationEvent)
           },
+          onPrepared: (prepared) => { generationParameters = prepared.parameters },
         },
       )
+      finishGenerationRecord({
+        id: generationRecord.id,
+        status: 'completed',
+        parameters: generationParameters,
+        output: generationOutput(result),
+      })
+      return result
     } catch (error) {
-      if (error?.name === 'GenerationCancelledError') return { cancelled: true, taskId }
+      if (error?.name === 'GenerationCancelledError') {
+        finishGenerationRecord({ id: generationRecord.id, status: 'cancelled' })
+        return { cancelled: true, taskId }
+      }
+      finishGenerationRecord({ id: generationRecord.id, status: 'failed', error: error?.message || String(error) })
       throw error
     }
   })

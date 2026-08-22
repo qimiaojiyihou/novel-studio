@@ -291,7 +291,7 @@ export function createContextRepository(database, { now = () => new Date().toISO
     const chapter = chapters.find((item) => item.id === input.chapterId) || chapters[0]
     if (!chapter) throw new Error('项目中还没有章节')
     const card = parseJson(chapter.card_json, {})
-    const queryText = [project.title, project.genre, project.idea, chapter.title, JSON.stringify(card), chapter.scene_plan, input.instruction].join(' ')
+    const queryText = [project.title, project.genre, project.idea, chapter.title, JSON.stringify(card), chapter.scene_plan, input.styleText, input.instruction].join(' ')
     const queryTerms = termsFor(queryText)
     const previous = memories.filter((memory) => memory.chapterNo < Number(chapter.chapter_no))
     const recent = previous.slice(-profile.recentChapterCount)
@@ -325,12 +325,10 @@ export function createContextRepository(database, { now = () => new Date().toISO
       `项目：${project.title}`,
       `题材：${project.genre}`,
       `核心想法：${project.idea || '暂无'}`,
-      `项目文风：${project.style || '未设置'}`,
       `当前章节：第 ${chapter.chapter_no} 章《${chapter.title}》`,
       `章节卡：${JSON.stringify(card)}`,
       `场景计划：${chapter.scene_plan || '暂无'}`,
       cleanText(chapter.manuscript) ? `当前正文尾部：${excerpt(chapter.manuscript, Math.min(5000, Math.floor(profile.maxContextChars * 0.18)))}` : '',
-      input.instruction ? `本次要求：${input.instruction}` : '',
     ].filter(Boolean).join('\n'))
     append('已确认故事规划', planningExcerpt)
     if (recent.length) append('最近章节记忆', recent.map((memory) => memory.summary).join('\n\n'))

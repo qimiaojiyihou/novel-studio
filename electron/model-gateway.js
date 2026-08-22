@@ -118,8 +118,9 @@ export function createModelGateway({ getGoRuntime, onGoUnavailable = () => {} })
   }
 
   return {
-    async generate(input, { taskId, onEvent = () => {} }) {
+    async generate(input, { taskId, onEvent = () => {}, onPrepared = () => {} }) {
       const prepared = prepareModelTask(input)
+      onPrepared(prepared)
       const runtime = getGoRuntime()
       try {
         if (runtime.status === 'ready' && runtime.baseUrl && runtime.authToken) {

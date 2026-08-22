@@ -342,6 +342,10 @@ export function createWorkspaceRepository(database, {
     const updatedAt = now()
     database.exec('BEGIN IMMEDIATE')
     try {
+      database.prepare("DELETE FROM style_profiles WHERE project_id = ? AND scope_type = 'chapter' AND scope_id = ?")
+        .run(current.project_id, chapterId)
+      database.prepare("DELETE FROM prompt_bindings WHERE project_id = ? AND scope_type = 'chapter' AND scope_id = ?")
+        .run(current.project_id, chapterId)
       database.prepare('DELETE FROM chapters WHERE id = ?').run(chapterId)
       renumberChapters(current.project_id, remainingIds)
       database.prepare('UPDATE projects SET updated_at = ? WHERE id = ?').run(updatedAt, current.project_id)

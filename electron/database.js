@@ -6,6 +6,7 @@ import { getSchemaVersion, runMigrations } from './database-migrations.js'
 import { createKnowledgeRepository } from './knowledge-repository.js'
 import { createContextRepository } from './context-repository.js'
 import { createPlanningRepository } from './planning-repository.js'
+import { createPromptRepository } from './prompt-repository.js'
 import { createWorkspaceRepository } from './workspace-repository.js'
 
 let database
@@ -13,6 +14,7 @@ let workspaceRepository
 let planningRepository
 let knowledgeRepository
 let contextRepository
+let promptRepository
 
 function timestamp() {
   return new Date().toISOString()
@@ -73,6 +75,7 @@ export function openDatabase() {
   planningRepository = createPlanningRepository(database)
   knowledgeRepository = createKnowledgeRepository(database)
   contextRepository = createContextRepository(database)
+  promptRepository = createPromptRepository(database)
   return database
 }
 
@@ -94,6 +97,11 @@ function knowledgeStore() {
 function contextStore() {
   openDatabase()
   return contextRepository
+}
+
+function promptStore() {
+  openDatabase()
+  return promptRepository
 }
 
 export function getDatabaseInfo() {
@@ -308,6 +316,18 @@ export function rebuildContextMemories(projectId) {
 
 export function buildGenerationContext(input) {
   return contextStore().buildGenerationContext(input)
+}
+
+export function resolvePromptContext(input) {
+  return promptStore().resolvePromptContext(input)
+}
+
+export function startGenerationRecord(input) {
+  return promptStore().startGenerationRecord(input)
+}
+
+export function finishGenerationRecord(input) {
+  return promptStore().finishGenerationRecord(input)
 }
 
 export function loadModelSettings() {

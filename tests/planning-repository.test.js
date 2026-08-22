@@ -62,6 +62,18 @@ test('characters, world elements and volumes support create edit reorder and del
 
   const remaining = repository.deleteEntity(second.id)
   assert.deepEqual(remaining.map((entity) => [entity.position, entity.id]), [[1, first.id]])
+
+  database.prepare('UPDATE chapters SET card_json = ? WHERE id = ?').run(JSON.stringify({ volumeId: volume.id, chapterStyle: '增加对白' }), 'chapter-1')
+  database.prepare(`
+    INSERT INTO style_profiles VALUES ('style-volume', 'project-1', 'volume', ?, '第一卷文风', '{}', '压迫感', ?, ?)
+  `).run(volume.id, '2026-08-20', '2026-08-20')
+  database.prepare(`
+    INSERT INTO prompt_bindings VALUES ('binding-volume', 'project-1', 'volume', ?, 'chapter', 'builtin-chapter-v1', 1, 1, ?, ?)
+  `).run(volume.id, '2026-08-20', '2026-08-20')
+  repository.deleteEntity(volume.id)
+  assert.equal(JSON.parse(database.prepare('SELECT card_json FROM chapters WHERE id = ?').get('chapter-1').card_json).volumeId, undefined)
+  assert.equal(database.prepare("SELECT COUNT(*) AS count FROM style_profiles WHERE scope_id = ?").get(volume.id).count, 0)
+  assert.equal(database.prepare("SELECT COUNT(*) AS count FROM prompt_bindings WHERE scope_id = ?").get(volume.id).count, 0)
   database.close()
 })
 

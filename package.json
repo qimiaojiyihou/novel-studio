@@ -11,7 +11,7 @@
     "build:go": "node scripts/build-go-service.mjs",
     "build:app": "npm run build:go && npm run build && electron-builder",
     "preview": "vite preview",
-    "check": "node --check electron/main.js && node --check electron/preload.cjs && node --check electron/model-adapter.js && node --check electron/model-gateway.js && node --check electron/model-request-config.js && node --check electron/database-migrations.js && node --check electron/workspace-repository.js && node --check electron/planning-repository.js && node --check electron/knowledge-repository.js && node --check electron/context-repository.js && node --check scripts/build-go-service.mjs",
+    "check": "node --check electron/main.js && node --check electron/preload.cjs && node --check electron/model-adapter.js && node --check electron/model-gateway.js && node --check electron/model-request-config.js && node --check electron/prompt-templates.js && node --check electron/prompt-compiler.js && node --check electron/prompt-repository.js && node --check electron/database-migrations.js && node --check electron/workspace-repository.js && node --check electron/planning-repository.js && node --check electron/knowledge-repository.js && node --check electron/context-repository.js && node --check scripts/build-go-service.mjs",
     "test": "node --test tests/*.test.js"
   },
   "dependencies": {

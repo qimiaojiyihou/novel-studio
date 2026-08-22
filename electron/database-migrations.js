@@ -1,4 +1,6 @@
-export const LATEST_SCHEMA_VERSION = 7
+import { BUILTIN_PROMPT_TEMPLATES } from './prompt-templates.js'
+
+export const LATEST_SCHEMA_VERSION = 8
 
 const migrations = [
   {
@@ -273,6 +275,110 @@ const migrations = [
       `)
     },
   },
+  {
+    version: 8,
+    name: 'versioned-prompts-and-style-inheritance',
+    up(database, now) {
+      database.exec(`
+        CREATE TABLE prompt_templates (
+          id TEXT PRIMARY KEY,
+          task TEXT NOT NULL,
+          name TEXT NOT NULL,
+          kind TEXT NOT NULL DEFAULT 'built_in' CHECK(kind IN ('built_in', 'user')),
+          enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0, 1)),
+          current_version INTEGER NOT NULL DEFAULT 1 CHECK(current_version > 0),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE prompt_template_versions (
+          id TEXT PRIMARY KEY,
+          template_id TEXT NOT NULL,
+          version INTEGER NOT NULL CHECK(version > 0),
+          content_json TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL,
+          UNIQUE(template_id, version),
+          FOREIGN KEY(template_id) REFERENCES prompt_templates(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE prompt_bindings (
+          id TEXT PRIMARY KEY,
+          project_id TEXT,
+          scope_type TEXT NOT NULL CHECK(scope_type IN ('global', 'project', 'volume', 'chapter')),
+          scope_id TEXT NOT NULL DEFAULT '',
+          task TEXT NOT NULL,
+          template_id TEXT NOT NULL,
+          enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0, 1)),
+          priority INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
+          FOREIGN KEY(template_id) REFERENCES prompt_templates(id) ON DELETE RESTRICT
+        );
+
+        CREATE TABLE style_profiles (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          scope_type TEXT NOT NULL CHECK(scope_type IN ('project', 'volume', 'chapter')),
+          scope_id TEXT NOT NULL,
+          name TEXT NOT NULL,
+          style_json TEXT NOT NULL DEFAULT '{}',
+          custom_text TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE(project_id, scope_type, scope_id),
+          FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE generation_records (
+          id TEXT PRIMARY KEY,
+          task_id TEXT NOT NULL UNIQUE,
+          project_id TEXT NOT NULL,
+          chapter_id TEXT,
+          task TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'completed', 'cancelled', 'failed')),
+          model_profile_id TEXT,
+          model_json TEXT NOT NULL DEFAULT '{}',
+          prompt_template_id TEXT NOT NULL DEFAULT '',
+          prompt_template_version INTEGER NOT NULL DEFAULT 1,
+          prompt_snapshot_json TEXT NOT NULL DEFAULT '{}',
+          parameters_json TEXT NOT NULL DEFAULT '{}',
+          output_text TEXT NOT NULL DEFAULT '',
+          error TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL,
+          completed_at TEXT NOT NULL DEFAULT '',
+          FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
+          FOREIGN KEY(chapter_id) REFERENCES chapters(id) ON DELETE SET NULL,
+          FOREIGN KEY(model_profile_id) REFERENCES model_profiles(id) ON DELETE SET NULL
+        );
+
+        CREATE INDEX prompt_templates_task_idx ON prompt_templates(task, enabled);
+        CREATE INDEX prompt_bindings_lookup_idx ON prompt_bindings(task, project_id, scope_type, scope_id, enabled, priority);
+        CREATE INDEX style_profiles_project_scope_idx ON style_profiles(project_id, scope_type, scope_id);
+        CREATE INDEX generation_records_project_created_idx ON generation_records(project_id, created_at);
+        CREATE INDEX generation_records_chapter_created_idx ON generation_records(chapter_id, created_at);
+      `)
+
+      const createdAt = now()
+      const insertTemplate = database.prepare(`
+        INSERT INTO prompt_templates (id, task, name, kind, enabled, current_version, created_at, updated_at)
+        VALUES (?, ?, ?, 'built_in', 1, ?, ?, ?)
+      `)
+      const insertVersion = database.prepare(`
+        INSERT INTO prompt_template_versions (id, template_id, version, content_json, created_at)
+        VALUES (?, ?, ?, ?, ?)
+      `)
+      const insertBinding = database.prepare(`
+        INSERT INTO prompt_bindings (id, project_id, scope_type, scope_id, task, template_id, enabled, priority, created_at, updated_at)
+        VALUES (?, NULL, 'global', '', ?, ?, 1, 0, ?, ?)
+      `)
+      for (const template of BUILTIN_PROMPT_TEMPLATES) {
+        insertTemplate.run(template.id, template.task, template.name, template.version, createdAt, createdAt)
+        insertVersion.run(`${template.id}-version-${template.version}`, template.id, template.version, JSON.stringify(template.content), createdAt)
+        insertBinding.run(`binding-global-${template.task}`, template.task, template.id, createdAt, createdAt)
+      }
+    },
+  },
 ]
 
 function readForeignKeyCheck(database) {
@@ -303,7 +409,7 @@ export function runMigrations(database, { now = () => new Date().toISOString() }
       if (applied.has(migration.version)) continue
       database.exec('BEGIN IMMEDIATE')
       try {
-        migration.up(database)
+        migration.up(database, now)
         recordMigration.run(migration.version, migration.name, now())
         database.exec('COMMIT')
       } catch (error) {
