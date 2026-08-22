@@ -14,7 +14,8 @@ function compactJson(value, limit = 12000) {
   return content.length > limit ? content.slice(0, limit) + '…' : content
 }
 
-function contextFor({ project, chapter, planningCenter, knowledgeCenter, instruction }) {
+function contextFor({ project, chapter, planningCenter, knowledgeCenter, longContext, instruction }) {
+  if (longContext?.text) return longContext.text
   const planning = planningCenter ? {
     foundation: planningCenter.documents?.foundation?.content || {},
     worldOverview: planningCenter.documents?.world?.content || {},
@@ -46,6 +47,12 @@ function contextFor({ project, chapter, planningCenter, knowledgeCenter, instruc
 function messagesFor(task, input) {
   const context = contextFor(input)
   const system = '你是 Novel Studio 的小说创作协作者。遵守用户给出的题材、人物和文风，只输出当前任务需要的内容，不解释过程。'
+  if (task === 'connection_test') {
+    return [
+      { role: 'system', content: '这是模型连接测试。不要解释，只回复 NOVEL_STUDIO_OK。' },
+      { role: 'user', content: '回复 NOVEL_STUDIO_OK' },
+    ]
+  }
   if (task === 'planning_field') {
     const planning = input.planning || {}
     return [
@@ -119,6 +126,44 @@ function normalizedModel(modelProfile) {
   }
 }
 
+function finiteNumber(value, minimum, maximum) {
+  const number = Number(value)
+  return Number.isFinite(number) && number >= minimum && number <= maximum ? number : null
+}
+
+function parametersFor(task, modelProfile) {
+  const provider = modelProfile?.provider || 'mock'
+  const settings = modelProfile?.settings || {}
+  const taskTemperature = task === 'rewrite' ? 0.55 : task === 'planning_field' ? 0.68 : task === 'connection_test' ? 0 : 0.78
+  if (provider !== 'deepseek') return { temperature: taskTemperature }
+
+  const parameters = {
+    thinking: { type: settings.thinkingEnabled === false ? 'disabled' : 'enabled' },
+    reasoning_effort: ['low', 'high', 'max'].includes(settings.reasoningEffort) ? settings.reasoningEffort : 'high',
+    max_tokens: Math.round(finiteNumber(settings.maxTokens, 1, 131072) || (task === 'connection_test' ? 32 : 4096)),
+    response_format: {
+      type: settings.responseFormat === 'json_object' || (settings.responseFormat !== 'text' && task === 'chapter_card')
+        ? 'json_object'
+        : 'text',
+    },
+  }
+  if (task === 'connection_test') {
+    parameters.thinking = { type: 'disabled' }
+    parameters.max_tokens = 32
+    parameters.response_format = { type: 'text' }
+    parameters.temperature = 0
+    return parameters
+  }
+  if (settings.samplingMode === 'top_p') {
+    parameters.top_p = finiteNumber(settings.topP, 0, 1) ?? 1
+  } else if (settings.samplingMode === 'temperature') {
+    parameters.temperature = finiteNumber(settings.temperature, 0, 2) ?? taskTemperature
+  } else {
+    parameters.temperature = taskTemperature
+  }
+  return parameters
+}
+
 export class GenerationCancelledError extends Error {
   constructor() {
     super('生成任务已取消')
@@ -131,18 +176,26 @@ export function prepareModelTask(input) {
   const provider = modelProfile?.provider || 'mock'
   const needsKey = provider !== 'local' && provider !== 'mock'
   const missingConfiguration = !modelProfile?.baseUrl || !modelProfile?.model || (needsKey && !apiKey)
+  if (task === 'connection_test' && missingConfiguration) {
+    if (!modelProfile?.baseUrl) throw new Error('请先填写模型 Base URL')
+    if (!modelProfile?.model) throw new Error('请先填写模型名称')
+    if (needsKey && !apiKey) throw new Error('请先填写 API Key')
+  }
+  const parameters = parametersFor(task, modelProfile)
   const prepared = {
     task,
     endpoint: modelProfile?.baseUrl || '',
     apiKey: apiKey || '',
     model: modelProfile?.model || '',
     messages: messagesFor(task, input),
-    temperature: task === 'rewrite' ? 0.55 : task === 'planning_field' ? 0.68 : 0.78,
+    temperature: Number(parameters.temperature ?? 0),
+    parameters,
     modelProfile: normalizedModel(modelProfile),
     execution: missingConfiguration ? 'mock' : 'remote',
     fallbackReason: '',
     mockContent: '',
     mockDelayMs: Number.isFinite(input.mockDelayMs) ? input.mockDelayMs : 8,
+    contextDiagnostics: input.longContext?.diagnostics || null,
   }
   if (!missingConfiguration) return prepared
 
@@ -165,9 +218,10 @@ export function shapeModelResult(prepared, content, gateway = 'embedded') {
     model: prepared.modelProfile,
   }
   if (prepared.fallbackReason) base.fallbackReason = prepared.fallbackReason
+  if (prepared.contextDiagnostics) base.contextDiagnostics = prepared.contextDiagnostics
   if (prepared.task === 'chapter_card') return { ...base, card: parseJsonObject(content) }
   if (prepared.task === 'scene_plan') return { ...base, scenePlan: String(content).trim() }
-  if (prepared.task === 'rewrite' || prepared.task === 'planning_field') return { ...base, text: String(content).trim() }
+  if (prepared.task === 'rewrite' || prepared.task === 'planning_field' || prepared.task === 'connection_test') return { ...base, text: String(content).trim() }
   return { ...base, manuscript: String(content).trim() }
 }
 
@@ -264,8 +318,8 @@ async function requestRemote(prepared, signal, onDelta) {
       body: JSON.stringify({
         model: prepared.model,
         messages: prepared.messages,
-        temperature: prepared.temperature,
         stream: true,
+        ...prepared.parameters,
       }),
       signal: linkedSignal.signal,
     })

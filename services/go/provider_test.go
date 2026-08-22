@@ -19,14 +19,22 @@ func TestProviderForwardsOpenAICompatibleStreamingRequest(t *testing.T) {
 			t.Errorf("unexpected authorization header")
 		}
 		var payload struct {
-			Model  string `json:"model"`
-			Stream bool   `json:"stream"`
+			Model           string         `json:"model"`
+			Stream          bool           `json:"stream"`
+			TopP            float64        `json:"top_p"`
+			Thinking        map[string]any `json:"thinking"`
+			ReasoningEffort string         `json:"reasoning_effort"`
+			MaxTokens       int            `json:"max_tokens"`
+			ResponseFormat  map[string]any `json:"response_format"`
 		}
 		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
 			t.Fatal(err)
 		}
 		if payload.Model != "provider-model" || !payload.Stream {
 			t.Errorf("unexpected provider payload: %#v", payload)
+		}
+		if payload.TopP != 0.8 || payload.Thinking["type"] != "enabled" || payload.ReasoningEffort != "max" || payload.MaxTokens != 8192 || payload.ResponseFormat["type"] != "json_object" {
+			t.Errorf("advanced parameters were not forwarded: %#v", payload)
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"候选\"}}]}\n\n")
@@ -41,6 +49,14 @@ func TestProviderForwardsOpenAICompatibleStreamingRequest(t *testing.T) {
 		APIKey:   "provider-key",
 		Model:    "provider-model",
 		Messages: []chatMessage{{Role: "user", Content: "生成正文"}},
+		Parameters: map[string]any{
+			"top_p":            0.8,
+			"thinking":         map[string]any{"type": "enabled"},
+			"reasoning_effort": "max",
+			"max_tokens":       8192,
+			"response_format":  map[string]any{"type": "json_object"},
+			"ignored_field":    "must-not-pass",
+		},
 	}, func(delta string) {
 		streamed.WriteString(delta)
 	})

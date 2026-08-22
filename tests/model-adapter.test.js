@@ -125,3 +125,69 @@ test('generation context includes confirmed knowledge and open continuity checks
   assert.match(userMessage, /只能由原作者修改/)
   assert.match(userMessage, /缺少场景计划/)
 })
+
+test('DeepSeek advanced parameters are included without mixing temperature and top_p', () => {
+  const prepared = prepareModelTask({
+    ...baseInput,
+    task: 'chapter_card',
+    modelProfile: {
+      id: 'deepseek-default',
+      provider: 'deepseek',
+      name: 'DeepSeek',
+      baseUrl: 'https://api.deepseek.com/v1',
+      model: 'deepseek-v4-flash',
+      settings: {
+        thinkingEnabled: true,
+        reasoningEffort: 'max',
+        samplingMode: 'top_p',
+        topP: 0.82,
+        maxTokens: 8192,
+        responseFormat: 'auto',
+      },
+    },
+    apiKey: 'deepseek-key',
+  })
+  assert.deepEqual(prepared.parameters.thinking, { type: 'enabled' })
+  assert.equal(prepared.parameters.reasoning_effort, 'max')
+  assert.equal(prepared.parameters.top_p, 0.82)
+  assert.equal('temperature' in prepared.parameters, false)
+  assert.equal(prepared.parameters.max_tokens, 8192)
+  assert.deepEqual(prepared.parameters.response_format, { type: 'json_object' })
+})
+
+test('connection test requires complete configuration and uses a minimal request', () => {
+  assert.throws(() => prepareModelTask({ task: 'connection_test', modelProfile: { provider: 'deepseek' } }), /Base URL/)
+  const prepared = prepareModelTask({
+    task: 'connection_test',
+    modelProfile: {
+      provider: 'deepseek',
+      name: 'DeepSeek',
+      baseUrl: 'https://api.deepseek.com/v1',
+      model: 'deepseek-v4-flash',
+      settings: { thinkingEnabled: true, reasoningEffort: 'max', maxTokens: 9000 },
+    },
+    apiKey: 'deepseek-key',
+  })
+  assert.equal(prepared.execution, 'remote')
+  assert.deepEqual(prepared.parameters.thinking, { type: 'disabled' })
+  assert.equal(prepared.parameters.max_tokens, 32)
+  assert.equal(prepared.parameters.temperature, 0)
+  assert.match(prepared.messages[1].content, /NOVEL_STUDIO_OK/)
+})
+
+test('prebuilt long-form context replaces the legacy all-record context and returns diagnostics', async () => {
+  const prepared = prepareModelTask({
+    ...baseInput,
+    longContext: {
+      text: '## 当前创作任务\n只携带被预算选中的内容',
+      diagnostics: { budgetChars: 8000, usedChars: 23, recentChapterIds: ['chapter-1'] },
+    },
+    knowledgeCenter: { facts: [{ status: 'open', title: '不应直接注入', content: {} }] },
+    mockDelayMs: 0,
+  })
+  const message = prepared.messages.find((item) => item.role === 'user').content
+  assert.match(message, /只携带被预算选中的内容/)
+  assert.doesNotMatch(message, /不应直接注入/)
+  const result = await runEmbeddedModelTask(prepared)
+  assert.equal(result.contextDiagnostics.budgetChars, 8000)
+})

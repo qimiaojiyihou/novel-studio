@@ -25,7 +25,10 @@ function seedWorkspace(database) {
   `).run('project-1', '测试项目', '都市', '想法', '', now, now)
   database.prepare('INSERT INTO chapters VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run('chapter-1', 'project-1', 1, '第一章', 'draft', '{}', '', '正文', now)
   database.prepare('INSERT INTO revisions VALUES (?, ?, ?, ?, ?)').run('revision-1', 'chapter-1', '旧正文', 'manual', now)
-  database.prepare('INSERT INTO model_profiles VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run('model-1', 'custom', '测试模型', 'http://127.0.0.1/v1', 'test', '', 1, now, now)
+  database.prepare(`
+    INSERT INTO model_profiles (id, provider, name, base_url, model, api_key_cipher, enabled, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run('model-1', 'custom', '测试模型', 'http://127.0.0.1/v1', 'test', '', 1, now, now)
   database.prepare('INSERT INTO task_routes VALUES (?, ?, ?)').run('chapter', 'model-1', now)
 }
 
@@ -46,6 +49,9 @@ test('fresh database migrates to the latest schema with foreign keys enabled', (
     assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'planning_candidates'").get())
     assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'knowledge_items'").get())
     assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'continuity_checks'").get())
+    assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'context_profiles'").get())
+    assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'chapter_memories'").get())
+    assert.ok(database.prepare('PRAGMA table_info(model_profiles)').all().some((column) => column.name === 'settings_json'))
   } finally {
     database.close()
   }

@@ -77,6 +77,7 @@ async function startGoTask(prepared, taskId, runtime, control, onEvent) {
         model: prepared.model,
         messages: prepared.messages,
         temperature: prepared.temperature,
+        parameters: prepared.parameters,
         mockContent: prepared.mockContent,
         mockDelayMs: prepared.mockDelayMs,
       }),

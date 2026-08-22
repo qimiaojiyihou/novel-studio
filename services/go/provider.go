@@ -19,15 +19,16 @@ type chatMessage struct {
 }
 
 type taskRequest struct {
-	TaskID      string        `json:"taskId"`
-	Task        string        `json:"task"`
-	Endpoint    string        `json:"endpoint"`
-	APIKey      string        `json:"apiKey"`
-	Model       string        `json:"model"`
-	Messages    []chatMessage `json:"messages"`
-	Temperature float64       `json:"temperature"`
-	MockContent string        `json:"mockContent"`
-	MockDelayMS int           `json:"mockDelayMs"`
+	TaskID      string         `json:"taskId"`
+	Task        string         `json:"task"`
+	Endpoint    string         `json:"endpoint"`
+	APIKey      string         `json:"apiKey"`
+	Model       string         `json:"model"`
+	Messages    []chatMessage  `json:"messages"`
+	Temperature float64        `json:"temperature"`
+	Parameters  map[string]any `json:"parameters"`
+	MockContent string         `json:"mockContent"`
+	MockDelayMS int            `json:"mockDelayMs"`
 }
 
 type providerClient struct {
@@ -54,10 +55,18 @@ func (client *providerClient) generate(
 	}
 
 	payload := map[string]any{
-		"model":       request.Model,
-		"messages":    request.Messages,
-		"temperature": request.Temperature,
-		"stream":      true,
+		"model":    request.Model,
+		"messages": request.Messages,
+		"stream":   true,
+	}
+	for key, value := range request.Parameters {
+		switch key {
+		case "temperature", "top_p", "thinking", "reasoning_effort", "max_tokens", "response_format", "stream_options", "stop":
+			payload[key] = value
+		}
+	}
+	if _, configured := payload["temperature"]; !configured && request.Temperature != 0 {
+		payload["temperature"] = request.Temperature
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {

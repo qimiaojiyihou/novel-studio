@@ -295,6 +295,7 @@ export function createPlanningRepository(database, {
     const chapter = chapterById.get(candidate.target_id)
     if (!chapter || chapter.project_id !== candidate.project_id) throw new Error('候选对应的章节不存在')
     if (candidate.field_key === 'title') return chapter.title
+    if (candidate.field_key === 'card') return JSON.stringify(parseJson(chapter.card_json))
     if (candidate.field_key === 'scenePlan') return chapter.scene_plan
     return String(parseJson(chapter.card_json)[candidate.field_key] ?? '')
   }
@@ -325,6 +326,10 @@ export function createPlanningRepository(database, {
     const chapter = chapterById.get(candidate.target_id)
     if (candidate.field_key === 'title') {
       database.prepare('UPDATE chapters SET title = ?, updated_at = ? WHERE id = ?').run(candidate.candidate_value, resolvedAt, candidate.target_id)
+    } else if (candidate.field_key === 'card') {
+      const card = parseJson(candidate.candidate_value, null)
+      if (!card || Array.isArray(card) || typeof card !== 'object') throw new Error('章节卡候选不是有效对象')
+      database.prepare('UPDATE chapters SET card_json = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(card), resolvedAt, candidate.target_id)
     } else if (candidate.field_key === 'scenePlan') {
       database.prepare('UPDATE chapters SET scene_plan = ?, updated_at = ? WHERE id = ?').run(candidate.candidate_value, resolvedAt, candidate.target_id)
     } else {

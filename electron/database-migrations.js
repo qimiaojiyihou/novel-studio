@@ -1,4 +1,4 @@
-export const LATEST_SCHEMA_VERSION = 6
+export const LATEST_SCHEMA_VERSION = 7
 
 const migrations = [
   {
@@ -228,6 +228,48 @@ const migrations = [
           WHERE source_type != 'manual' AND source_id != '';
         CREATE INDEX continuity_checks_project_status_idx ON continuity_checks(project_id, status, severity, updated_at);
         CREATE INDEX continuity_checks_chapter_idx ON continuity_checks(chapter_id);
+      `)
+    },
+  },
+  {
+    version: 7,
+    name: 'model-parameters-and-long-context',
+    up(database) {
+      database.exec(`
+        ALTER TABLE model_profiles ADD COLUMN settings_json TEXT NOT NULL DEFAULT '{}';
+
+        CREATE TABLE context_profiles (
+          project_id TEXT PRIMARY KEY,
+          max_context_chars INTEGER NOT NULL DEFAULT 32000 CHECK(max_context_chars BETWEEN 8000 AND 200000),
+          recent_chapter_count INTEGER NOT NULL DEFAULT 3 CHECK(recent_chapter_count BETWEEN 0 AND 20),
+          relevant_chapter_count INTEGER NOT NULL DEFAULT 4 CHECK(relevant_chapter_count BETWEEN 0 AND 20),
+          knowledge_limit INTEGER NOT NULL DEFAULT 16 CHECK(knowledge_limit BETWEEN 0 AND 100),
+          chapter_summary_chars INTEGER NOT NULL DEFAULT 1200 CHECK(chapter_summary_chars BETWEEN 200 AND 4000),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE chapter_memories (
+          chapter_id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          chapter_no INTEGER NOT NULL CHECK(chapter_no > 0),
+          title TEXT NOT NULL,
+          summary TEXT NOT NULL DEFAULT '',
+          keywords_json TEXT NOT NULL DEFAULT '[]',
+          source_updated_at TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY(chapter_id) REFERENCES chapters(id) ON DELETE CASCADE,
+          FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX chapter_memories_project_chapter_idx ON chapter_memories(project_id, chapter_no);
+
+        UPDATE model_profiles
+        SET model = CASE WHEN model = '' THEN 'deepseek-v4-flash' ELSE model END,
+            settings_json = '{"thinkingEnabled":true,"reasoningEffort":"high","samplingMode":"task-default","maxTokens":4096,"responseFormat":"auto"}'
+        WHERE provider = 'deepseek' AND settings_json = '{}';
       `)
     },
   },

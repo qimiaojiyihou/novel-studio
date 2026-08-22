@@ -3,7 +3,7 @@
     <section class="review-panel" role="dialog" aria-modal="true" aria-labelledby="review-title">
       <header class="review-header">
         <div>
-          <span class="eyebrow copper">MANUSCRIPT REVIEW</span>
+          <span class="eyebrow copper">CANDIDATE REVIEW</span>
           <h2 id="review-title">{{ title }}</h2>
           <p>{{ subtitle }}</p>
         </div>
@@ -14,7 +14,7 @@
       </header>
       <div ref="diffRoot" class="diff-editor" aria-label="原稿与候选稿差异"></div>
       <footer class="review-footer">
-        <span class="review-hint">候选稿尚未写入正文，接受后才会保存为新版本。</span>
+        <span class="review-hint">{{ hint }}</span>
         <div class="review-actions">
           <button class="outline-button" @click="$emit('discard')">放弃候选稿</button>
           <button class="primary-button" @click="$emit('accept')">接受候选稿</button>
@@ -34,6 +34,8 @@ const props = defineProps({
   candidate: { type: String, default: '' },
   title: { type: String, default: '正文候选稿' },
   subtitle: { type: String, default: '逐行检查 AI 生成内容，再决定是否写入正文。' },
+  hint: { type: String, default: '候选稿尚未写入正文，接受后才会保存为新版本。' },
+  language: { type: String, default: 'markdown' },
 })
 
 defineEmits(['accept', 'discard'])
@@ -45,8 +47,8 @@ let candidateModel
 
 function createDiffEditor() {
   if (!diffRoot.value || diffEditor) return
-  originalModel = monaco.editor.createModel(props.original, 'markdown')
-  candidateModel = monaco.editor.createModel(props.candidate, 'markdown')
+  originalModel = monaco.editor.createModel(props.original, props.language)
+  candidateModel = monaco.editor.createModel(props.candidate, props.language)
   diffEditor = monaco.editor.createDiffEditor(diffRoot.value, {
     automaticLayout: true,
     readOnly: true,
@@ -74,6 +76,11 @@ watch(() => props.original, (value) => {
 
 watch(() => props.candidate, (value) => {
   if (candidateModel && candidateModel.getValue() !== value) candidateModel.setValue(value)
+})
+
+watch(() => props.language, (language) => {
+  if (originalModel) monaco.editor.setModelLanguage(originalModel, language)
+  if (candidateModel) monaco.editor.setModelLanguage(candidateModel, language)
 })
 
 onMounted(() => {

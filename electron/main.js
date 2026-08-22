@@ -6,6 +6,7 @@ import { randomBytes } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import {
   archiveProject,
+  buildGenerationContext,
   createChapter,
   createKnowledgeItem,
   createPlanningCandidate,
@@ -24,12 +25,14 @@ import {
   listRevisions,
   loadPlanningCenter,
   loadKnowledgeCenter,
+  loadContextManager,
   loadModelSettings,
   loadWorkspace,
   openDatabase,
   reorderChapters,
   reorderKnowledgeItems,
   reorderPlanningEntities,
+  rebuildContextMemories,
   restoreProject,
   restoreRevision,
   resolvePlanningCandidate,
@@ -41,6 +44,7 @@ import {
   updateProject,
   updatePlanningEntity,
   updateTaskRoute,
+  updateContextProfile,
   refreshContinuityChecks,
   syncKnowledgeSources,
 } from './database.js'
@@ -194,10 +198,29 @@ function registerIpc() {
   ipcMain.handle('knowledge:items-reorder', (_event, payload) => reorderKnowledgeItems(payload))
   ipcMain.handle('knowledge:item-delete', (_event, itemId) => deleteKnowledgeItem(itemId))
   ipcMain.handle('knowledge:check-resolve', (_event, payload) => resolveContinuityCheck(payload))
+  ipcMain.handle('context:load', (_event, projectId) => loadContextManager(projectId))
+  ipcMain.handle('context:update', (_event, payload) => updateContextProfile(payload))
+  ipcMain.handle('context:rebuild', (_event, projectId) => rebuildContextMemories(projectId))
   ipcMain.handle('models:load', () => loadModelSettings())
   ipcMain.handle('models:save', (_event, profile) => saveModelProfile(profile))
   ipcMain.handle('models:delete', (_event, id) => deleteModelProfile(id))
   ipcMain.handle('models:route', (_event, payload) => updateTaskRoute(payload.task, payload.modelProfileId))
+  ipcMain.handle('models:test', async (_event, payload = {}) => {
+    const profile = { ...payload, settings: payload.settings || {} }
+    const apiKey = String(payload.apiKey || '') || (profile.id ? getModelApiKey(profile.id) : '')
+    const startedAt = Date.now()
+    const result = await modelGateway.generate(
+      { task: 'connection_test', modelProfile: profile, apiKey },
+      { taskId: `connection-test-${randomBytes(8).toString('hex')}` },
+    )
+    return {
+      ok: result.execution === 'remote',
+      latencyMs: Date.now() - startedAt,
+      gateway: result.gateway,
+      model: result.model,
+      response: result.text,
+    }
+  })
   ipcMain.handle('generation:start', async (event, payload) => {
     const taskId = String(payload?.taskId || '')
     if (!taskId) throw new Error('生成任务缺少 taskId')
@@ -205,13 +228,19 @@ function registerIpc() {
     const chapter = workspace.chapters.find((item) => item.id === payload?.chapterId) || workspace.chapters[0]
     const planningCenter = workspace.project ? loadPlanningCenter(workspace.project.id) : null
     const knowledgeCenter = workspace.project ? loadKnowledgeCenter(workspace.project.id) : null
+    const longContext = workspace.project ? buildGenerationContext({
+      projectId: workspace.project.id,
+      chapterId: chapter?.id,
+      instruction: payload?.instruction,
+      task: payload?.task,
+    }) : null
     const modelSettings = loadModelSettings()
     const modelProfileId = payload?.modelProfileId || modelSettings.routes[payload?.task] || 'local-default'
     const modelProfile = modelSettings.profiles.find((profile) => profile.id === modelProfileId)
     const apiKey = getModelApiKey(modelProfileId)
     try {
       return await modelGateway.generate(
-        { ...payload, project: workspace.project, chapter, planningCenter, knowledgeCenter, modelProfile, apiKey },
+        { ...payload, project: workspace.project, chapter, planningCenter, knowledgeCenter, longContext, modelProfile, apiKey },
         {
           taskId,
           onEvent: (generationEvent) => {

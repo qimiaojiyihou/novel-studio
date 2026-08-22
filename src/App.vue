@@ -277,6 +277,8 @@
       :candidate="candidate.content"
       :title="candidate.title"
       :subtitle="candidate.subtitle"
+      :hint="candidate.hint"
+      :language="candidate.language"
       @accept="acceptCandidate"
       @discard="discardCandidate"
     />
@@ -430,7 +432,7 @@ const selectionPreview = reactive({
   originalText: '',
   replacementText: '',
 })
-const candidate = reactive({ visible: false, original: '', content: '', title: '', subtitle: '' })
+const candidate = reactive({ visible: false, original: '', content: '', title: '', subtitle: '', hint: '', language: 'markdown', task: '', candidateId: '', targetTab: 'manuscript' })
 const streamPreview = reactive({ visible: false, task: '', status: '', content: '', gateway: 'embedded' })
 const runtime = reactive({ goServiceStatus: 'embedded-fallback', mode: 'embedded' })
 const project = reactive({ title: '', genre: '', idea: '', style: '' })
@@ -955,22 +957,43 @@ async function runGeneration(task) {
       instruction: instruction.value,
       modelProfileId: modelSettings.routes[task],
     })
-    if (task === 'chapter_card') {
-      const updated = await appService.updateChapter({ id: activeChapter.value.id, card: result.card })
-      replaceChapter(updated)
-      activeTab.value = 'card'
-      showToast(`章节卡已生成 · ${executionLabel(result)}`)
-    } else if (task === 'scene_plan') {
-      const updated = await appService.updateChapter({ id: activeChapter.value.id, scenePlan: result.scenePlan })
-      replaceChapter(updated)
-      activeTab.value = 'scene'
-      showToast(`场景计划已生成 · ${executionLabel(result)}`)
+    if (task === 'chapter_card' || task === 'scene_plan') {
+      const isCard = task === 'chapter_card'
+      const currentValue = isCard ? JSON.stringify(activeChapter.value.card || {}) : activeChapter.value.scene_plan || ''
+      const generatedValue = isCard ? JSON.stringify(result.card) : result.scenePlan || ''
+      const pending = await appService.createPlanningCandidate({
+        projectId: project.id,
+        targetType: 'chapter',
+        targetId: activeChapter.value.id,
+        fieldKey: isCard ? 'card' : 'scenePlan',
+        fieldLabel: isCard ? '章节卡' : '场景计划',
+        originalValue: currentValue,
+        candidateValue: generatedValue,
+        instruction: instruction.value,
+        model: result.model,
+      })
+      candidate.original = isCard ? JSON.stringify(activeChapter.value.card || {}, null, 2) : activeChapter.value.scene_plan || ''
+      candidate.content = isCard ? JSON.stringify(result.card, null, 2) : result.scenePlan || ''
+      candidate.title = isCard ? '章节卡候选' : '场景计划候选'
+      candidate.subtitle = `生成来源：${executionLabel(result)}。确认后才会替换当前${isCard ? '章节卡' : '场景计划'}。`
+      candidate.hint = `候选尚未写入${isCard ? '章节卡' : '场景计划'}，接受后才会成为正式规划。`
+      candidate.language = isCard ? 'json' : 'markdown'
+      candidate.task = task
+      candidate.candidateId = pending.id
+      candidate.targetTab = isCard ? 'card' : 'scene'
+      candidate.visible = true
+      showToast(`${isCard ? '章节卡' : '场景计划'}候选已生成，请确认差异`)
     } else if (task === 'chapter') {
       activeTab.value = 'manuscript'
       candidate.original = originalManuscript
       candidate.content = result.manuscript || ''
       candidate.title = '正文候选稿'
       candidate.subtitle = `生成来源：${executionLabel(result)}。请在差异视图中确认后再写入正文。`
+      candidate.hint = '候选稿尚未写入正文，接受后才会保存为新版本。'
+      candidate.language = 'markdown'
+      candidate.task = 'chapter'
+      candidate.candidateId = ''
+      candidate.targetTab = 'manuscript'
       candidate.visible = true
       showToast('正文候选稿已生成，请确认差异')
     }
@@ -1119,6 +1142,22 @@ function discardSelectionPreview() {
 
 async function acceptCandidate() {
   if (!candidate.visible || !activeChapter.value) return
+  if (candidate.candidateId) {
+    try {
+      await appService.resolvePlanningCandidate({ candidateId: candidate.candidateId, decision: 'accepted' })
+      const loaded = await appService.loadWorkspace(project.id)
+      const updated = loaded.chapters.find((chapter) => chapter.id === activeChapter.value.id)
+      replaceChapter(updated)
+      activeTab.value = candidate.targetTab
+      const label = candidate.task === 'chapter_card' ? '章节卡' : '场景计划'
+      candidate.visible = false
+      candidate.candidateId = ''
+      showToast(`${label}候选已接受`)
+    } catch (error) {
+      showToast(`接受候选失败：${error.message}`)
+    }
+    return
+  }
   editorText.value = candidate.content
   try {
     await saveManuscript({ createRevision: true, source: 'ai-generation-accepted', forceRevision: true })
@@ -1129,9 +1168,19 @@ async function acceptCandidate() {
   }
 }
 
-function discardCandidate() {
+async function discardCandidate() {
+  if (candidate.candidateId) {
+    try {
+      await appService.resolvePlanningCandidate({ candidateId: candidate.candidateId, decision: 'discarded' })
+    } catch (error) {
+      showToast(`放弃候选失败：${error.message}`)
+      return
+    }
+  }
   candidate.visible = false
-  showToast('已放弃正文候选稿，原稿保持不变')
+  const label = candidate.task === 'chapter_card' ? '章节卡' : candidate.task === 'scene_plan' ? '场景计划' : '正文'
+  candidate.candidateId = ''
+  showToast(`已放弃${label}候选，原稿保持不变`)
 }
 
 function scheduleAutosave() {
@@ -1163,7 +1212,7 @@ async function handleCloseRequest() {
   closeInProgress = true
   try {
     await flushPlanningMemory()
-    if (candidate.visible) discardCandidate()
+    if (candidate.visible) await discardCandidate()
     if (selectionPreview.visible) discardSelectionPreview()
     if (isDirty.value) await saveManuscript({ createRevision: false, source: 'close-autosave' })
     appService.respondToClose({ saved: true })

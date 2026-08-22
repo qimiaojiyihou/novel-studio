@@ -94,11 +94,23 @@ export const appService = {
   resolveContinuityCheck(payload) {
     return electronApi.resolveContinuityCheck(payload)
   },
+  loadContextManager(projectId) {
+    return electronApi.loadContextManager(projectId)
+  },
+  updateContextProfile(payload) {
+    return electronApi.updateContextProfile(payload)
+  },
+  rebuildContextMemories(projectId) {
+    return electronApi.rebuildContextMemories(projectId)
+  },
   loadModelSettings() {
     return electronApi.loadModelSettings()
   },
   saveModelProfile(profile) {
     return electronApi.saveModelProfile(profile)
+  },
+  testModelProfile(profile) {
+    return electronApi.testModelProfile(profile)
   },
   deleteModelProfile(id) {
     return electronApi.deleteModelProfile(id)

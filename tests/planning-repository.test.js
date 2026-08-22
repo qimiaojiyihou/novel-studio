@@ -109,6 +109,32 @@ test('field candidates are persistent, explicit and protected from stale overwri
   })
   repository.resolveCandidate({ candidateId: chapterCandidate.id, decision: 'accepted' })
   assert.equal(JSON.parse(database.prepare('SELECT card_json FROM chapters WHERE id = ?').get('chapter-1').card_json).goal, '让主角公开做出选择。')
+
+  const originalCard = JSON.parse(database.prepare('SELECT card_json FROM chapters WHERE id = ?').get('chapter-1').card_json)
+  const replacementCard = { goal: '赢得邀请', resistance: '旧承诺阻止他', requiredScenes: [{ id: 'scene-1', title: '后台对峙' }] }
+  const cardCandidate = repository.createCandidate({
+    projectId: 'project-1',
+    targetType: 'chapter',
+    targetId: 'chapter-1',
+    fieldKey: 'card',
+    fieldLabel: '章节卡',
+    originalValue: JSON.stringify(originalCard),
+    candidateValue: JSON.stringify(replacementCard),
+  })
+  repository.resolveCandidate({ candidateId: cardCandidate.id, decision: 'accepted' })
+  assert.deepEqual(JSON.parse(database.prepare('SELECT card_json FROM chapters WHERE id = ?').get('chapter-1').card_json), replacementCard)
+
+  const sceneCandidate = repository.createCandidate({
+    projectId: 'project-1',
+    targetType: 'chapter',
+    targetId: 'chapter-1',
+    fieldKey: 'scenePlan',
+    fieldLabel: '场景计划',
+    originalValue: '',
+    candidateValue: '场景一：后台对峙。',
+  })
+  repository.resolveCandidate({ candidateId: sceneCandidate.id, decision: 'accepted' })
+  assert.equal(database.prepare('SELECT scene_plan FROM chapters WHERE id = ?').get('chapter-1').scene_plan, '场景一：后台对峙。')
   database.close()
 })
 

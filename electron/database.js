@@ -4,6 +4,7 @@ import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { getSchemaVersion, runMigrations } from './database-migrations.js'
 import { createKnowledgeRepository } from './knowledge-repository.js'
+import { createContextRepository } from './context-repository.js'
 import { createPlanningRepository } from './planning-repository.js'
 import { createWorkspaceRepository } from './workspace-repository.js'
 
@@ -11,9 +12,29 @@ let database
 let workspaceRepository
 let planningRepository
 let knowledgeRepository
+let contextRepository
 
 function timestamp() {
   return new Date().toISOString()
+}
+
+function parseJson(value, fallback = {}) {
+  try {
+    return value ? JSON.parse(value) : fallback
+  } catch {
+    return fallback
+  }
+}
+
+function defaultModelSettings(provider) {
+  if (provider !== 'deepseek') return {}
+  return {
+    thinkingEnabled: true,
+    reasoningEffort: 'high',
+    samplingMode: 'task-default',
+    maxTokens: 4096,
+    responseFormat: 'auto',
+  }
 }
 
 function encryptApiKey(value) {
@@ -51,6 +72,7 @@ export function openDatabase() {
   workspaceRepository = createWorkspaceRepository(database)
   planningRepository = createPlanningRepository(database)
   knowledgeRepository = createKnowledgeRepository(database)
+  contextRepository = createContextRepository(database)
   return database
 }
 
@@ -67,6 +89,11 @@ function planningStore() {
 function knowledgeStore() {
   openDatabase()
   return knowledgeRepository
+}
+
+function contextStore() {
+  openDatabase()
+  return contextRepository
 }
 
 export function getDatabaseInfo() {
@@ -119,18 +146,18 @@ function seedModelProfiles() {
   if (!profile) {
     const createdAt = timestamp()
     const profiles = [
-      ['local-default', 'local', '本地正文模型', 'http://127.0.0.1:8080/v1', '', ''],
-      ['deepseek-default', 'deepseek', 'DeepSeek', 'https://api.deepseek.com/v1', '', ''],
-      ['openai-default', 'openai', 'OpenAI', 'https://api.openai.com/v1', '', ''],
-      ['kimi-default', 'kimi', 'Kimi', 'https://api.moonshot.cn/v1', '', ''],
+      ['local-default', 'local', '本地正文模型', 'http://127.0.0.1:8080/v1', '', '', {}],
+      ['deepseek-default', 'deepseek', 'DeepSeek', 'https://api.deepseek.com/v1', 'deepseek-v4-flash', '', defaultModelSettings('deepseek')],
+      ['openai-default', 'openai', 'OpenAI', 'https://api.openai.com/v1', '', '', {}],
+      ['kimi-default', 'kimi', 'Kimi', 'https://api.moonshot.cn/v1', '', '', {}],
     ]
     const statement = `
-      INSERT INTO model_profiles (id, provider, name, base_url, model, api_key_cipher, enabled, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
+      INSERT INTO model_profiles (id, provider, name, base_url, model, api_key_cipher, enabled, created_at, updated_at, settings_json)
+      VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
     `
     const insert = database.prepare(statement)
-    for (const [id, provider, name, baseUrl, model, apiKey] of profiles) {
-      insert.run(id, provider, name, baseUrl, model, encryptApiKey(apiKey), createdAt, createdAt)
+    for (const [id, provider, name, baseUrl, model, apiKey, settings] of profiles) {
+      insert.run(id, provider, name, baseUrl, model, encryptApiKey(apiKey), createdAt, createdAt, JSON.stringify(settings))
     }
   }
 
@@ -267,10 +294,27 @@ export function resolveContinuityCheck(input) {
   return knowledgeStore().resolveCheck(input)
 }
 
+export function loadContextManager(projectId) {
+  return contextStore().loadContextManager(projectId)
+}
+
+export function updateContextProfile(input) {
+  return contextStore().updateContextProfile(input)
+}
+
+export function rebuildContextMemories(projectId) {
+  return contextStore().rebuildChapterMemories(projectId)
+}
+
+export function buildGenerationContext(input) {
+  return contextStore().buildGenerationContext(input)
+}
+
 export function loadModelSettings() {
   openDatabase()
   const profiles = database.prepare(`
-    SELECT id, provider, name, base_url AS baseUrl, model, enabled, created_at AS createdAt, updated_at AS updatedAt,
+    SELECT id, provider, name, base_url AS baseUrl, model, enabled, settings_json AS settingsJson,
+      created_at AS createdAt, updated_at AS updatedAt,
       CASE WHEN api_key_cipher != '' THEN 1 ELSE 0 END AS apiKeyConfigured
     FROM model_profiles
     ORDER BY CASE provider
@@ -282,6 +326,8 @@ export function loadModelSettings() {
     END, created_at
   `).all().map((profile) => ({
     ...profile,
+    settings: { ...defaultModelSettings(profile.provider), ...parseJson(profile.settingsJson) },
+    settingsJson: undefined,
     enabled: Boolean(profile.enabled),
     apiKeyConfigured: Boolean(profile.apiKeyConfigured),
   }))
@@ -300,9 +346,15 @@ export function saveModelProfile(profile = {}) {
   const apiKeyCipher = Object.prototype.hasOwnProperty.call(profile, 'apiKey')
     ? encryptApiKey(String(profile.apiKey || ''))
     : existing?.api_key_cipher || ''
+  const provider = profile.provider || existing?.provider || 'custom'
+  const settings = {
+    ...defaultModelSettings(provider),
+    ...parseJson(existing?.settings_json),
+    ...(profile.settings && typeof profile.settings === 'object' ? profile.settings : {}),
+  }
   database.prepare(`
-    INSERT INTO model_profiles (id, provider, name, base_url, model, api_key_cipher, enabled, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO model_profiles (id, provider, name, base_url, model, api_key_cipher, enabled, created_at, updated_at, settings_json)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       provider = excluded.provider,
       name = excluded.name,
@@ -310,10 +362,11 @@ export function saveModelProfile(profile = {}) {
       model = excluded.model,
       api_key_cipher = excluded.api_key_cipher,
       enabled = excluded.enabled,
+      settings_json = excluded.settings_json,
       updated_at = excluded.updated_at
   `).run(
     id,
-    profile.provider || 'custom',
+    provider,
     profile.name || '未命名模型',
     profile.baseUrl || '',
     profile.model || '',
@@ -321,6 +374,7 @@ export function saveModelProfile(profile = {}) {
     profile.enabled === false ? 0 : 1,
     createdAt,
     updatedAt,
+    JSON.stringify(settings),
   )
   return loadModelSettings().profiles.find((item) => item.id === id)
 }

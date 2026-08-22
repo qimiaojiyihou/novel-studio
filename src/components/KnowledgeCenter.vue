@@ -28,6 +28,9 @@
         <button class="knowledge-mode check-mode" :class="{ active: mode === 'checks' }" @click="selectMode('checks')">
           <span><b>连续性检查</b><small>需要作者判断的提醒</small></span><strong>{{ center.counts.openChecks }}</strong>
         </button>
+        <button class="knowledge-mode context-mode" :class="{ active: mode === 'context' }" @click="selectMode('context')">
+          <span><b>长篇上下文</b><small>章节记忆、召回与预算</small></span><strong>{{ contextManager?.stats.memoryCount || 0 }}</strong>
+        </button>
 
         <div class="knowledge-index-note">
           <span class="eyebrow">WORKING RULE</span>
@@ -36,7 +39,7 @@
       </aside>
 
       <main class="knowledge-canvas">
-        <template v-if="mode !== 'checks'">
+        <template v-if="['facts', 'timeline', 'foreshadow'].includes(mode)">
           <div class="knowledge-sheet-heading">
             <div>
               <span class="eyebrow copper">{{ modeMeta.eyebrow }}</span>
@@ -96,6 +99,35 @@
           </div>
         </template>
 
+        <template v-else-if="mode === 'context'">
+          <div class="knowledge-sheet-heading context-heading">
+            <div><span class="eyebrow copper">LONG-FORM CONTEXT</span><h2>长篇上下文</h2><p>模型不会吞下整本小说，而是优先携带当前章、最近章节，再按本次任务召回相关旧章和知识记录。</p></div>
+            <button class="knowledge-add" @click="rebuildMemories" :disabled="contextSaving">{{ contextSaving ? '正在重建…' : '重建章节记忆' }}</button>
+          </div>
+          <div v-if="contextManager" class="context-workbench">
+            <section class="context-profile-card">
+              <div class="context-card-heading"><span>CONTEXT BUDGET</span><strong>{{ formatNumber(contextManager.profile.maxContextChars) }} 字符</strong></div>
+              <div class="context-fields">
+                <label><span><strong>单次上下文预算</strong><small>越大信息越完整，调用成本和首字延迟也越高</small></span><input v-model.number="contextManager.profile.maxContextChars" type="number" min="8000" max="200000" step="1000" /></label>
+                <label><span><strong>最近章节</strong><small>固定携带当前章之前的章节数</small></span><input v-model.number="contextManager.profile.recentChapterCount" type="number" min="0" max="20" /></label>
+                <label><span><strong>相关旧章</strong><small>根据本次任务关键词动态召回</small></span><input v-model.number="contextManager.profile.relevantChapterCount" type="number" min="0" max="20" /></label>
+                <label><span><strong>知识记录上限</strong><small>事实、时间线、伏笔和检查的合计上限</small></span><input v-model.number="contextManager.profile.knowledgeLimit" type="number" min="0" max="100" /></label>
+                <label><span><strong>单章记忆长度</strong><small>章节合同、场景推进与正文首尾的摘要容量</small></span><input v-model.number="contextManager.profile.chapterSummaryChars" type="number" min="200" max="4000" step="100" /></label>
+              </div>
+              <div class="context-profile-actions"><p>修改记忆长度后会自动重建全部章节摘要。</p><button @click="saveContextProfile" :disabled="contextSaving">保存上下文设置</button></div>
+            </section>
+            <section class="memory-ledger">
+              <div class="context-card-heading"><span>CHAPTER MEMORY LEDGER</span><strong>{{ contextManager.stats.memoryCount }} / {{ contextManager.stats.chapterCount }} 章</strong></div>
+              <div v-if="!contextManager.memories.length" class="knowledge-empty"><span>◌</span><strong>还没有章节记忆</strong><p>开始填写章节卡、场景计划或正文后，在这里重建记忆。</p></div>
+              <article v-for="memory in contextManager.memories" :key="memory.chapterId" class="memory-entry">
+                <div class="memory-number">{{ String(memory.chapterNo).padStart(2, '0') }}</div>
+                <div><div class="memory-title"><strong>{{ memory.title }}</strong><small>{{ formatTime(memory.updatedAt) }}</small></div><p>{{ memory.summary || '本章还没有可提炼的合同、场景或正文。' }}</p><div class="memory-keywords"><span v-for="keyword in memory.keywords.slice(0, 8)" :key="keyword">{{ keyword }}</span></div></div>
+              </article>
+            </section>
+          </div>
+          <div v-else class="knowledge-empty checks-empty"><span>◌</span><strong>正在建立章节记忆</strong><p>首次打开会为现有章节生成本地摘要索引。</p></div>
+        </template>
+
         <template v-else>
           <div class="knowledge-sheet-heading checks-heading">
             <div><span class="eyebrow copper">CONTINUITY AUDIT</span><h2>连续性检查</h2><p>这里的提醒来自章节合同、时间节点、伏笔账本和事实键冲突。每一条都留给作者做最后判断。</p></div>
@@ -114,8 +146,8 @@
       </main>
 
       <aside class="knowledge-source-rail">
-        <div class="source-rail-heading"><span class="eyebrow">SOURCE LENS</span><h2>{{ mode === 'checks' ? '检查说明' : '来源镜片' }}</h2></div>
-        <template v-if="mode !== 'checks' && selectedItem">
+        <div class="source-rail-heading"><span class="eyebrow">SOURCE LENS</span><h2>{{ mode === 'checks' ? '检查说明' : mode === 'context' ? '召回顺序' : '来源镜片' }}</h2></div>
+        <template v-if="['facts', 'timeline', 'foreshadow'].includes(mode) && selectedItem">
           <div class="source-badge" :class="selectedItem.sourceType"><i></i>{{ itemOriginLabel(selectedItem) }}</div>
           <div class="source-copy"><strong>{{ selectedItem.title }}</strong><p>{{ sourceDescription(selectedItem) }}</p></div>
           <div class="source-meta"><span>最近更新</span><strong>{{ formatTime(selectedItem.updatedAt) }}</strong></div>
@@ -127,6 +159,14 @@
           <div class="check-rule-card"><span>01</span><strong>章节合同</strong><p>正文开始后是否仍有明确的章节目标和可回看的变化。</p></div>
           <div class="check-rule-card"><span>02</span><strong>时间顺序</strong><p>章节事件和伏笔回收是否落在合理的时间节点上。</p></div>
           <div class="check-rule-card"><span>03</span><strong>事实键</strong><p>同一个事实键不能同时拥有互相冲突的值。</p></div>
+        </template>
+        <template v-else-if="mode === 'context'">
+          <div class="context-stat"><span>摘要字符</span><strong>{{ formatNumber(contextManager?.stats.memoryCharacters || 0) }}</strong></div>
+          <div class="check-rule-card"><span>01</span><strong>当前创作任务</strong><p>项目设定、当前章节合同、场景计划与正文尾部拥有最高优先级。</p></div>
+          <div class="check-rule-card"><span>02</span><strong>最近章节</strong><p>保持动作、人物状态和场景承接，不依赖关键词命中。</p></div>
+          <div class="check-rule-card"><span>03</span><strong>相关旧章</strong><p>按章节标题、合同、场景与正文记忆匹配本次要求。</p></div>
+          <div class="check-rule-card"><span>04</span><strong>知识与连续性</strong><p>从事实、时间线、伏笔和提醒中选择最相关记录，直到预算用完。</p></div>
+          <p class="source-help context-help">章节正文仍保存在原稿中；这里保存的是可重建的本地记忆索引，删除项目时会一起清理。</p>
         </template>
         <div v-else class="source-empty"><span>◌</span><p>选择一条记录，查看它的来源和上下文状态。</p></div>
       </aside>
@@ -146,11 +186,13 @@ import { appService } from '../services/app-service.js'
 const props = defineProps({ project: { type: Object, required: true } })
 const emit = defineEmits(['toast'])
 const center = ref(null)
+const contextManager = ref(null)
 const loadError = ref('')
 const mode = ref('facts')
 const selectedItemId = ref('')
 const saveState = ref('saved')
 const syncing = ref(false)
+const contextSaving = ref(false)
 const deleteTarget = ref(null)
 const itemTimers = new Map()
 const dirtyItems = new Set()
@@ -204,7 +246,12 @@ onBeforeUnmount(() => { void flushSaves() })
 async function loadCenter() {
   loadError.value = ''
   try {
-    center.value = await appService.loadKnowledgeCenter(props.project.id)
+    const [knowledge, context] = await Promise.all([
+      appService.loadKnowledgeCenter(props.project.id),
+      appService.loadContextManager(props.project.id),
+    ])
+    center.value = knowledge
+    contextManager.value = context
     selectedItemId.value = keepSelected(selectedItemId.value)
     saveState.value = 'saved'
   } catch (error) {
@@ -218,6 +265,24 @@ function selectMode(nextMode) { mode.value = nextMode; selectedItemId.value = ke
 async function selectItem(id) { await flushSaves(); selectedItemId.value = id }
 function cloneForIpc(value) { return JSON.parse(JSON.stringify(value ?? {})) }
 function formatTime(value) { return value ? new Date(value).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '' }
+function formatNumber(value) { return Number(value || 0).toLocaleString('zh-CN') }
+
+async function saveContextProfile() {
+  if (!contextManager.value) return
+  contextSaving.value = true
+  try {
+    contextManager.value = await appService.updateContextProfile({ projectId: props.project.id, ...cloneForIpc(contextManager.value.profile) })
+    emit('toast', '长篇上下文设置已保存')
+  } catch (error) { emit('toast', `保存上下文设置失败：${error.message}`) }
+  finally { contextSaving.value = false }
+}
+
+async function rebuildMemories() {
+  contextSaving.value = true
+  try { contextManager.value = await appService.rebuildContextMemories(props.project.id); emit('toast', '章节记忆已经重建') }
+  catch (error) { emit('toast', `重建章节记忆失败：${error.message}`) }
+  finally { contextSaving.value = false }
+}
 
 function updateTitle(item, value) { item.title = value; markDirty(item) }
 function updateField(item, key, value) { item.content[key] = value; markDirty(item) }
@@ -320,6 +385,7 @@ defineExpose({ flushSaves })
 .knowledge-canvas { min-width: 0; min-height: 0; overflow: auto; padding: 25px 28px 60px; background: #eee7da; }.knowledge-sheet-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; width: min(980px, 100%); margin: 0 auto 20px; padding: 0 2px 20px; border-bottom: 1px solid #d4c9bb; }.knowledge-sheet-heading h2 { margin: 7px 0 4px; font: 25px var(--font-display); }.knowledge-sheet-heading p { max-width: 510px; margin: 0; color: #928679; font: 10px/1.6 var(--font-body); }.knowledge-add { padding: 8px 10px; color: #fff8ef; border: 1px solid var(--copper); background: var(--copper); font-size: 9px; }.knowledge-item-layout { display: grid; grid-template-columns: minmax(180px, .34fr) minmax(360px, 1fr); gap: 18px; width: min(980px, 100%); margin: 0 auto; }.knowledge-list { display: grid; align-content: start; gap: 5px; }.knowledge-list-item { display: grid; grid-template-columns: 22px minmax(0, 1fr) 15px; align-items: start; gap: 8px; width: 100%; padding: 11px 9px; color: #70655a; border: 1px solid transparent; border-left: 2px solid #c8b8a6; background: rgba(255,255,255,.32); text-align: left; }.knowledge-list-item:hover, .knowledge-list-item.active { color: #403932; border-color: #c7b7a5; border-left-color: var(--copper); background: #fffaf2; }.knowledge-list-item.chapter { border-left-color: #a98c73; }.knowledge-list-item.manual { border-left-color: #729481; }.knowledge-list-mark { color: var(--copper); font: 9px var(--font-ui); }.knowledge-list-copy { min-width: 0; display: grid; gap: 4px; }.knowledge-list-copy strong { overflow: hidden; font: 12px var(--font-display); text-overflow: ellipsis; white-space: nowrap; }.knowledge-list-copy small { overflow: hidden; color: #94887b; font: 9px/1.45 var(--font-body); text-overflow: ellipsis; white-space: nowrap; }.knowledge-list-item i { color: var(--pine); font-style: normal; }.knowledge-empty, .knowledge-no-selection { display: grid; justify-items: center; align-content: center; min-height: 270px; padding: 25px; color: #8d8073; border: 1px dashed #c3b5a5; text-align: center; }.knowledge-empty > span { color: var(--copper); font-size: 26px; }.knowledge-empty strong { margin-top: 8px; color: #5d544c; font: 15px var(--font-display); }.knowledge-empty p { max-width: 220px; margin: 8px 0 14px; font: 10px/1.6 var(--font-body); }.knowledge-empty button { padding: 8px 10px; color: #fff8ef; border: 1px solid var(--copper); background: var(--copper); font-size: 9px; }.knowledge-editor { min-width: 0; padding: 22px 24px 30px; background: var(--paper-soft); box-shadow: 0 8px 28px rgba(62,49,39,.08); }.knowledge-editor-topline { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--copper); font: 600 8px var(--font-ui); letter-spacing: .13em; }.knowledge-editor-actions { display: flex; gap: 4px; }.knowledge-editor-actions button { width: 26px; height: 25px; color: #82766b; border: 1px solid #d6cabc; background: transparent; font-size: 9px; }.knowledge-editor-actions button:disabled { opacity: .4; }.knowledge-editor-actions .danger-link { width: auto; padding: 0 7px; color: #a14d3b; }.knowledge-title-row { display: flex; align-items: center; gap: 12px; margin-top: 9px; }.knowledge-title-row input { min-width: 0; flex: 1; padding: 2px 0; color: #352f2a; border: 0; border-bottom: 1px solid transparent; outline: 0; background: transparent; font: 25px var(--font-display); }.knowledge-title-row input:focus { border-bottom-color: var(--copper-light); }.knowledge-status { flex: 0 0 auto; padding: 5px 7px; color: #82766b; border: 1px solid #d5c4b4; font-size: 8px; }.knowledge-status.resolved { color: var(--pine); border-color: #a2b9aa; }.knowledge-status.archived { color: #9d8d7e; }.knowledge-editor-note { margin: 8px 0 22px; color: #93877b; font: 9px/1.55 var(--font-body); }.knowledge-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 19px 16px; }.knowledge-fields label { display: grid; align-content: start; gap: 7px; min-width: 0; }.knowledge-fields label.wide { grid-column: 1 / -1; }.knowledge-fields label > span { display: grid; gap: 3px; }.knowledge-fields label strong { color: #49423b; font: 13px var(--font-display); }.knowledge-fields label small { color: #9a8d7e; font-size: 8px; line-height: 1.35; }.knowledge-fields input, .knowledge-fields textarea, .knowledge-fields select { width: 100%; min-height: 36px; padding: 8px 9px; color: #49423b; border: 1px solid #d8cdbf; outline: 0; background: rgba(255,255,255,.46); font: 11px/1.65 var(--font-body); }.knowledge-fields textarea { min-height: 84px; resize: vertical; }.knowledge-fields input:focus, .knowledge-fields textarea:focus, .knowledge-fields select:focus { border-color: var(--copper-light); background: #fffdf8; box-shadow: 0 0 0 2px rgba(182,85,62,.06); }.knowledge-fields select { height: 36px; }
 .knowledge-source-rail { min-height: 0; overflow: auto; color: #514a43; border-left: 1px solid #cec2b3; background: #e5dccd; }.source-rail-heading { padding: 22px 20px 17px; border-bottom: 1px solid #cfc3b4; }.source-rail-heading h2 { margin: 8px 0 0; font: 19px var(--font-display); }.source-badge { display: inline-flex; align-items: center; gap: 6px; margin: 19px 20px 0; padding: 5px 7px; color: #8b7769; border: 1px solid #cdb7a5; font-size: 8px; }.source-badge i { width: 5px; height: 5px; border-radius: 50%; background: #a88a70; }.source-badge.manual { color: var(--pine); border-color: #a7b8aa; }.source-badge.manual i { background: var(--pine); }.source-badge.chapter { color: #80654f; }.source-copy { padding: 14px 20px 18px; }.source-copy strong { font: 15px var(--font-display); }.source-copy p { margin: 8px 0 0; color: #8d8073; font: 10px/1.6 var(--font-body); }.source-meta { display: flex; justify-content: space-between; gap: 10px; padding: 10px 20px; border-top: 1px solid #d0c4b5; color: #978a7c; font-size: 8px; }.source-meta strong { color: #6e6258; font-size: 8px; }.source-meta .included { color: var(--pine); }.source-rule { margin: 18px 20px; border-top: 1px solid #cdbfaf; }.source-help { margin: 0 20px; color: #887b6f; font: 10px/1.7 var(--font-body); }.source-empty { display: grid; justify-items: center; padding: 50px 25px; color: #8d8073; text-align: center; }.source-empty span { color: var(--copper); font-size: 27px; }.source-empty p { font: 10px/1.6 var(--font-body); }.check-rule-card { margin: 14px 20px 0; padding: 12px 0 14px 29px; border-bottom: 1px solid #cfc3b4; position: relative; }.check-rule-card span { position: absolute; left: 0; top: 12px; color: var(--copper); font: 9px var(--font-ui); }.check-rule-card strong { font: 14px var(--font-display); }.check-rule-card p { margin: 6px 0 0; color: #8d8073; font: 10px/1.6 var(--font-body); }
 .checks-heading { align-items: center; }.check-summary { display: grid; justify-items: end; color: #927c69; }.check-summary strong { color: var(--copper); font: 29px var(--font-display); }.check-summary span { font-size: 8px; }.check-list { display: grid; gap: 9px; width: min(980px, 100%); margin: 0 auto; }.check-card { display: grid; grid-template-columns: 32px minmax(0, 1fr) auto; align-items: start; gap: 13px; padding: 17px 18px; border: 1px solid #d1c1b1; border-left: 3px solid #c89b82; background: var(--paper-soft); }.check-card.severity-warning { border-left-color: #bd8a48; }.check-card.severity-critical { border-left-color: #a34e3c; }.check-card.resolved { opacity: .62; border-left-color: #799786; }.check-card-mark { display: grid; place-items: center; width: 27px; height: 27px; color: #a9795d; border: 1px solid #d6b6a2; border-radius: 50%; font: 14px var(--font-display); }.severity-warning .check-card-mark { color: #a5793e; border-color: #d5b680; }.severity-critical .check-card-mark { color: #a34e3c; border-color: #d29b8c; }.resolved .check-card-mark { color: var(--pine); border-color: #9bb2a2; }.check-card-copy > div { display: flex; gap: 8px; }.check-kind { color: var(--copper); font-size: 8px; letter-spacing: .08em; }.check-status { color: #a09385; font-size: 8px; }.check-card h3 { margin: 7px 0 4px; color: #4c433c; font: 15px var(--font-display); }.check-card p { margin: 0; color: #897c6e; font: 10px/1.6 var(--font-body); }.check-card-actions { display: flex; gap: 6px; align-self: center; }.check-card-actions button { padding: 7px 8px; color: #776b60; border: 1px solid #c8baaa; background: transparent; font-size: 8px; white-space: nowrap; }.check-card-actions button.resolve { color: #fff8ef; border-color: var(--copper); background: var(--copper); }.checks-empty { width: min(980px, 100%); margin: 0 auto; }.checks-empty > span { color: var(--pine); font-size: 27px; }.knowledge-confirm-backdrop { position: fixed; inset: 0; z-index: 90; display: grid; place-items: center; background: rgba(20,23,26,.7); backdrop-filter: blur(4px); }.knowledge-confirm { width: min(430px, 90vw); padding: 29px 31px; background: var(--paper-soft); box-shadow: 0 24px 65px rgba(10,12,14,.38); }.knowledge-confirm h2 { margin: 10px 0 8px; font: 23px var(--font-display); }.knowledge-confirm p { color: #8c7f72; font: 10px/1.65 var(--font-body); }.knowledge-confirm > div { display: flex; justify-content: flex-end; gap: 7px; margin-top: 20px; }.knowledge-confirm button { padding: 8px 11px; color: #766b61; border: 1px solid var(--line); background: transparent; font-size: 8px; }.knowledge-confirm button.danger { color: white; border-color: #9b4332; background: #9b4332; }.knowledge-loading { grid-column: 2 / 4; display: grid; place-items: center; color: #9b8d7e; background: var(--paper); font: 16px var(--font-display); }
+.context-workbench { display: grid; gap: 18px; width: min(980px, 100%); margin: 0 auto; }.context-profile-card, .memory-ledger { padding: 20px 22px; border: 1px solid #d2c4b4; background: var(--paper-soft); box-shadow: 0 8px 28px rgba(62,49,39,.06); }.context-card-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-bottom: 13px; color: #9b6f58; border-bottom: 1px solid #ddd1c3; font: 600 8px var(--font-ui); letter-spacing: .12em; }.context-card-heading strong { color: #544a41; font: 15px var(--font-display); letter-spacing: 0; }.context-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; padding: 18px 0; }.context-fields label { display: grid; gap: 8px; }.context-fields label > span { display: grid; gap: 4px; }.context-fields strong { color: #4f473f; font: 12px var(--font-display); }.context-fields small { color: #9a8d80; font: 8px/1.45 var(--font-body); }.context-fields input { min-width: 0; height: 37px; padding: 7px 9px; color: #51483f; border: 1px solid #d5c8b9; outline: 0; background: rgba(255,255,255,.5); font: 11px var(--font-ui); }.context-fields input:focus { border-color: var(--copper-light); }.context-profile-actions { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-top: 13px; border-top: 1px solid #ddd1c3; }.context-profile-actions p { margin: 0; color: #938678; font: 9px var(--font-body); }.context-profile-actions button { padding: 8px 10px; color: #fff8ef; border: 1px solid var(--pine); background: var(--pine); font-size: 9px; }.memory-ledger { display: grid; gap: 0; }.memory-entry { display: grid; grid-template-columns: 42px minmax(0, 1fr); gap: 13px; padding: 16px 0; border-bottom: 1px solid #ded3c6; }.memory-entry:last-child { border-bottom: 0; }.memory-number { color: var(--copper); font: 17px var(--font-display); }.memory-title { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }.memory-title strong { color: #4c443c; font: 14px var(--font-display); }.memory-title small { color: #a09385; font-size: 8px; }.memory-entry p { margin: 7px 0 9px; color: #817568; font: 10px/1.65 var(--font-body); white-space: pre-line; }.memory-keywords { display: flex; flex-wrap: wrap; gap: 5px; }.memory-keywords span { padding: 3px 5px; color: #7b6b5e; border: 1px solid #d5c4b4; font-size: 7px; }.context-stat { display: flex; align-items: flex-end; justify-content: space-between; margin: 18px 20px 8px; padding: 0 0 14px; border-bottom: 1px solid #cfc3b4; color: #938577; font-size: 8px; }.context-stat strong { color: var(--copper); font: 25px var(--font-display); }.context-help { margin-top: 20px; }.context-heading button:disabled, .context-profile-actions button:disabled { opacity: .55; }
 @keyframes knowledge-pulse { 50% { opacity: .35; transform: scale(.75); } }
-@media (max-width: 1240px) { .knowledge-layout { grid-template-columns: 180px minmax(430px, 1fr) 250px; }.knowledge-canvas { padding-right: 18px; padding-left: 18px; }.knowledge-item-layout { grid-template-columns: minmax(155px, .34fr) minmax(300px, 1fr); } }
+@media (max-width: 1240px) { .knowledge-layout { grid-template-columns: 180px minmax(430px, 1fr) 250px; }.knowledge-canvas { padding-right: 18px; padding-left: 18px; }.knowledge-item-layout { grid-template-columns: minmax(155px, .34fr) minmax(300px, 1fr); }.context-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 </style>
