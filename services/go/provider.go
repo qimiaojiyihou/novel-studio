@@ -19,16 +19,19 @@ type chatMessage struct {
 }
 
 type taskRequest struct {
-	TaskID      string         `json:"taskId"`
-	Task        string         `json:"task"`
-	Endpoint    string         `json:"endpoint"`
-	APIKey      string         `json:"apiKey"`
-	Model       string         `json:"model"`
-	Messages    []chatMessage  `json:"messages"`
-	Temperature float64        `json:"temperature"`
-	Parameters  map[string]any `json:"parameters"`
-	MockContent string         `json:"mockContent"`
-	MockDelayMS int            `json:"mockDelayMs"`
+	TaskID         string            `json:"taskId"`
+	Task           string            `json:"task"`
+	Endpoint       string            `json:"endpoint"`
+	APIKey         string            `json:"apiKey"`
+	Model          string            `json:"model"`
+	Messages       []chatMessage     `json:"messages"`
+	Temperature    float64           `json:"temperature"`
+	Parameters     map[string]any    `json:"parameters"`
+	EndpointPath   string            `json:"endpointPath"`
+	RequestHeaders map[string]string `json:"requestHeaders"`
+	Stream         *bool             `json:"stream"`
+	MockContent    string            `json:"mockContent"`
+	MockDelayMS    int               `json:"mockDelayMs"`
 }
 
 type providerClient struct {
@@ -54,16 +57,20 @@ func (client *providerClient) generate(
 		return "", errors.New("模型名称为空")
 	}
 
+	stream := true
+	if request.Stream != nil {
+		stream = *request.Stream
+	}
 	payload := map[string]any{
 		"model":    request.Model,
 		"messages": request.Messages,
-		"stream":   true,
+		"stream":   stream,
 	}
 	for key, value := range request.Parameters {
-		switch key {
-		case "temperature", "top_p", "thinking", "reasoning_effort", "max_tokens", "response_format", "stream_options", "stop":
-			payload[key] = value
+		if key == "model" || key == "messages" || key == "stream" {
+			continue
 		}
+		payload[key] = value
 	}
 	if _, configured := payload["temperature"]; !configured && request.Temperature != 0 {
 		payload["temperature"] = request.Temperature
@@ -74,15 +81,23 @@ func (client *providerClient) generate(
 	}
 
 	endpoint := strings.TrimRight(strings.TrimSpace(request.Endpoint), "/")
-	if !strings.HasSuffix(endpoint, "/chat/completions") {
+	if strings.TrimSpace(request.EndpointPath) != "" {
+		endpoint += "/" + strings.TrimLeft(strings.TrimSpace(request.EndpointPath), "/")
+	} else if !strings.HasSuffix(endpoint, "/chat/completions") {
 		endpoint += "/chat/completions"
 	}
 	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return "", fmt.Errorf("创建模型请求: %w", err)
 	}
+	for name, value := range request.RequestHeaders {
+		if strings.EqualFold(name, "Host") || strings.EqualFold(name, "Content-Length") {
+			continue
+		}
+		httpRequest.Header.Set(name, value)
+	}
 	httpRequest.Header.Set("Content-Type", "application/json")
-	if request.APIKey != "" {
+	if request.APIKey != "" && httpRequest.Header.Get("Authorization") == "" && httpRequest.Header.Get("api-key") == "" && httpRequest.Header.Get("x-api-key") == "" {
 		httpRequest.Header.Set("Authorization", "Bearer "+request.APIKey)
 	}
 

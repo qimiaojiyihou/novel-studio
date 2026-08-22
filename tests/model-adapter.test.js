@@ -90,6 +90,53 @@ test('embedded adapter supports OpenAI-compatible SSE responses', async () => {
   }
 })
 
+test('embedded adapter applies custom JSON request config without exposing protected fields', async () => {
+  const originalFetch = globalThis.fetch
+  let captured
+  globalThis.fetch = async (url, options) => {
+    captured = { url, headers: options.headers, body: JSON.parse(options.body) }
+    return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: '自定义响应' } }] }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }
+  try {
+    const prepared = prepareModelTask({
+      ...baseInput,
+      modelProfile: {
+        id: 'custom-json',
+        provider: 'custom',
+        name: '自定义 JSON 模型',
+        baseUrl: 'https://custom.example/v2',
+        model: 'novel-pro',
+        settings: {
+          requestConfig: {
+            endpointPath: '/responses/chat',
+            stream: false,
+            headers: { 'X-Provider': 'novel-cloud', 'api-key': '{{apiKey}}' },
+            body: { min_p: 0.1, enable_thinking: true },
+            taskBody: { chapter: { repetition_penalty: 1.12 } },
+          },
+        },
+      },
+      apiKey: 'encrypted-at-rest-key',
+    })
+    const result = await runEmbeddedModelTask(prepared)
+    assert.equal(result.manuscript, '自定义响应')
+    assert.equal(captured.url, 'https://custom.example/v2/responses/chat')
+    assert.equal(captured.headers['api-key'], 'encrypted-at-rest-key')
+    assert.equal(captured.headers.Authorization, undefined)
+    assert.equal(captured.body.model, 'novel-pro')
+    assert.equal(captured.body.stream, false)
+    assert.equal(captured.body.min_p, 0.1)
+    assert.equal(captured.body.enable_thinking, true)
+    assert.equal(captured.body.repetition_penalty, 1.12)
+    assert.ok(Array.isArray(captured.body.messages))
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
 test('planning field generation returns a reviewable text candidate', async () => {
   const prepared = prepareModelTask({
     ...baseInput,

@@ -4,7 +4,7 @@
 > 更新日期：2026-08-23
 > 当前状态：桌面骨架、项目与章节管理闭环、正文审阅链路、故事规划中心、知识与连续性、模型诊断和长篇上下文基础已经完成；导入导出与发布工程仍按后续阶段推进。
 
-> 当前实现：Vue 3 + JavaScript + Vite + Electron 桌面应用已接入 SQLite schema v7、CodeMirror 6 正文编辑器、Monaco 差异确认、Go 服务启动管理、模型配置与任务路由、连接测试、DeepSeek 高级参数、OpenAI 兼容适配器，以及故事基础、人物、世界观、总纲、分卷、章节规划、事实库、时间线、伏笔账本、连续性检查和长篇上下文。规划字段、章节卡、场景计划与正文均经过候选确认后才进入正式内容；真实模型未配置时自动使用带明确提示的 Mock 回退。
+> 当前实现：Vue 3 + JavaScript + Vite + Electron 桌面应用已接入 SQLite schema v7、CodeMirror 6 正文编辑器、Monaco 差异确认、Go 服务启动管理、模型配置与任务路由、连接测试、DeepSeek 高级参数、JSON 自定义请求配置、OpenAI 兼容适配器，以及故事基础、人物、世界观、总纲、分卷、章节规划、事实库、时间线、伏笔账本、连续性检查和长篇上下文。规划字段、章节卡、场景计划与正文均经过候选确认后才进入正式内容；真实模型未配置时自动使用带明确提示的 Mock 回退。
 
 ## 1. 设计结论
 
@@ -379,17 +379,46 @@ API Key 只由 Electron 主进程或 Go 服务访问，Vue 渲染进程不直接
 
 ### 8.3.2 自定义 OpenAI 兼容接入
 
-用户可以在“添加模型”中自定义任何 OpenAI 形式的接口：
+用户可以在“添加模型”中自定义 OpenAI Chat Completions 兼容接口。基础表单管理显示名称、Base URL、模型 ID 和加密保存的 API Key；“JSON 请求配置”管理供应商差异：
 
 - 显示名称和提供方名称；
 - `base_url`，例如 `https://example.com/v1`；
-- API 路径模式：默认 `/chat/completions`，可自定义完整路径；
-- API Key 和额外请求头；
+- API 路径模式：默认 `/chat/completions`，可通过 `endpointPath` 自定义；
+- 额外请求头，并使用 `{{apiKey}}` 引用安全存储的 API Key；
 - 模型 ID；
-- 协议类型：Chat Completions 或 Responses；
+- 当前协议类型为 Chat Completions；Responses 或其他协议通过独立 Provider 适配器扩展；
 - 是否支持流式输出、JSON 输出、工具调用和 reasoning 参数；
 - 上下文长度、最大输出长度、超时、重试和代理设置；
-- 供应商自定义 `extra_body` 字段。
+- 任意供应商请求参数，以及按创作任务覆盖的参数。
+
+配置示例：
+
+```json
+{
+  "endpointPath": "/chat/completions?api-version=2026-01-01",
+  "stream": true,
+  "headers": {
+    "X-Provider-Version": "2026-01",
+    "api-key": "{{apiKey}}"
+  },
+  "body": {
+    "min_p": 0.08,
+    "repetition_penalty": 1.05
+  },
+  "taskBody": {
+    "chapter": {
+      "max_tokens": 12000
+    },
+    "chapter_card": {
+      "response_format": {
+        "type": "json_object"
+      }
+    }
+  }
+}
+```
+
+参数按“软件任务默认值 → `body` → 当前任务 `taskBody`”合并。可覆盖任务默认采样与输出参数，但 `model`、`messages`、`stream` 由软件管理，不能藏在 body 中覆盖。API Key 不写入 JSON；Authorization、api-key 等敏感请求头必须引用 `{{apiKey}}`。当前自定义模式仍要求响应使用 OpenAI 兼容的 `choices[].message.content` 或 SSE `choices[].delta.content` 结构，完全不同的请求/响应协议应新增 Provider 适配器。
 
 保存后先执行“测试连接”，检查模型列表、普通文本、流式输出和结构化 JSON 四项能力，并把探测结果记录在 `ModelProfile.capabilities` 中。请求构造器只发送该模型声明支持的字段，避免把 DeepSeek、Kimi 的专用参数误传给其他兼容服务。
 
@@ -743,7 +772,8 @@ Novel Studio 的产品设计和总体技术设计已经完成，桌面工程已�
 - 故事基础、人物、世界观、总纲、分卷和章节规划的手工编辑与 AI 候选签批；
 - SQLite migration、外键级联、Go 流式网关、任务取消和内置回退；
 - 知识事实、章节时间线、伏笔账本、可解释连续性检查，以及提醒处理和重新打开；
-- 模型连接测试、DeepSeek 思考/推理/采样/输出参数，以及 Go 服务参数白名单透传；
+- 模型连接测试、DeepSeek 思考/推理/采样/输出参数，以及 Go 服务安全参数透传；
+- 可校验、可持久化的 JSON 模型请求配置，以及自定义路径、请求头、流式模式和按任务参数覆盖；
 - 章节卡、场景计划和正文统一候选确认，AI 结果不会直接覆盖正式内容；
 - schema v7 长篇上下文配置、章节记忆、最近章节与相关旧章召回、知识选择和预算诊断。
 

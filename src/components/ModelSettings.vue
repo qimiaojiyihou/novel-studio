@@ -142,6 +142,28 @@
               </div>
               <p>章节卡在“自动”模式下请求 JSON；其他写作任务保持文本。采样控制遵循 Temperature 与 Top P 二选一。</p>
             </details>
+            <details class="json-cabinet" :open="draft.provider === 'custom'">
+              <summary><span><b>JSON 请求配置</b><small>供应商参数、请求头和任务覆盖</small></span><i>⌄</i></summary>
+              <div class="json-config-sheet">
+                <div class="json-config-guide">
+                  <span><b>endpointPath</b> 自定义接口路径</span>
+                  <span><b>headers</b> 额外请求头</span>
+                  <span><b>body</b> 全局参数</span>
+                  <span><b>taskBody</b> 按任务覆盖</span>
+                </div>
+                <textarea
+                  v-model="requestConfigText"
+                  spellcheck="false"
+                  aria-label="JSON 请求配置"
+                  @input="markJsonDirty"
+                ></textarea>
+                <div class="json-config-status" :class="jsonValidation.state">
+                  <span><i></i>{{ jsonValidation.message }}</span>
+                  <button type="button" @click="validateRequestConfig">校验 JSON</button>
+                </div>
+                <p><code>model</code>、<code>messages</code> 和 <code>stream</code> 由软件管理。密钥请求头请写成 <code v-pre>{{apiKey}}</code>，明文密钥不会进入 JSON 配置。</p>
+              </div>
+            </details>
             <div class="form-footnote">API Key 只在本机保存，列表不会显示密钥内容。开源版本不附带任何本地模型权重。</div>
             <div v-if="connectionTest.state !== 'idle'" class="connection-result" :class="connectionTest.state">
               <i></i><span>{{ connectionTest.message }}</span>
@@ -163,6 +185,11 @@
 <script setup>
 import { computed, reactive, ref, watch } from 'vue'
 import { appService } from '../services/app-service.js'
+import {
+  normalizeRequestConfig,
+  parseRequestConfigJson,
+  REQUEST_CONFIG_TEMPLATE,
+} from '../../electron/model-request-config.js'
 
 const props = defineProps({
   visible: { type: Boolean, default: false },
@@ -182,6 +209,8 @@ const taskDefinitions = [
 const editingId = ref(null)
 const draft = reactive(emptyDraft())
 const connectionTest = reactive({ state: 'idle', message: '' })
+const requestConfigText = ref('')
+const jsonValidation = reactive({ state: 'idle', message: '保存或测试前会自动校验' })
 const enabledProfiles = computed(() => props.settings.profiles.filter((profile) => profile.enabled))
 
 watch(() => props.visible, (visible) => {
@@ -191,7 +220,10 @@ watch(() => props.visible, (visible) => {
 function emptyDraft() {
   return {
     id: '', provider: 'custom', name: '', baseUrl: '', model: '', apiKey: '', enabled: true,
-    settings: { thinkingEnabled: true, reasoningEffort: 'high', samplingMode: 'task-default', temperature: 1, topP: 1, maxTokens: 4096, responseFormat: 'auto' },
+    settings: {
+      thinkingEnabled: true, reasoningEffort: 'high', samplingMode: 'task-default', temperature: 1, topP: 1, maxTokens: 4096, responseFormat: 'auto',
+      requestConfig: normalizeRequestConfig(REQUEST_CONFIG_TEMPLATE),
+    },
   }
 }
 
@@ -212,23 +244,27 @@ function isBuiltIn(profile) {
 function editProfile(profile) {
   Object.assign(draft, { ...profile, apiKey: '', settings: { ...emptyDraft().settings, ...(profile.settings || {}) } })
   editingId.value = profile.id
+  setRequestConfigEditor(draft.settings.requestConfig)
   resetConnectionTest()
 }
 
 function startNewProfile() {
   Object.assign(draft, emptyDraft())
   editingId.value = ''
+  setRequestConfigEditor(draft.settings.requestConfig)
   resetConnectionTest()
 }
 
 function cancelEdit() {
   editingId.value = null
   Object.assign(draft, emptyDraft())
+  setRequestConfigEditor(draft.settings.requestConfig)
   resetConnectionTest()
 }
 
 function submitProfile() {
-  const payload = { ...draft }
+  if (!validateRequestConfig()) return
+  const payload = { ...draft, settings: { ...draft.settings, requestConfig: normalizeRequestConfig(draft.settings.requestConfig) } }
   if (!payload.apiKey) delete payload.apiKey
   emit('save-profile', payload)
 }
@@ -241,11 +277,34 @@ function resetConnectionTest() {
   Object.assign(connectionTest, { state: 'idle', message: '' })
 }
 
+function setRequestConfigEditor(config) {
+  requestConfigText.value = JSON.stringify(normalizeRequestConfig(config), null, 2)
+  Object.assign(jsonValidation, { state: 'idle', message: '保存或测试前会自动校验' })
+}
+
+function markJsonDirty() {
+  Object.assign(jsonValidation, { state: 'dirty', message: 'JSON 已修改，等待校验' })
+  resetConnectionTest()
+}
+
+function validateRequestConfig() {
+  try {
+    draft.settings.requestConfig = parseRequestConfigJson(requestConfigText.value)
+    requestConfigText.value = JSON.stringify(draft.settings.requestConfig, null, 2)
+    Object.assign(jsonValidation, { state: 'success', message: '配置有效，任务参数将在生成时合并' })
+    return true
+  } catch (error) {
+    Object.assign(jsonValidation, { state: 'error', message: error.message })
+    return false
+  }
+}
+
 async function testConnection() {
+  if (!validateRequestConfig()) return
   connectionTest.state = 'testing'
   connectionTest.message = '正在验证鉴权、模型名称和流式返回…'
   try {
-    const result = await appService.testModelProfile({ ...draft, settings: { ...draft.settings } })
+    const result = await appService.testModelProfile({ ...draft, settings: { ...draft.settings, requestConfig: normalizeRequestConfig(draft.settings.requestConfig) } })
     connectionTest.state = 'success'
     connectionTest.message = `连接成功 · ${result.model?.name || draft.name} · ${result.latencyMs} ms · ${result.gateway === 'go-service' ? 'Go 服务' : '内置服务'}`
   } catch (error) {

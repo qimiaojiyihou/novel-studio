@@ -1,12 +1,13 @@
 import { generateMock } from './mock-provider.js'
+import {
+  normalizeRequestConfig,
+  requestEndpointFor,
+  requestHeadersFor,
+  requestParametersFor,
+} from './model-request-config.js'
 
 function now() {
   return new Date().toISOString()
-}
-
-function endpointFor(baseUrl) {
-  const normalized = String(baseUrl || '').replace(/\/+$/, '')
-  return normalized.endsWith('/chat/completions') ? normalized : normalized + '/chat/completions'
 }
 
 function compactJson(value, limit = 12000) {
@@ -182,14 +183,19 @@ export function prepareModelTask(input) {
     if (needsKey && !apiKey) throw new Error('请先填写 API Key')
   }
   const parameters = parametersFor(task, modelProfile)
+  const requestConfig = normalizeRequestConfig(modelProfile?.settings?.requestConfig)
+  const mergedParameters = requestParametersFor(task, parameters, requestConfig)
   const prepared = {
     task,
     endpoint: modelProfile?.baseUrl || '',
     apiKey: apiKey || '',
     model: modelProfile?.model || '',
     messages: messagesFor(task, input),
-    temperature: Number(parameters.temperature ?? 0),
-    parameters,
+    temperature: Number(mergedParameters.temperature ?? 0),
+    parameters: mergedParameters,
+    requestConfig,
+    requestHeaders: requestHeadersFor(requestConfig, apiKey),
+    stream: requestConfig.stream,
     modelProfile: normalizedModel(modelProfile),
     execution: missingConfiguration ? 'mock' : 'remote',
     fallbackReason: '',
@@ -310,15 +316,13 @@ async function readSSEContent(response, signal, onDelta) {
 async function requestRemote(prepared, signal, onDelta) {
   const linkedSignal = requestSignal(signal, 120000)
   try {
-    const headers = { 'Content-Type': 'application/json' }
-    if (prepared.apiKey) headers.Authorization = 'Bearer ' + prepared.apiKey
-    const response = await fetch(endpointFor(prepared.endpoint), {
+    const response = await fetch(requestEndpointFor(prepared.endpoint, prepared.requestConfig), {
       method: 'POST',
-      headers,
+      headers: prepared.requestHeaders,
       body: JSON.stringify({
         model: prepared.model,
         messages: prepared.messages,
-        stream: true,
+        stream: prepared.stream,
         ...prepared.parameters,
       }),
       signal: linkedSignal.signal,

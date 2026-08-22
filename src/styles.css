@@ -15,6 +15,7 @@
   --font-display: Georgia, 'Songti SC', 'STSong', serif;
   --font-body: 'Noto Serif CJK SC', 'Source Han Serif SC', 'Songti SC', Georgia, serif;
   --font-ui: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
   font-family: var(--font-ui);
   color: var(--ink);
   background: var(--ink);
@@ -338,6 +339,10 @@ button:disabled { cursor: wait; opacity: .62; }
 .advanced-grid input, .advanced-grid select { width: 100%; padding: 8px 9px; color: #3f4e49; border: 1px solid #bdc8c3; outline: 0; background: #f5f6f3; font-size: 10px; }
 .advanced-grid input:focus, .advanced-grid select:focus { border-color: var(--pine); box-shadow: 0 0 0 2px rgba(52,91,80,.08); }
 .advanced-cabinet > p { margin: 0; padding: 0 14px 13px; color: #788781; font: 9px/1.55 var(--font-body); }
+.json-cabinet { margin-top: 12px; overflow: hidden; border: 1px solid #59636a; background: #293138; }
+.json-cabinet summary { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px 14px; color: #edf0ed; cursor: pointer; list-style: none; }
+.json-cabinet summary::-webkit-details-marker { display: none; }.json-cabinet summary > span { display: grid; gap: 3px; }.json-cabinet summary b { font: 13px var(--font-display); }.json-cabinet summary small { color: #89959a; font-size: 8px; }.json-cabinet summary i { color: #c58a6f; font-style: normal; transition: transform .18s ease; }.json-cabinet[open] summary i { transform: rotate(180deg); }
+.json-config-sheet { padding: 13px 14px 14px; border-top: 1px solid #465158; background: #242c32; }.json-config-guide { display: grid; grid-template-columns: 1fr 1fr; gap: 5px 14px; margin-bottom: 10px; color: #909ca1; font-size: 8px; }.json-config-guide span { display: flex; gap: 6px; }.json-config-guide b { color: #d3ab97; font: 8px var(--font-mono); }.json-config-sheet textarea { width: 100%; min-height: 235px; padding: 13px 14px; color: #d9e1dc; border: 1px solid #4c585f; outline: 0; resize: vertical; tab-size: 2; background: #1d2429; font: 10px/1.65 var(--font-mono); }.json-config-sheet textarea:focus { border-color: #ae7258; box-shadow: 0 0 0 2px rgba(182,85,62,.12); }.json-config-status { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 9px; color: #8f9b9f; font-size: 8px; }.json-config-status > span { display: flex; align-items: center; gap: 6px; }.json-config-status i { width: 5px; height: 5px; border-radius: 50%; background: #78858a; }.json-config-status.dirty { color: #c8a66f; }.json-config-status.dirty i { background: #c8a66f; }.json-config-status.success { color: #90b5a2; }.json-config-status.success i { background: #7fa890; }.json-config-status.error { color: #df8e7c; }.json-config-status.error i { background: #d36d57; }.json-config-status button { padding: 6px 8px; color: #dec3b5; border: 1px solid #6e5e57; background: transparent; font-size: 8px; }.json-config-status button:hover { color: #fff5ed; border-color: #ae7258; background: rgba(182,85,62,.14); }.json-config-sheet > p { margin: 10px 0 0; color: #839096; font: 8px/1.6 var(--font-body); }.json-config-sheet code { color: #d2aa96; font-family: var(--font-mono); }
 .form-footnote { margin-top: 15px; color: #9b8b7a; font-size: 10px; line-height: 1.6; }
 .connection-result { display: flex; align-items: center; gap: 8px; margin-top: 13px; padding: 9px 11px; color: #7d6e5e; border-left: 2px solid #b59978; background: rgba(255,255,255,.36); font-size: 9px; }
 .connection-result i { width: 6px; height: 6px; flex: 0 0 6px; border-radius: 50%; background: #b59978; }
