@@ -32,6 +32,20 @@ test('embedded adapter streams mock fallback and shapes a manuscript result', as
   assert.equal(events.filter((event) => event.type === 'delta').map((event) => event.delta).join(''), result.manuscript)
 })
 
+test('embedded rewrite mock keeps the selected preset in the prompt snapshot', async () => {
+  const prepared = prepareModelTask({
+    ...baseInput,
+    task: 'rewrite',
+    selectedText: '“我没有拿档案。”周雨说。',
+    rewriteMode: 'dialogue',
+    mockDelayMs: 0,
+  })
+  const result = await runEmbeddedModelTask(prepared, { taskId: 'rewrite-dialogue' })
+  assert.equal(prepared.promptSnapshot.rewritePreset.id, 'dialogue')
+  assert.match(prepared.messages[1].content, /对白有效化/)
+  assert.match(result.text, /周雨说/)
+})
+
 test('embedded adapter cancellation emits a cancelled terminal event', async () => {
   const prepared = prepareModelTask({ ...baseInput, mockDelayMs: 0 })
   const controller = new AbortController()

@@ -4,6 +4,7 @@ import {
   CORE_SYSTEM_RULES,
   PROMPT_SNAPSHOT_SCHEMA_VERSION,
   PROTECTED_OUTPUT_CONTRACTS,
+  resolveRewritePreset,
 } from './prompt-templates.js'
 
 function compactJson(value, limit = 12000) {
@@ -69,8 +70,10 @@ function planningDetails(input) {
 function taskDetails(task, input) {
   if (task === 'planning_field') return planningDetails(input)
   if (task === 'rewrite') {
+    const preset = resolveRewritePreset(input.rewriteMode)
     return [
-      `重写方式：${input.rewriteMode || '局部重写'}`,
+      `重写预设：${preset.name}`,
+      `预设要求：${preset.content}`,
       `待处理文字：${input.selectedText || ''}`,
     ].join('\n')
   }
@@ -138,6 +141,7 @@ export function compilePrompt(input = {}) {
     source.style && Object.keys(source.style).length ? `${source.label || source.scopeType}结构化文风：${JSON.stringify(source.style)}` : '',
   ]).filter(Boolean)
   const details = taskDetails(task, input)
+  const rewritePreset = task === 'rewrite' ? resolveRewritePreset(input.rewriteMode) : null
   const instruction = String(input.instruction || '').trim()
   const userContent = [
     '【已确认参考上下文】',
@@ -172,6 +176,7 @@ export function compilePrompt(input = {}) {
         binding: addon.binding,
       })),
       oneTimeInstruction: instruction,
+      rewritePreset: rewritePreset ? { id: rewritePreset.id, name: rewritePreset.name } : null,
       messages,
       promptHash: promptHash(messages),
       estimatedChars: messages.reduce((sum, message) => sum + message.content.length, 0),

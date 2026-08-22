@@ -1,3 +1,5 @@
+import { resolveRewritePreset } from './prompt-templates.js'
+
 const now = () => new Date().toISOString()
 
 export function generateMock({ task, project, chapter, planning = {}, instruction = '', selectedText = '', rewriteMode = '局部重写', modelProfile }) {
@@ -78,11 +80,14 @@ export function generateMock({ task, project, chapter, planning = {}, instructio
 
   if (task === 'rewrite') {
     const source = selectedText.trim() || '这段文字'
-    const suffix = rewriteMode === '润色'
-      ? '语气收紧一些，让动作和信息自己推进。'
-      : rewriteMode === '扩写'
-        ? '补入一个可见动作和一个具体感官细节。'
-        : '保留原有信息，但换一种更有张力的推进方式。'
+    const preset = resolveRewritePreset(rewriteMode)
+    const suffixes = {
+      dialogue: '他没有把话说满，只让下一句追问改变两人之间的距离。',
+      show: '他停了一下，把没有说出口的判断压进手上的动作里。',
+      inner_conflict: '他已经作出选择，手指却在最后一刻收紧，像是在替自己寻找另一个理由。',
+      compress: '动作和结果紧接着发生，没有再给重复的解释留下位置。',
+    }
+    const suffix = suffixes[preset.id] || '保留原有信息，但换一种更有张力的推进方式。'
     return {
       task,
       model,

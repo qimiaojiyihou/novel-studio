@@ -1,7 +1,7 @@
 # Novel Studio 创作提示词网络调研与候选库说明
 
 > 调研日期：2026-08-23
-> 产物状态：研究候选，尚未写入 SQLite 内置模板或改变运行时行为
+> 产物状态：第一批已接入 schema v10；后续任务仍为研究候选
 > 机器可读库：`creative-prompt-library.json`
 > 最小评测集：`prompt-eval-cases.json`
 

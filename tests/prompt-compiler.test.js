@@ -99,3 +99,26 @@ test('connection test prompt remains isolated from story context', () => {
   assert.equal(compiled.snapshot.styles.sources.length, 0)
   assert.deepEqual(compiled.snapshot.addons, [])
 })
+
+test('built-in v2 chapter prompt enforces scene state and chapter boundary', () => {
+  const compiled = compilePrompt({ ...baseInput, promptContext: null })
+  assert.equal(compiled.snapshot.template.version, 2)
+  assert.match(compiled.messages[0].content, /人物只知道其知情范围内的信息/)
+  assert.match(compiled.messages[1].content, /从 entryState 开始/)
+  assert.match(compiled.messages[1].content, /严格停在章节卡 ending/)
+})
+
+test('rewrite preset adds focused instructions without weakening protected contract', () => {
+  const compiled = compilePrompt({
+    ...baseInput,
+    task: 'rewrite',
+    promptContext: null,
+    selectedText: '“我没有拿档案。”周雨说。',
+    rewriteMode: 'dialogue',
+  })
+  assert.match(compiled.messages[1].content, /对白有效化/)
+  assert.match(compiled.messages[1].content, /回避、试探、误解或筹码交换/)
+  assert.match(compiled.messages[0].content, /不得擅自改变已确认事实/)
+  assert.equal(compiled.snapshot.schemaVersion, 3)
+  assert.equal(compiled.snapshot.rewritePreset.id, 'dialogue')
+})

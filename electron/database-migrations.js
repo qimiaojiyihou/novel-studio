@@ -1,6 +1,10 @@
-import { BUILTIN_PROMPT_ADDONS, BUILTIN_PROMPT_TEMPLATES } from './prompt-templates.js'
+import {
+  BUILTIN_PROMPT_ADDONS,
+  BUILTIN_PROMPT_TEMPLATES,
+  LEGACY_PROMPT_TEMPLATE_VERSIONS,
+} from './prompt-templates.js'
 
-export const LATEST_SCHEMA_VERSION = 9
+export const LATEST_SCHEMA_VERSION = 10
 
 const migrations = [
   {
@@ -437,6 +441,53 @@ const migrations = [
       for (const addon of BUILTIN_PROMPT_ADDONS) {
         insertAddon.run(addon.id, addon.name, addon.category, createdAt, createdAt)
         insertVersion.run(`${addon.id}-version-1`, addon.id, addon.content, createdAt)
+      }
+    },
+  },
+  {
+    version: 10,
+    name: 'creative-prompt-library-v2',
+    up(database, now) {
+      const createdAt = now()
+      const insertTemplateVersion = database.prepare(`
+        INSERT OR IGNORE INTO prompt_template_versions (id, template_id, version, content_json, created_at)
+        VALUES (?, ?, ?, ?, ?)
+      `)
+      const updateTemplate = database.prepare(`
+        UPDATE prompt_templates SET name = ?, current_version = ?, updated_at = ? WHERE id = ? AND kind = 'built_in'
+      `)
+      for (const template of BUILTIN_PROMPT_TEMPLATES.filter((item) => item.version > 1)) {
+        const legacy = LEGACY_PROMPT_TEMPLATE_VERSIONS[template.id]
+        if (legacy) {
+          insertTemplateVersion.run(
+            `${template.id}-version-${legacy.version}`,
+            template.id,
+            legacy.version,
+            JSON.stringify(legacy.content),
+            createdAt,
+          )
+        }
+        insertTemplateVersion.run(
+          `${template.id}-version-${template.version}`,
+          template.id,
+          template.version,
+          JSON.stringify(template.content),
+          createdAt,
+        )
+        updateTemplate.run(template.name, template.version, createdAt, template.id)
+      }
+
+      const insertAddon = database.prepare(`
+        INSERT OR IGNORE INTO prompt_addons (id, name, category, kind, enabled, current_version, created_at, updated_at)
+        VALUES (?, ?, ?, 'built_in', 1, 1, ?, ?)
+      `)
+      const insertAddonVersion = database.prepare(`
+        INSERT OR IGNORE INTO prompt_addon_versions (id, addon_id, version, content, created_at)
+        VALUES (?, ?, 1, ?, ?)
+      `)
+      for (const addon of BUILTIN_PROMPT_ADDONS) {
+        insertAddon.run(addon.id, addon.name, addon.category, createdAt, createdAt)
+        insertAddonVersion.run(`${addon.id}-version-1`, addon.id, addon.content, createdAt)
       }
     },
   },

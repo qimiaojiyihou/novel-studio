@@ -61,7 +61,11 @@ test('fresh database migrates to the latest schema with foreign keys enabled', (
     assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'prompt_addon_bindings'").get())
     assert.equal(database.prepare("SELECT COUNT(*) AS count FROM prompt_templates WHERE kind = 'built_in'").get().count, 6)
     assert.equal(database.prepare("SELECT COUNT(*) AS count FROM prompt_bindings WHERE scope_type = 'global'").get().count, 6)
-    assert.equal(database.prepare("SELECT COUNT(*) AS count FROM prompt_addons WHERE kind = 'built_in'").get().count, 10)
+    assert.equal(database.prepare("SELECT COUNT(*) AS count FROM prompt_addons WHERE kind = 'built_in'").get().count, 17)
+    assert.equal(database.prepare("SELECT current_version FROM prompt_templates WHERE id = 'builtin-chapter-card-v1'").get().current_version, 2)
+    assert.equal(database.prepare("SELECT current_version FROM prompt_templates WHERE id = 'builtin-scene-plan-v1'").get().current_version, 2)
+    assert.equal(database.prepare("SELECT current_version FROM prompt_templates WHERE id = 'builtin-chapter-v1'").get().current_version, 2)
+    assert.equal(database.prepare("SELECT COUNT(*) AS count FROM prompt_template_versions WHERE template_id = 'builtin-chapter-v1'").get().count, 2)
     assert.ok(database.prepare('PRAGMA table_info(model_profiles)').all().some((column) => column.name === 'settings_json'))
   } finally {
     database.close()
@@ -74,6 +78,33 @@ test('migrations are idempotent', () => {
     runMigrations(database)
     runMigrations(database)
     assert.equal(database.prepare('SELECT COUNT(*) AS count FROM schema_migrations').get().count, LATEST_SCHEMA_VERSION)
+  } finally {
+    database.close()
+  }
+})
+
+test('v10 upgrades existing prompt records while preserving v1 template versions', () => {
+  const database = createDatabase()
+  try {
+    runMigrations(database, { now: () => '2026-08-23T00:00:00.000Z' })
+    database.prepare('DELETE FROM schema_migrations WHERE version = 10').run()
+    for (const templateId of ['builtin-chapter-card-v1', 'builtin-scene-plan-v1', 'builtin-chapter-v1']) {
+      database.prepare('UPDATE prompt_templates SET current_version = 1 WHERE id = ?').run(templateId)
+      database.prepare('DELETE FROM prompt_template_versions WHERE template_id = ? AND version = 2').run(templateId)
+    }
+    for (const addonId of [
+      'addon-causal-chain', 'addon-knowledge-boundary', 'addon-pov-discipline',
+      'addon-spatial-continuity', 'addon-time-continuity', 'addon-ending-action', 'addon-preserve-canon',
+    ]) {
+      database.prepare('DELETE FROM prompt_addons WHERE id = ?').run(addonId)
+    }
+
+    runMigrations(database, { now: () => '2026-08-23T01:00:00.000Z' })
+    assert.equal(getSchemaVersion(database), 10)
+    assert.equal(database.prepare("SELECT COUNT(*) AS count FROM prompt_template_versions WHERE template_id = 'builtin-chapter-v1'").get().count, 2)
+    assert.equal(database.prepare("SELECT current_version FROM prompt_templates WHERE id = 'builtin-chapter-v1'").get().current_version, 2)
+    assert.equal(database.prepare("SELECT COUNT(*) AS count FROM prompt_addons WHERE kind = 'built_in'").get().count, 17)
+    assert.deepEqual(database.prepare('PRAGMA foreign_key_check').all(), [])
   } finally {
     database.close()
   }

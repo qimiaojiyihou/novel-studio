@@ -175,9 +175,13 @@
             @mousedown.stop
           >
             <span class="selection-caption">已选 {{ selectionTools.text.length }} 字</span>
-            <button :disabled="taskIsRunning() || selectionPreview.visible" @click="rewriteSelection('润色')">润色</button>
-            <button :disabled="taskIsRunning() || selectionPreview.visible" @click="rewriteSelection('扩写')">扩写</button>
-            <button :disabled="taskIsRunning() || selectionPreview.visible" @click="rewriteSelection('局部重写')">局部重写</button>
+            <button
+              v-for="preset in REWRITE_PRESETS"
+              :key="preset.id"
+              :disabled="taskIsRunning() || selectionPreview.visible"
+              :title="preset.name"
+              @click="rewriteSelection(preset)"
+            >{{ preset.shortLabel }}</button>
           </div>
 
           <div v-if="selectionPreview.visible" class="selection-review" @mousedown.stop>
@@ -392,6 +396,7 @@ import NovelEditor from './components/NovelEditor.vue'
 import PlanningCenter from './components/PlanningCenter.vue'
 import PromptCenter from './components/PromptCenter.vue'
 import VersionHistory from './components/VersionHistory.vue'
+import { REWRITE_PRESETS } from '../electron/prompt-templates.js'
 import { appService } from './services/app-service.js'
 import { countChinese, formatRelativeTime } from './services/format.js'
 
@@ -1097,10 +1102,12 @@ function closeSelectionTools() {
   selectionTools.visible = false
 }
 
-async function rewriteSelection(mode) {
+async function rewriteSelection(preset) {
   if (!selectionTools.text || !activeChapter.value || runningTask.value || selectionPreview.visible) return
   const { from, to, text } = selectionTools
   const originalDocument = editorText.value
+  const mode = preset?.id || String(preset || 'general')
+  const modeLabel = preset?.name || String(preset || '局部重写')
   runningTask.value = 'rewrite'
   try {
     if (isDirty.value || originalDocument) {
@@ -1115,14 +1122,14 @@ async function rewriteSelection(mode) {
       instruction: instruction.value,
       modelProfileId: modelSettings.routes.rewrite,
     })
-    selectionPreview.mode = mode
+    selectionPreview.mode = modeLabel
     selectionPreview.originalDocument = originalDocument
     selectionPreview.originalText = text
     selectionPreview.replacementText = result.text || ''
     editorText.value = originalDocument.slice(0, from) + selectionPreview.replacementText + originalDocument.slice(to)
     selectionPreview.visible = true
     selectionTools.visible = false
-    showToast(`${mode}候选已生成，请接受或撤销 · ${executionLabel(result)}`)
+    showToast(`${modeLabel}候选已生成，请接受或撤销 · ${executionLabel(result)}`)
   } catch (error) {
     showToast(generationErrorMessage(error, '局部重写失败'))
   } finally {

@@ -34,7 +34,7 @@ test('prompt repository resolves built-in template and project-volume-chapter st
   const { database, repository } = setup()
   const context = repository.resolvePromptContext({ projectId: 'project-1', chapterId: 'chapter-1', task: 'chapter' })
   assert.equal(context.template.id, 'builtin-chapter-v1')
-  assert.equal(context.template.version, 1)
+  assert.equal(context.template.version, 2)
   assert.equal(context.style.volume.id, 'volume-1')
   assert.deepEqual(context.style.sources.map((source) => source.scopeType), ['project', 'volume', 'chapter'])
   assert.equal(context.style.mergedText, '项目克制文风\n卷级压迫感\n章节增加对白')
