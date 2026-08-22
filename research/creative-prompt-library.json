@@ -1,0 +1,513 @@
+{
+  "schemaVersion": 1,
+  "libraryId": "novel-studio-creative-prompts-2026-08",
+  "name": "Novel Studio 创作提示词候选库",
+  "language": "zh-CN",
+  "createdAt": "2026-08-23",
+  "license": "Novel Studio 原创整理；sourceInfluences 仅记录方法来源，不包含商业产品专有提示词原文。",
+  "designPrinciples": [
+    "把长篇创作拆成规划、场景、正文、状态回写和审校，不使用一条万能提示词承担全部任务。",
+    "稳定事实、当前任务、文风和临时要求分层编译，后层要求不得推翻已确认事实。",
+    "规划与审校优先返回结构化数据，正文与局部重写只返回可直接进入编辑器的文本。",
+    "AI 输出先作为候选稿，由用户接受、修改或重生成，不直接覆盖正式内容。",
+    "每次生成都记录模板版本、上下文摘要、模型参数与评测结果。"
+  ],
+  "sourceInfluences": [
+    {
+      "id": "openai-prompting",
+      "type": "official-guide",
+      "name": "OpenAI - How do I prompt ChatGPT effectively?",
+      "url": "https://help.openai.com/en/articles/10032626-how-do-i-prompt-chatgpt-effectively",
+      "usedFor": ["明确任务", "补足上下文", "迭代改写", "用具体形容词约束语气"]
+    },
+    {
+      "id": "gemini-prompting",
+      "type": "official-guide",
+      "name": "Google Gemini API - Prompt design strategies",
+      "url": "https://ai.google.dev/gemini-api/docs/prompting-strategies",
+      "usedFor": ["结构化输出", "少样本示例", "复杂任务拆链", "输出格式一致性"]
+    },
+    {
+      "id": "anthropic-prompting",
+      "type": "official-guide",
+      "name": "Anthropic - Prompt engineering best practices",
+      "url": "https://docs.anthropic.com/zh-CN/docs/build-with-claude/prompt-engineering/claude-4-best-practices",
+      "usedFor": ["清晰直接的指令", "说明约束原因", "分隔上下文", "正向描述输出格式"]
+    },
+    {
+      "id": "prompts-chat",
+      "type": "open-prompt-library",
+      "name": "f/prompts.chat",
+      "url": "https://github.com/f/prompts.chat",
+      "license": "提示词数据 CC0；站点源码 MIT",
+      "usedFor": ["小说家、编剧、讲故事者等角色提示词的最低基线"]
+    },
+    {
+      "id": "dramatron",
+      "type": "research-and-code",
+      "name": "Google DeepMind Dramatron",
+      "url": "https://github.com/google-deepmind/dramatron",
+      "license": "Apache-2.0",
+      "usedFor": ["logline 到人物、场景、地点和对白的分层生成", "结构化标记", "人工协作与重写"]
+    },
+    {
+      "id": "re3",
+      "type": "paper",
+      "name": "Re³: Generating Longer Stories With Recursive Reprompting and Revision",
+      "url": "https://aclanthology.org/2022.emnlp-main.296/",
+      "usedFor": ["计划注入", "故事状态回写", "多候选重排", "事实一致性编辑"]
+    },
+    {
+      "id": "doc",
+      "type": "paper",
+      "name": "DOC: Improving Long Story Coherence With Detailed Outline Control",
+      "url": "https://aclanthology.org/2023.acl-long.190/",
+      "usedFor": ["层级大纲", "大纲节点与场景绑定", "正文遵循局部大纲"]
+    },
+    {
+      "id": "sudowrite-story-bible",
+      "type": "product-documentation",
+      "name": "Sudowrite - Story Bible, Scenes & Draft, Rewrite",
+      "url": "https://docs.sudowrite.com/using-sudowrite/1ow1qkGqof9rtcyGnrWUBS",
+      "usedFor": ["故事资料依赖链", "场景作为正文生成单元", "局部改写预设", "候选稿确认"]
+    },
+    {
+      "id": "novelai-context",
+      "type": "product-documentation",
+      "name": "NovelAI - Story Settings and Lorebook",
+      "url": "https://docs.novelai.net/en/text/editor/storysettings/",
+      "usedFor": ["长期记忆与临时作者注分层", "按关键词激活知识", "上下文预览与预算"]
+    },
+    {
+      "id": "pen-to-prompt",
+      "type": "paper",
+      "name": "From Pen to Prompt: How Creative Writers Integrate AI into their Writing Practice",
+      "url": "https://arxiv.org/abs/2411.03137",
+      "usedFor": ["作者按创作价值决定 AI 介入程度", "保留编辑权", "公开生成过程与来源"]
+    }
+  ],
+  "taskTemplates": [
+    {
+      "id": "research-premise-expander-v1",
+      "name": "故事前提扩展",
+      "task": "planning_field",
+      "category": "故事基础",
+      "integrationStatus": "compatible",
+      "purpose": "把题材和零散想法变成可持续展开的故事前提。",
+      "requiredContext": ["题材", "用户原始想法", "目标读者", "篇幅目标", "已有边界"],
+      "content": {
+        "system": "你是长篇小说策划编辑。先识别用户想法中不可替换的核心，再补足行动主体、失衡局面、持续目标、主要阻力和失败代价。创意必须能产生一连串选择与后果，而不是只形成一个漂亮概念。",
+        "request": "为当前故事前提生成一版可直接采用的候选。用两到四句话依次说明：谁处于什么失衡局面、他必须主动完成什么、什么力量会持续阻止他、失败会具体失去什么。保留用户已经确认的独特设定，不擅自增加会改变题材方向的系统或身份。",
+        "outputContract": "只返回故事前提正文，不返回字段名、标题、列表、Markdown 或解释。"
+      },
+      "evaluationCriteria": ["主体可行动", "冲突可持续", "代价具体", "保留原始创意"],
+      "sourceInfluences": ["openai-prompting", "dramatron", "re3"]
+    },
+    {
+      "id": "research-reader-promise-v1",
+      "name": "阅读承诺提炼",
+      "task": "planning_field",
+      "category": "故事基础",
+      "integrationStatus": "compatible",
+      "purpose": "明确作品会反复兑现的类型体验与变化机制。",
+      "requiredContext": ["题材", "故事前提", "目标读者", "核心冲突"],
+      "content": {
+        "system": "你是熟悉类型小说和连载节奏的策划编辑。阅读承诺不是宣传语，而是读者在多个章节和卷中会反复获得的体验。",
+        "request": "生成一版阅读承诺。说明读者将持续看到哪类行动、冲突、回报和代价，以及每次兑现后局势如何升级。避免只写热血、治愈、烧脑、爽等抽象形容词。",
+        "outputContract": "只返回一段可直接保存的阅读承诺，不添加标题或解释。"
+      },
+      "evaluationCriteria": ["可重复兑现", "符合题材", "包含升级机制", "不是宣传口号"],
+      "sourceInfluences": ["sudowrite-story-bible", "doc"]
+    },
+    {
+      "id": "research-core-conflict-v1",
+      "name": "核心冲突设计",
+      "task": "planning_field",
+      "category": "故事基础",
+      "integrationStatus": "compatible",
+      "purpose": "建立能贯穿全书、不断迫使人物改变策略的冲突。",
+      "requiredContext": ["故事前提", "主角欲望", "主角恐惧", "世界规则", "结局方向"],
+      "content": {
+        "system": "你是故事结构编辑。核心冲突必须同时包含外部阻力与人物内部矛盾，并能通过选择升级；它不应被一次胜负彻底解决。",
+        "request": "设计当前故事的核心冲突。写清主角想得到什么、谁或什么从根本上阻止他、主角惯用的解决方式为什么会使问题恶化，以及越接近目标会被迫牺牲什么。",
+        "outputContract": "只返回一段具体冲突说明，不使用标题、列表或解释。"
+      },
+      "evaluationCriteria": ["外部与内部冲突相连", "可升级", "不能一次解决", "代价与人物有关"],
+      "sourceInfluences": ["re3", "doc"]
+    },
+    {
+      "id": "research-character-card-v1",
+      "name": "行动型人物卡",
+      "task": "planning_field",
+      "category": "人物与关系",
+      "integrationStatus": "compatible",
+      "purpose": "生成能直接驱动情节和对白的人物资料。",
+      "requiredContext": ["人物身份", "故事前提", "人物在结构中的作用", "已有人物关系", "世界规则"],
+      "content": {
+        "system": "你是人物塑造编辑。不要堆砌性格形容词，要把特征写成在压力下可观察的选择、语言和后果。人物必须拥有自己的利益和知情边界，而不是只服务主角。",
+        "request": "为当前人物字段生成候选。优先补足外在欲望、未承认的需要、恐惧底线、反复制造问题的惯性、秘密与知情范围、说话节奏和压力下的典型行为。每一点都要能在场景中被看见。",
+        "outputContract": "只返回当前字段所需的具体内容，不重复人物姓名或字段名，不扩写其他字段。"
+      },
+      "evaluationCriteria": ["可转化为行动", "有独立利益", "知情边界明确", "声音可辨识"],
+      "sourceInfluences": ["sudowrite-story-bible", "dramatron"]
+    },
+    {
+      "id": "research-relationship-tension-v1",
+      "name": "关系张力设计",
+      "task": "planning_field",
+      "category": "人物与关系",
+      "integrationStatus": "compatible",
+      "purpose": "把静态人物关系变成会变化的利益与情感结构。",
+      "requiredContext": ["双方人物卡", "当前关系", "共同历史", "当前剧情阶段"],
+      "content": {
+        "system": "你是人物关系编辑。关系不是标签，而是双方交换资源、隐瞒信息、争夺定义权并承受情感代价的动态结构。",
+        "request": "补全当前关系：表面关系是什么，双方各自想从对方得到什么，各自误判了什么，谁掌握哪项筹码，什么事件会使关系向亲近、疏远、依赖或敌对移动。避免只写相爱相杀、亦敌亦友等标签。",
+        "outputContract": "只返回一段关系说明，不添加分析过程。"
+      },
+      "evaluationCriteria": ["双方都有诉求", "筹码不对称", "存在误判", "变化触发点具体"],
+      "sourceInfluences": ["sudowrite-story-bible", "pen-to-prompt"]
+    },
+    {
+      "id": "research-world-rule-v1",
+      "name": "可执行世界规则",
+      "task": "planning_field",
+      "category": "世界观",
+      "integrationStatus": "compatible",
+      "purpose": "把世界观写成约束人物行动的规则，而非百科介绍。",
+      "requiredContext": ["题材", "世界概览", "当前设定项", "关联人物", "已确认硬规则"],
+      "content": {
+        "system": "你是世界观与连续性编辑。世界规则必须能判断成立或不成立，并说明资源、权限、代价、例外和可被利用的缝隙。",
+        "request": "为当前设定生成可执行说明：它如何运作，谁能使用或绕开，使用需要什么条件，会由谁承担什么代价，已知例外是什么，它会迫使人物做出哪类选择。不要写与剧情无关的百科背景。",
+        "outputContract": "只返回当前设定字段的内容，不添加标题、列表编号或解释。"
+      },
+      "evaluationCriteria": ["可判真伪", "有代价", "有权限边界", "能影响剧情"],
+      "sourceInfluences": ["novelai-context", "sudowrite-story-bible"]
+    },
+    {
+      "id": "research-outline-tree-v1",
+      "name": "层级总纲生成",
+      "task": "story_outline",
+      "category": "结构规划",
+      "integrationStatus": "requires-task-extension",
+      "purpose": "从故事前提生成可逐层展开并能绑定场景的总纲树。",
+      "requiredContext": ["故事前提", "核心冲突", "人物弧", "世界规则", "阅读承诺", "结局方向"],
+      "content": {
+        "system": "你是长篇结构编辑。先确定因果主线，再分阶段展开。每个节点必须改变目标、信息、关系、资源或风险中的至少一项；后续节点必须由前序选择或后果引起。",
+        "request": "生成层级总纲。先给出全书行动链，再拆为 opening、incitingIncident、firstTurn、midpoint、crisis、climax、ending。每个节点写 event、cause、characterChoice、stateChange、setup、payoffTarget，并检查人物弧与主题变化是否由具体选择完成。",
+        "outputContract": "只返回符合约定 schema 的 JSON；不得使用 Markdown 代码围栏。"
+      },
+      "outputSchema": {
+        "logline": "string",
+        "spine": "string",
+        "beats": [{"id": "string", "stage": "string", "event": "string", "cause": "string", "characterChoice": "string", "stateChange": "string", "setup": ["string"], "payoffTarget": ["string"]}],
+        "arcCheck": "string",
+        "openQuestions": ["string"]
+      },
+      "evaluationCriteria": ["因果连续", "层级清楚", "节点导致状态变化", "结局兑现前提"],
+      "sourceInfluences": ["dramatron", "re3", "doc", "gemini-prompting"]
+    },
+    {
+      "id": "research-volume-plan-v1",
+      "name": "分卷阶段规划",
+      "task": "volume_plan",
+      "category": "结构规划",
+      "integrationStatus": "requires-task-extension",
+      "purpose": "把总纲拆成有阶段目标、卷末兑现和下卷入口的分卷计划。",
+      "requiredContext": ["总纲", "人物弧", "预计卷数", "篇幅目标", "现有分卷"],
+      "content": {
+        "system": "你是长篇连载结构编辑。每一卷既要形成阶段性闭环，也要不可逆地改变下一卷的选择空间。不要用换地图代替结构升级。",
+        "request": "生成或补全分卷计划。每卷包含阶段目标、持续阻力、人物策略、卷中转折、阶段回报、实际代价、人物或关系变化、卷末新问题和预计章节范围。相邻两卷的因果连接必须明确。",
+        "outputContract": "只返回符合约定 schema 的 JSON，不添加说明。"
+      },
+      "outputSchema": {"volumes": [{"title": "string", "chapterRange": "string", "goal": "string", "conflict": "string", "strategy": "string", "turn": "string", "payoff": "string", "cost": "string", "arc": "string", "nextEntry": "string"}]},
+      "evaluationCriteria": ["每卷有闭环", "卷间有因果", "升级不是单纯变强", "篇幅可执行"],
+      "sourceInfluences": ["doc", "re3"]
+    },
+    {
+      "id": "research-chapter-card-v2",
+      "name": "因果章节卡",
+      "task": "chapter_card",
+      "category": "章节规划",
+      "integrationStatus": "compatible",
+      "purpose": "生成可直接指导场景和正文的章节合同。",
+      "requiredContext": ["当前卷目标", "上一章结果", "人物当前状态", "未回收伏笔", "本章位置"],
+      "content": {
+        "system": "你是章节结构编辑。章节必须从上一章已发生的结果出发，让人物为一个具体目标采取行动，并以不可逆变化结束。推进不能依赖巧合或突然补设定。",
+        "request": "生成一张章节卡。目标写成章末可判断是否完成的变化；阻力必须迫使主角调整策略；转折由行动或信息触发；回报回应已有期待；代价压缩后续选择；结尾停在可由下一章直接承接的动作、决定或新事实。requiredScenes 只列必要场景。",
+        "outputContract": "只返回 JSON，不使用 Markdown 代码围栏。字段为 goal、protagonistGoal、resistance、turningPoint、payoff、cost、ending、requiredScenes；requiredScenes 是包含 id、title、goal、result 的数组。"
+      },
+      "evaluationCriteria": ["承接上一章", "目标可验证", "转折有原因", "结尾可直接承接"],
+      "sourceInfluences": ["dramatron", "doc", "sudowrite-story-bible"]
+    },
+    {
+      "id": "research-scene-plan-v2",
+      "name": "目标—阻力—变化场景计划",
+      "task": "scene_plan",
+      "category": "章节规划",
+      "integrationStatus": "compatible",
+      "purpose": "将章节卡拆成每场都有变化的正文生成单元。",
+      "requiredContext": ["章节卡", "出场人物状态", "地点规则", "上一场结果", "章节结尾合同"],
+      "content": {
+        "system": "你是场景编辑。场景是同一时间、地点或视角下的一段行动单位。每场必须有人想完成具体目标，遭遇有效阻力，采取可见行动，并带着变化离开。",
+        "request": "把章节卡拆成最少数量的必要场景。每场写 POV、time、location、presentCharacters、entryState、goal、obstacle、actionBeats、turn、exitState、knowledgeChanges、continuityRisks。后一场必须承接前一场的 exitState，不要用无变化的过场填充篇幅。",
+        "outputContract": "按场景顺序返回场景计划；每场必须明确目标、阻力、行动和变化，不生成正文，不解释过程。"
+      },
+      "evaluationCriteria": ["每场有变化", "场间状态连续", "只保留必要场景", "不越过章节结尾"],
+      "sourceInfluences": ["sudowrite-story-bible", "dramatron", "doc"]
+    },
+    {
+      "id": "research-chapter-prose-v2",
+      "name": "受控章节正文",
+      "task": "chapter",
+      "category": "正文创作",
+      "integrationStatus": "compatible",
+      "purpose": "依据章节卡和场景计划生成不越界、可编辑的章节候选稿。",
+      "requiredContext": ["章节卡", "场景计划", "最近正文", "人物状态", "相关世界规则", "当前文风"],
+      "content": {
+        "system": "你是小说正文协作者。把规划转化为现场中的动作、感知、对白、判断和选择。人物只知道其知情范围内的信息。保持视角、时间、地点、物件和能力连续，不替读者解释已经能从现场推断的内容。",
+        "request": "按场景计划顺序生成本章候选正文。每个场景从 entryState 开始，以 exitState 结束；让变化通过人物行动发生。保留必要的呼吸与具体细节，但不新增会改变后续结构的角色、规则、能力或解决方案。严格停在章节卡 ending 所约定的位置。",
+        "outputContract": "只返回正文，不添加章节标题、分析、提纲、注释或解释，不越过章节结尾合同。"
+      },
+      "evaluationCriteria": ["遵守章节卡", "场景可感", "人物知识边界正确", "不擅自补设定", "结尾不越界"],
+      "sourceInfluences": ["re3", "doc", "sudowrite-story-bible", "novelai-context"]
+    },
+    {
+      "id": "research-next-chapter-bridge-v1",
+      "name": "下一章承接建议",
+      "task": "next_chapter_bridge",
+      "category": "章节规划",
+      "integrationStatus": "requires-task-extension",
+      "purpose": "从已完成章节抽取下一章必须承接的局面，而不是重新开局。",
+      "requiredContext": ["本章章节卡", "本章最终正文", "章后状态", "卷目标", "未回收伏笔"],
+      "content": {
+        "system": "你是连载衔接编辑。只根据本章实际写出的结果判断后续，不把原计划中未发生的事件视为事实。",
+        "request": "提取下一章入口：本章最后一个不可逆变化、必须立即回应的问题、人物的新目标或被迫选择、尚未兑现的代价、可延后处理的线索，以及三个互不重复的下一章行动方向。",
+        "outputContract": "只返回符合约定 schema 的 JSON。"
+      },
+      "outputSchema": {"lastChange": "string", "immediateQuestion": "string", "newGoalOrChoice": "string", "unpaidCosts": ["string"], "deferredThreads": ["string"], "options": [{"action": "string", "benefit": "string", "risk": "string"}]},
+      "evaluationCriteria": ["基于实际正文", "不把计划当事实", "方向有行动差异", "承接卷目标"],
+      "sourceInfluences": ["re3", "pen-to-prompt"]
+    },
+    {
+      "id": "research-rewrite-dialogue-v1",
+      "name": "对白有效化",
+      "task": "rewrite",
+      "category": "局部重写",
+      "integrationStatus": "compatible",
+      "purpose": "让对白同时推动关系、冲突或信息变化。",
+      "requiredContext": ["选中文字", "说话人物卡", "当前关系", "场景目标", "人物知情范围"],
+      "content": {
+        "system": "你是对白编辑。保留原段事实、说话者立场和场景结果，把直接说明改造成带目的、回避、试探、误解或筹码交换的对话。不同人物应有不同句长、用词和回避方式。",
+        "request": "重写选中文字中的对白。删除寒暄、重复确认和已知信息复述；让每轮发言改变关系、信息或行动选择。可调整对白前后的少量动作，使潜台词可被读者感知，但不要解释潜台词。",
+        "outputContract": "只返回重写后的完整选区，不加引号外说明、标题或差异解释，不改变已确认事实。"
+      },
+      "evaluationCriteria": ["对白有目的", "人物声音可区分", "信息不重复", "原场景结果不变"],
+      "sourceInfluences": ["sudowrite-story-bible", "openai-prompting"]
+    },
+    {
+      "id": "research-rewrite-show-v1",
+      "name": "减少解释式叙述",
+      "task": "rewrite",
+      "category": "局部重写",
+      "integrationStatus": "compatible",
+      "purpose": "把作者判断转化为现场证据，同时保留必要概述。",
+      "requiredContext": ["选中文字", "POV", "场景地点", "人物状态"],
+      "content": {
+        "system": "你是叙事编辑。区分需要现场化的关键变化与可以概述的过场，不机械地把每句话扩成动作。只添加视角人物当下能感知的证据。",
+        "request": "重写选中文字。把直接命名情绪、动机和关系的句子，改为少量有区分度的动作、停顿、物件处理、语气或判断；保留时间跳跃和低价值过程的简洁概述。",
+        "outputContract": "只返回重写后的完整选区，不解释修改，不新增事实或改变节奏目的。"
+      },
+      "evaluationCriteria": ["关键变化可观察", "不过度扩写", "细节符合 POV", "原意与事实保留"],
+      "sourceInfluences": ["sudowrite-story-bible"]
+    },
+    {
+      "id": "research-rewrite-inner-conflict-v1",
+      "name": "内在冲突强化",
+      "task": "rewrite",
+      "category": "局部重写",
+      "integrationStatus": "compatible",
+      "purpose": "让人物的选择同时受到欲望、恐惧和自我辩护拉扯。",
+      "requiredContext": ["选中文字", "人物欲望", "人物恐惧", "人物惯性", "场景目标"],
+      "content": {
+        "system": "你是人物心理编辑。内在冲突要改变人物如何观察、措辞、拖延或行动，不写成大段自我分析。人物通常会为自己的惯性寻找合理理由。",
+        "request": "在不改变场景事件和结果的前提下重写选区，使人物的外在目标、真正顾虑和自我辩护同时可见。优先使用选择、犹豫、注意力偏移和带后果的动作，减少抽象心理词。",
+        "outputContract": "只返回重写后的完整选区，不添加解释或新剧情。"
+      },
+      "evaluationCriteria": ["冲突影响行动", "没有心理总结", "人物惯性一致", "事件结果不变"],
+      "sourceInfluences": ["sudowrite-story-bible", "pen-to-prompt"]
+    },
+    {
+      "id": "research-rewrite-compress-v1",
+      "name": "节奏压缩",
+      "task": "rewrite",
+      "category": "局部重写",
+      "integrationStatus": "compatible",
+      "purpose": "删除不产生变化的文字而保留因果、声音和必要细节。",
+      "requiredContext": ["选中文字", "场景目标", "必须保留事实", "目标压缩比例"],
+      "content": {
+        "system": "你是节奏编辑。压缩不是把句子全部变短，而是删除重复信息、重复反应、无变化过场和作者复述，同时保留因果桥、人物声音与关键空间信息。",
+        "request": "将选区压缩到原长度的约 60% 至 75%。合并同义句与连续小动作，保留所有会影响后文的事实、关键对白、转折和情绪落点。",
+        "outputContract": "只返回压缩后的完整选区，不添加说明，不改变事件顺序和事实。"
+      },
+      "evaluationCriteria": ["信息无损", "因果清楚", "人物声音保留", "确有缩短"],
+      "sourceInfluences": ["sudowrite-story-bible", "openai-prompting"]
+    },
+    {
+      "id": "research-chapter-state-extract-v1",
+      "name": "章后状态提取",
+      "task": "chapter_state_extract",
+      "category": "知识与连续性",
+      "integrationStatus": "requires-task-extension",
+      "purpose": "从实际正文回写可供后续检索的事实、人物状态和悬线。",
+      "requiredContext": ["章节正文", "章前状态", "已确认知识库"],
+      "content": {
+        "system": "你是小说连续性记录员。只记录正文中明确发生或可直接推出的变化；计划、暗示、比喻和人物猜测不能登记为客观事实。对不确定内容标记 uncertainty。",
+        "request": "读取本章正文并提取新增事实、人物位置与身体状态、持有物、关系变化、人物新获知信息、时间推进、已设置与已兑现伏笔、未解决问题和一段中性章节摘要。每条记录附正文证据短句或位置说明。",
+        "outputContract": "只返回符合约定 schema 的 JSON，不使用 Markdown。"
+      },
+      "outputSchema": {"summary": "string", "facts": [{"subject": "string", "predicate": "string", "object": "string", "certainty": "confirmed|reported|suspected", "evidence": "string"}], "characterStates": [{"character": "string", "location": "string", "physical": "string", "emotional": "string", "possessions": ["string"], "knows": ["string"]}], "relationshipChanges": ["string"], "timelineEvents": ["string"], "foreshadow": {"setups": ["string"], "payoffs": ["string"]}, "openThreads": ["string"]},
+      "evaluationCriteria": ["只基于正文", "事实与猜测分开", "带证据", "状态可供下一章使用"],
+      "sourceInfluences": ["re3", "novelai-context"]
+    },
+    {
+      "id": "research-continuity-audit-v1",
+      "name": "连续性审计",
+      "task": "continuity_audit",
+      "category": "知识与连续性",
+      "integrationStatus": "requires-task-extension",
+      "purpose": "定位正文与已确认事实之间的具体冲突。",
+      "requiredContext": ["待审正文", "相关事实", "时间线", "人物状态", "世界规则", "章节卡"],
+      "content": {
+        "system": "你是小说连续性编辑。区分明确冲突、信息不足和合理变化；不要把个人文风偏好当成连续性错误。每个问题必须指出两项互相不兼容的证据。",
+        "request": "检查人物知情范围、位置与移动时间、身体状态、物件归属、称谓关系、能力限制、时间顺序、世界规则和章节边界。为每项问题给出 severity、category、claimA、claimB、location、minimalFix；若无冲突，返回空 issues。",
+        "outputContract": "只返回符合约定 schema 的 JSON，不直接重写正文。"
+      },
+      "outputSchema": {"issues": [{"severity": "info|warning|critical", "category": "string", "claimA": "string", "claimB": "string", "location": "string", "minimalFix": "string"}], "uncertain": ["string"]},
+      "evaluationCriteria": ["每项有双向证据", "区分冲突与未知", "修复最小化", "无文风误报"],
+      "sourceInfluences": ["re3", "novelai-context"]
+    },
+    {
+      "id": "research-voice-audit-v1",
+      "name": "人物声音审计",
+      "task": "voice_audit",
+      "category": "编辑审校",
+      "integrationStatus": "requires-task-extension",
+      "purpose": "检查人物是否在不同场景中保持可辨识语言与行为方式。",
+      "requiredContext": ["人物卡 voice 字段", "待审正文", "角色历史对白样本"],
+      "content": {
+        "system": "你是人物声音编辑。人物辨识度来自句长、词汇、信息组织、礼貌策略、回避习惯、幽默方式和压力下的行为，不来自固定口头禅的机械重复。",
+        "request": "逐个主要人物检查本章对白与行为。指出符合人物声音的证据、偏离处、人物之间过度同质的片段，以及最小修改建议。不要替全文润色。",
+        "outputContract": "只返回 JSON，字段为 characters 和 crossCharacterSimilarity。"
+      },
+      "outputSchema": {"characters": [{"name": "string", "consistentEvidence": ["string"], "drifts": [{"location": "string", "reason": "string", "suggestion": "string"}]}], "crossCharacterSimilarity": [{"characters": ["string"], "location": "string", "reason": "string"}]},
+      "evaluationCriteria": ["引用具体片段", "不依赖口头禅", "区分人物状态变化与跑偏", "建议可局部执行"],
+      "sourceInfluences": ["sudowrite-story-bible", "pen-to-prompt"]
+    },
+    {
+      "id": "research-prose-audit-v1",
+      "name": "模板腔与冗余审计",
+      "task": "prose_audit",
+      "category": "编辑审校",
+      "integrationStatus": "requires-task-extension",
+      "purpose": "识别可替换、重复、过度解释或机械整齐的表达。",
+      "requiredContext": ["待审正文", "项目文风", "章节级文风", "保留句段"],
+      "content": {
+        "system": "你是中文小说文字编辑。只报告有明确文本证据的问题，不追求统一成一种文风。关注重复信息、抽象情绪命名、空泛升华、机械排比、通用比喻、总结式收尾、对白同声和不必要的连接词。",
+        "request": "审计正文并按影响排序。每项给出原文位置、问题类型、为什么削弱当前场景、最小修改方向；同时标记有辨识度且应保留的句段，防止修改抹平作者声音。",
+        "outputContract": "只返回结构化 JSON，不生成整章重写稿。"
+      },
+      "outputSchema": {"issues": [{"severity": "low|medium|high", "type": "string", "location": "string", "evidence": "string", "impact": "string", "direction": "string"}], "preserve": [{"location": "string", "reason": "string"}]},
+      "evaluationCriteria": ["问题有证据", "建议最小化", "保护作者声音", "不做全篇同质化"],
+      "sourceInfluences": ["pen-to-prompt", "openai-prompting"]
+    },
+    {
+      "id": "research-foreshadow-audit-v1",
+      "name": "伏笔与兑现审计",
+      "task": "foreshadow_audit",
+      "category": "知识与连续性",
+      "integrationStatus": "requires-task-extension",
+      "purpose": "检查伏笔是否被遗忘、过早暴露、无因兑现或重复设置。",
+      "requiredContext": ["伏笔账本", "章节摘要", "当前章节正文", "总纲和卷纲"],
+      "content": {
+        "system": "你是长篇伏笔编辑。区分设置、强化、误导、部分兑现、完整兑现和失效。正文未明确完成的线索不要判定为已兑现。",
+        "request": "核对当前章节涉及的伏笔。列出本章动作、与账本状态是否一致、是否存在重复提醒或长期无进展、当前读者应知道到什么程度、建议的下一次触碰窗口。",
+        "outputContract": "只返回 JSON，不改写正文。"
+      },
+      "outputSchema": {"threads": [{"id": "string", "action": "setup|reinforce|misdirect|partial_payoff|payoff|none", "ledgerConsistency": "ok|conflict|uncertain", "readerKnowledge": "string", "issue": "string", "nextWindow": "string"}]},
+      "evaluationCriteria": ["不误判兑现", "读者知识边界明确", "与总纲关联", "避免机械提醒"],
+      "sourceInfluences": ["re3", "doc", "novelai-context"]
+    },
+    {
+      "id": "research-outline-stress-test-v1",
+      "name": "大纲压力测试",
+      "task": "outline_audit",
+      "category": "编辑审校",
+      "integrationStatus": "requires-task-extension",
+      "purpose": "在写正文前发现巧合推进、动机断裂、重复结构和无代价胜利。",
+      "requiredContext": ["总纲或卷纲", "人物卡", "世界规则", "阅读承诺"],
+      "content": {
+        "system": "你是故事开发编辑。你的任务不是否定创意，而是寻找在正文阶段会放大的结构弱点。每项判断必须指向具体节点，并提出保留原意的最小修补方式。",
+        "request": "检查因果断裂、角色被动、巧合救场、反派降智、规则临时变化、同类冲突重复、升级只靠数值、回报无铺垫、选择无代价、人物弧与事件脱节、结局未兑现阅读承诺。输出通过项、风险项和修补建议。",
+        "outputContract": "只返回结构化 JSON，不重写整份大纲。"
+      },
+      "outputSchema": {"passed": ["string"], "risks": [{"severity": "low|medium|high", "node": "string", "type": "string", "evidence": "string", "minimalRepair": "string"}]},
+      "evaluationCriteria": ["定位具体节点", "不泛泛评价", "修补保留原意", "覆盖因果与人物弧"],
+      "sourceInfluences": ["re3", "doc"]
+    }
+  ],
+  "promptAddons": [
+    {"id": "addon-goal-obstacle-change", "name": "目标—阻力—变化", "category": "场景结构", "appliesTo": ["scene_plan", "chapter"], "content": "每个场景都让一个人物追求具体目标，遭遇会改变策略的阻力，并以信息、关系、资源、风险或决定的变化结束。"},
+    {"id": "addon-causal-chain", "name": "因果链优先", "category": "剧情推进", "appliesTo": ["story_outline", "volume_plan", "chapter_card", "scene_plan", "chapter"], "content": "后续事件由前序选择或后果触发；若删除前一事件会完全不影响后一事件，则补足因果连接或删除无效节点。"},
+    {"id": "addon-no-free-progress", "name": "进展必须付费", "category": "剧情推进", "appliesTo": ["chapter_card", "chapter"], "content": "人物取得有效进展时，同时失去资源、暴露弱点、欠下人情、缩小选择或制造更难处理的后果。"},
+    {"id": "addon-scene-turn", "name": "场景转向", "category": "场景结构", "appliesTo": ["scene_plan", "chapter"], "content": "场景中段或后段出现由人物行动触发的转向，使原目标、策略或双方力量关系发生变化。"},
+    {"id": "addon-active-protagonist", "name": "主角主动选择", "category": "人物行动", "appliesTo": ["story_outline", "chapter_card", "scene_plan", "chapter"], "content": "关键推进来自主角在有限信息下做出的选择；外部事件可以施压，但不能长期替主角决定故事方向。"},
+    {"id": "addon-character-agency", "name": "配角独立利益", "category": "人物行动", "appliesTo": ["planning_field", "scene_plan", "chapter"], "content": "主要配角依据自己的目标、风险和知情范围行动，不只在主角需要时提供信息、赞同或阻碍。"},
+    {"id": "addon-knowledge-boundary", "name": "人物知情边界", "category": "连续性", "appliesTo": ["chapter_card", "scene_plan", "chapter", "rewrite"], "content": "人物只能依据亲历、被告知或合理推断的信息行动；旁白已知内容不得自动变成人物知识。"},
+    {"id": "addon-pov-discipline", "name": "限知视角纪律", "category": "叙事视角", "appliesTo": ["chapter", "rewrite"], "content": "感知、判断和措辞贴合当前视角人物；不直接陈述其他人物未表达的内心，也不使用超出当前观察条件的信息。"},
+    {"id": "addon-psychic-distance-close", "name": "拉近心理距离", "category": "叙事视角", "appliesTo": ["chapter", "rewrite"], "content": "减少旁观式人物标签，让句子顺着视角人物当下的注意、判断和身体反应展开，同时保持叙述人称不变。"},
+    {"id": "addon-dialogue-subtext", "name": "对白潜台词", "category": "对白", "appliesTo": ["chapter", "rewrite"], "content": "人物说出口的话服务于眼前目的，真实顾虑通过回避、试探、措辞和动作显露，不由旁白紧接着解释。"},
+    {"id": "addon-distinct-voices", "name": "人物声音区分", "category": "对白", "appliesTo": ["chapter", "rewrite"], "content": "依据人物身份、关系、目的和压力状态区分句长、词汇、礼貌策略与回避方式，不依赖重复口头禅。"},
+    {"id": "addon-interruptions", "name": "真实对话节奏", "category": "对白", "appliesTo": ["chapter", "rewrite"], "content": "允许必要的打断、答非所问、停顿和动作插入，但每次节奏变化都应反映关系或现场压力。"},
+    {"id": "addon-action-legibility", "name": "动作可读性", "category": "场面", "appliesTo": ["chapter", "rewrite"], "content": "关键动作交代主体、对象、空间关系和结果；高速场面减少无关修饰，避免读者需要回读才能判断谁做了什么。"},
+    {"id": "addon-spatial-continuity", "name": "空间连续", "category": "连续性", "appliesTo": ["scene_plan", "chapter", "rewrite"], "content": "人物移动、出入口、遮挡、距离和关键物件位置前后一致；空间变化通过动作体现，不瞬间换位。"},
+    {"id": "addon-time-continuity", "name": "时间连续", "category": "连续性", "appliesTo": ["scene_plan", "chapter", "rewrite"], "content": "保持时间顺序、耗时、昼夜和倒计时一致；跨时段时给出足够但简洁的过渡信号。"},
+    {"id": "addon-object-state", "name": "物件状态跟踪", "category": "连续性", "appliesTo": ["chapter", "rewrite"], "content": "关键物件的持有人、位置、完好程度和使用次数必须与已确认状态一致。"},
+    {"id": "addon-sensory-selective", "name": "选择性感官细节", "category": "现场感", "appliesTo": ["chapter", "rewrite"], "content": "只选择会影响视角人物判断、情绪或行动的声音、触感、气味、光线和空间细节，不平均罗列五感。"},
+    {"id": "addon-concrete-detail", "name": "具体而非堆砌", "category": "现场感", "appliesTo": ["chapter", "rewrite"], "content": "用少量具有身份、地点或情境辨识度的具体细节替换可用于任何场景的形容词，新增细节不得改写设定。"},
+    {"id": "addon-emotional-restraint", "name": "情绪克制", "category": "情绪", "appliesTo": ["chapter", "rewrite"], "content": "减少直接命名和反复强调情绪，让情绪通过选择、注意力、身体控制失败和未说出口的话累积。"},
+    {"id": "addon-emotional-escalation", "name": "情绪递进", "category": "情绪", "appliesTo": ["scene_plan", "chapter", "rewrite"], "content": "情绪强度随新的刺激、误解、损失或选择逐步变化，不在缺少触发时突然跳到最高点。"},
+    {"id": "addon-internal-conflict", "name": "内在冲突", "category": "人物行动", "appliesTo": ["chapter", "rewrite"], "content": "让人物的外在目标、真正恐惧和自我辩护同时影响其观察与行动，避免大段自我分析。"},
+    {"id": "addon-faster-pacing", "name": "压缩节奏", "category": "节奏", "appliesTo": ["chapter", "rewrite"], "content": "压缩重复反应、无变化过场和已知信息复述，保留关键因果桥、人物声音与转折落点。"},
+    {"id": "addon-slower-pacing", "name": "放慢关键时刻", "category": "节奏", "appliesTo": ["chapter", "rewrite"], "content": "在不可逆选择、发现或关系破裂处增加动作分解、注意力变化和短暂判断，不靠重复形容词拖慢。"},
+    {"id": "addon-fair-suspense", "name": "公平悬念", "category": "悬念", "appliesTo": ["story_outline", "chapter_card", "scene_plan", "chapter"], "content": "通过不完整但真实的信息、时间压力和相互冲突的解释制造悬念，不故意隐瞒视角人物已经知道的关键事实。"},
+    {"id": "addon-foreshadow-light", "name": "轻量伏笔", "category": "悬念", "appliesTo": ["chapter", "rewrite"], "content": "伏笔首次出现时首先服务当前场景，只留下可在回看时识别的异常，不用旁白强调其将来重要。"},
+    {"id": "addon-payoff-earned", "name": "兑现有铺垫", "category": "悬念", "appliesTo": ["chapter_card", "chapter"], "content": "重要答案或能力兑现必须能追溯到已有设置；兑现同时改变当前行动，而不是停下来集中讲解。"},
+    {"id": "addon-no-premature-resolution", "name": "避免提前解决", "category": "章节结构", "appliesTo": ["chapter_card", "scene_plan", "chapter"], "content": "只完成当前章节合同，不顺手解决后续卷级冲突、人物弧或世界谜题；保留下一步真实困难。"},
+    {"id": "addon-ending-action", "name": "动作式结尾", "category": "章节结构", "appliesTo": ["chapter", "rewrite"], "content": "结尾落在具体动作、决定、发现、代价或对白上，不总结本章意义，不预告一段未来剧情。"},
+    {"id": "addon-no-author-explanation", "name": "减少作者解释", "category": "文字纪律", "appliesTo": ["chapter", "rewrite"], "content": "当动作、对白或上下文已经足以让读者判断时，删除旁白紧随其后的动机、情绪和主题解释。"},
+    {"id": "addon-no-generic-metaphor", "name": "避免通用比喻", "category": "文字纪律", "appliesTo": ["chapter", "rewrite"], "content": "避免海浪、深渊、利刃、火焰、命运齿轮等可替换比喻；需要比喻时从当前人物经验和现场物件中取材。"},
+    {"id": "addon-rhythm-variety", "name": "句式节奏变化", "category": "文字纪律", "appliesTo": ["chapter", "rewrite"], "content": "依据动作、观察、犹豫和对白自然变化句长，避免连续同构短句、机械三段式和整齐排比。"},
+    {"id": "addon-preserve-canon", "name": "已确认事实优先", "category": "连续性", "appliesTo": ["*"], "content": "创意、文风和临时要求均不得推翻已确认事实；资料不足时保持保守，并把需要用户决定的内容留作候选而非事实。"}
+  ],
+  "styleDimensions": {
+    "pointOfView": ["first_person", "third_person_limited", "third_person_omniscient", "multi_pov"],
+    "tense": ["past", "present", "mixed_intentional"],
+    "psychicDistance": ["close", "medium", "distant"],
+    "sentenceRhythm": ["compressed", "balanced", "expansive", "variable"],
+    "diction": ["plain", "colloquial", "literary", "technical", "period_specific"],
+    "expositionDensity": ["low", "medium", "high"],
+    "dialogueDensity": ["low", "medium", "high"],
+    "sensoryFocus": ["visual", "auditory", "tactile", "spatial", "selective"],
+    "emotionalTemperature": ["restrained", "warm", "intense", "darkly_humorous"],
+    "pacing": ["slow_burn", "balanced", "fast", "variable"],
+    "humor": ["none", "dry", "banter", "absurd", "satirical"],
+    "descriptionRule": "结构化文风描述应写可观察的语言特征和适用范围，不模仿在世作者，不使用只有好看、细腻、电影感等不可验证标签。"
+  },
+  "recommendedIntegrationOrder": [
+    ["research-chapter-card-v2", "research-scene-plan-v2", "research-chapter-prose-v2"],
+    ["research-rewrite-dialogue-v1", "research-rewrite-show-v1", "research-rewrite-inner-conflict-v1", "research-rewrite-compress-v1"],
+    ["research-chapter-state-extract-v1", "research-continuity-audit-v1"],
+    ["research-outline-tree-v1", "research-volume-plan-v1", "research-outline-stress-test-v1"],
+    ["research-voice-audit-v1", "research-prose-audit-v1", "research-foreshadow-audit-v1"]
+  ]
+}
