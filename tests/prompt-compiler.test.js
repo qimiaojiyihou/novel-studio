@@ -26,6 +26,10 @@ const baseInput = {
       mergedText: '克制表达\n增强压迫感\n本章减少解释',
       volume: { id: 'volume-2', title: '第二卷' },
     },
+    addons: [
+      { id: 'addon-dialogue', name: '增加有效对白', category: '叙事密度', version: 1, content: '对白必须推动关系变化。', binding: { scopeType: 'project', scopeId: 'project-1' } },
+      { id: 'addon-ending-hook', name: '章节尾钩', category: '章节结构', version: 2, content: '以新信息结束本章。', binding: { scopeType: 'chapter', scopeId: 'chapter-8' } },
+    ],
   },
 }
 
@@ -40,10 +44,13 @@ test('prompt compiler assembles versioned task contract and three-level style in
   assert.ok(user.indexOf('项目级文风：克制表达') < user.indexOf('卷级文风：增强压迫感'))
   assert.ok(user.indexOf('卷级文风：增强压迫感') < user.indexOf('章节级文风：本章减少解释'))
   assert.match(user, /项目级结构化文风.*third_person_limited/)
+  assert.ok(user.indexOf('增加有效对白') < user.indexOf('章节尾钩'))
+  assert.ok(user.indexOf('章节尾钩') < user.indexOf('本次补充要求'))
   assert.equal(user.match(/结尾停在声音响起/g)?.length, 1)
   assert.match(user, /钥匙只能在午夜使用/)
   assert.equal(compiled.snapshot.template.version, 1)
   assert.equal(compiled.snapshot.styles.volume.id, 'volume-2')
+  assert.deepEqual(compiled.snapshot.addons.map((item) => [item.id, item.version]), [['addon-dialogue', 1], ['addon-ending-hook', 2]])
   assert.equal(compiled.snapshot.promptHash.length, 64)
   assert.ok(compiled.snapshot.estimatedChars > 0)
 })
@@ -90,4 +97,5 @@ test('connection test prompt remains isolated from story context', () => {
     { role: 'user', content: '回复 NOVEL_STUDIO_OK' },
   ])
   assert.equal(compiled.snapshot.styles.sources.length, 0)
+  assert.deepEqual(compiled.snapshot.addons, [])
 })

@@ -103,6 +103,27 @@ export const appService = {
   rebuildContextMemories(projectId) {
     return electronApi.rebuildContextMemories(projectId)
   },
+  loadPromptCenter(projectId) {
+    return electronApi.loadPromptCenter(projectId)
+  },
+  savePromptTemplate(payload) {
+    return electronApi.savePromptTemplate(payload)
+  },
+  bindPromptTemplate(payload) {
+    return electronApi.bindPromptTemplate(payload)
+  },
+  saveStyleProfile(payload) {
+    return electronApi.saveStyleProfile(payload)
+  },
+  savePromptAddon(payload) {
+    return electronApi.savePromptAddon(payload)
+  },
+  setPromptAddonBinding(payload) {
+    return electronApi.setPromptAddonBinding(payload)
+  },
+  previewPrompt(payload) {
+    return electronApi.previewPrompt(payload)
+  },
   loadModelSettings() {
     return electronApi.loadModelSettings()
   },

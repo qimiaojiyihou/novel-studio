@@ -73,6 +73,7 @@
           <button class="nav-item" :class="{ active: workspaceView === 'world' }" @click="setWorkspaceView('world')"><span class="nav-glyph">◍</span>世界观</button>
           <button class="nav-item" :class="{ active: workspaceView === 'outline' }" @click="setWorkspaceView('outline')"><span class="nav-glyph">▤</span>结构规划</button>
           <button class="nav-item" :class="{ active: workspaceView === 'knowledge' }" @click="setWorkspaceView('knowledge')"><span class="nav-glyph">⌁</span>知识与连续性</button>
+          <button class="nav-item" :class="{ active: workspaceView === 'prompts' }" @click="setWorkspaceView('prompts')"><span class="nav-glyph">¶</span>提示词与文风</button>
         </nav>
 
         <div class="chapter-section">
@@ -249,6 +250,13 @@
         :project="project"
         @toast="showToast"
       />
+      <PromptCenter
+        v-else-if="workspaceView === 'prompts'"
+        :project="project"
+        :active-chapter-id="activeChapterId"
+        @toast="showToast"
+        @project-updated="Object.assign(project, $event)"
+      />
       <PlanningCenter
         v-else
         ref="planningCenterRef"
@@ -382,6 +390,7 @@ import KnowledgeCenter from './components/KnowledgeCenter.vue'
 import ModelSettings from './components/ModelSettings.vue'
 import NovelEditor from './components/NovelEditor.vue'
 import PlanningCenter from './components/PlanningCenter.vue'
+import PromptCenter from './components/PromptCenter.vue'
 import VersionHistory from './components/VersionHistory.vue'
 import { appService } from './services/app-service.js'
 import { countChinese, formatRelativeTime } from './services/format.js'

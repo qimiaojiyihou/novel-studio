@@ -1,6 +1,6 @@
-import { BUILTIN_PROMPT_TEMPLATES } from './prompt-templates.js'
+import { BUILTIN_PROMPT_ADDONS, BUILTIN_PROMPT_TEMPLATES } from './prompt-templates.js'
 
-export const LATEST_SCHEMA_VERSION = 8
+export const LATEST_SCHEMA_VERSION = 9
 
 const migrations = [
   {
@@ -376,6 +376,67 @@ const migrations = [
         insertTemplate.run(template.id, template.task, template.name, template.version, createdAt, createdAt)
         insertVersion.run(`${template.id}-version-${template.version}`, template.id, template.version, JSON.stringify(template.content), createdAt)
         insertBinding.run(`binding-global-${template.task}`, template.task, template.id, createdAt, createdAt)
+      }
+    },
+  },
+  {
+    version: 9,
+    name: 'prompt-center-and-addons',
+    up(database, now) {
+      database.exec(`
+        CREATE TABLE prompt_addons (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          category TEXT NOT NULL DEFAULT '自定义',
+          kind TEXT NOT NULL DEFAULT 'built_in' CHECK(kind IN ('built_in', 'user')),
+          enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0, 1)),
+          current_version INTEGER NOT NULL DEFAULT 1 CHECK(current_version > 0),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE prompt_addon_versions (
+          id TEXT PRIMARY KEY,
+          addon_id TEXT NOT NULL,
+          version INTEGER NOT NULL CHECK(version > 0),
+          content TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          UNIQUE(addon_id, version),
+          FOREIGN KEY(addon_id) REFERENCES prompt_addons(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE prompt_addon_bindings (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          scope_type TEXT NOT NULL CHECK(scope_type IN ('project', 'volume', 'chapter')),
+          scope_id TEXT NOT NULL,
+          task TEXT NOT NULL DEFAULT '*',
+          addon_id TEXT NOT NULL,
+          enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0, 1)),
+          priority INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE(project_id, scope_type, scope_id, task, addon_id),
+          FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
+          FOREIGN KEY(addon_id) REFERENCES prompt_addons(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX prompt_addons_category_idx ON prompt_addons(category, enabled);
+        CREATE INDEX prompt_addon_bindings_lookup_idx ON prompt_addon_bindings(project_id, scope_type, scope_id, task, enabled, priority);
+      `)
+
+      const createdAt = now()
+      const insertAddon = database.prepare(`
+        INSERT INTO prompt_addons (id, name, category, kind, enabled, current_version, created_at, updated_at)
+        VALUES (?, ?, ?, 'built_in', 1, 1, ?, ?)
+      `)
+      const insertVersion = database.prepare(`
+        INSERT INTO prompt_addon_versions (id, addon_id, version, content, created_at)
+        VALUES (?, ?, 1, ?, ?)
+      `)
+      for (const addon of BUILTIN_PROMPT_ADDONS) {
+        insertAddon.run(addon.id, addon.name, addon.category, createdAt, createdAt)
+        insertVersion.run(`${addon.id}-version-1`, addon.id, addon.content, createdAt)
       }
     },
   },

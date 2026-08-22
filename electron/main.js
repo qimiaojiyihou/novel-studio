@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url'
 import {
   archiveProject,
   buildGenerationContext,
+  bindPromptTemplate,
   createChapter,
   createKnowledgeItem,
   createPlanningCandidate,
@@ -24,6 +25,7 @@ import {
   getModelApiKey,
   listProjects,
   listRevisions,
+  loadPromptCenter,
   loadPlanningCenter,
   loadKnowledgeCenter,
   loadContextManager,
@@ -40,6 +42,9 @@ import {
   resolvePlanningCandidate,
   resolveContinuityCheck,
   savePlanningDocument,
+  savePromptAddon,
+  savePromptTemplate,
+  saveStyleProfile,
   saveModelProfile,
   startGenerationRecord,
   updateChapter,
@@ -50,6 +55,7 @@ import {
   updateContextProfile,
   refreshContinuityChecks,
   syncKnowledgeSources,
+  setPromptAddonBinding,
 } from './database.js'
 import { createModelGateway } from './model-gateway.js'
 import { compilePrompt } from './prompt-compiler.js'
@@ -178,6 +184,35 @@ function generationOutput(result = {}) {
   return ''
 }
 
+function compilePromptPreview(payload = {}) {
+  const workspace = loadWorkspace(payload.projectId)
+  const chapter = workspace.chapters.find((item) => item.id === payload.chapterId) || workspace.chapters[0]
+  const planningCenter = loadPlanningCenter(workspace.project.id)
+  const knowledgeCenter = loadKnowledgeCenter(workspace.project.id)
+  const promptContext = resolvePromptContext({
+    projectId: workspace.project.id,
+    chapterId: payload.chapterId || chapter?.id || '',
+    volumeId: payload.volumeId || '',
+    task: payload.task || 'chapter',
+  })
+  const longContext = buildGenerationContext({
+    projectId: workspace.project.id,
+    chapterId: chapter?.id,
+    instruction: payload.instruction,
+    styleText: promptContext.style?.mergedText,
+    task: payload.task || 'chapter',
+  })
+  return compilePrompt({
+    ...payload,
+    project: workspace.project,
+    chapter,
+    planningCenter,
+    knowledgeCenter,
+    promptContext,
+    longContext,
+  })
+}
+
 function registerIpc() {
   ipcMain.handle('workspace:load', (_event, projectId) => loadWorkspace(projectId))
   ipcMain.handle('projects:list', listProjects)
@@ -213,6 +248,13 @@ function registerIpc() {
   ipcMain.handle('context:load', (_event, projectId) => loadContextManager(projectId))
   ipcMain.handle('context:update', (_event, payload) => updateContextProfile(payload))
   ipcMain.handle('context:rebuild', (_event, projectId) => rebuildContextMemories(projectId))
+  ipcMain.handle('prompts:load', (_event, projectId) => loadPromptCenter(projectId))
+  ipcMain.handle('prompts:template-save', (_event, payload) => savePromptTemplate(payload))
+  ipcMain.handle('prompts:template-bind', (_event, payload) => bindPromptTemplate(payload))
+  ipcMain.handle('prompts:style-save', (_event, payload) => saveStyleProfile(payload))
+  ipcMain.handle('prompts:addon-save', (_event, payload) => savePromptAddon(payload))
+  ipcMain.handle('prompts:addon-bind', (_event, payload) => setPromptAddonBinding(payload))
+  ipcMain.handle('prompts:preview', (_event, payload) => compilePromptPreview(payload))
   ipcMain.handle('models:load', () => loadModelSettings())
   ipcMain.handle('models:save', (_event, profile) => saveModelProfile(profile))
   ipcMain.handle('models:delete', (_event, id) => deleteModelProfile(id))

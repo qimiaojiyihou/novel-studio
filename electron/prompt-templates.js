@@ -1,4 +1,4 @@
-export const PROMPT_SNAPSHOT_SCHEMA_VERSION = 1
+export const PROMPT_SNAPSHOT_SCHEMA_VERSION = 2
 
 export const CORE_SYSTEM_RULES = [
   '你是 Novel Studio 的小说创作协作者。',
@@ -83,6 +83,19 @@ export const BUILTIN_PROMPT_TEMPLATES = Object.freeze([
       outputContract: '只返回重写后的文字，不要添加标题、引号、差异说明或解释；不得擅自改变已确认事实。',
     },
   },
+])
+
+export const BUILTIN_PROMPT_ADDONS = Object.freeze([
+  { id: 'addon-dialogue', name: '增加有效对白', category: '叙事密度', content: '提高有效对白占比。对白必须推动关系、冲突或信息变化，避免寒暄和重复说明。' },
+  { id: 'addon-less-exposition', name: '减少解释', category: '叙事密度', content: '减少作者替人物解释动机与情绪，优先用动作、停顿、物件和对白让读者自行判断。' },
+  { id: 'addon-conflict', name: '强化冲突', category: '剧情推进', content: '让场景中的目标和阻力正面发生作用；每次应对都要付出代价或制造新的麻烦。' },
+  { id: 'addon-fast-pace', name: '加快节奏', category: '剧情推进', content: '压缩过场和重复反应，让信息、行动与局势变化更紧密地连续发生。' },
+  { id: 'addon-suspense', name: '悬念压力', category: '阅读体验', content: '维持未解问题与时间压力，但不要依靠故意隐瞒视角人物已经知道的信息。' },
+  { id: 'addon-sensory', name: '感官细节', category: '阅读体验', content: '在关键动作处加入少量可感知的声音、触感、气味或空间细节，细节必须服务于人物判断。' },
+  { id: 'addon-ending-hook', name: '章节尾钩', category: '章节结构', content: '在不越过章节合同的前提下，以新选择、新代价或新信息结束本章，避免总结式收尾。' },
+  { id: 'addon-continuity', name: '连续性优先', category: '创作纪律', content: '涉及人物状态、时间、地点、能力和物件时，主动与已确认事实核对；不确定时保持保守，不擅自补设定。' },
+  { id: 'addon-no-summary-ending', name: '避免总结收尾', category: '创作纪律', content: '结尾停在具体动作、对白、发现或决定上，不用概括未来、升华主题或替读者总结意义。' },
+  { id: 'addon-natural-language', name: '避免模板腔', category: '创作纪律', content: '避免机械排比、过度对称、空泛升华和可替换的情绪形容，句子应贴合当前人物与现场。' },
 ])
 
 export function builtInPromptTemplate(task) {

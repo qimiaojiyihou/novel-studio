@@ -91,3 +91,52 @@ test('generation records preserve prompt snapshot, request parameters and termin
   assert.equal(database.prepare('SELECT COUNT(*) AS count FROM style_profiles').get().count, 0)
   database.close()
 })
+
+test('custom templates create immutable versions and bind to a selected scope', () => {
+  const { database, repository } = setup()
+  const first = repository.savePromptTemplate({
+    task: 'chapter', name: '紧凑正文',
+    content: { system: '遵守既有事实。', request: '生成紧凑正文。', outputContract: '正文必须完整。' },
+  })
+  assert.equal(first.kind, 'user')
+  assert.equal(first.version, 1)
+  const second = repository.savePromptTemplate({
+    id: first.id, task: 'chapter', name: '紧凑正文',
+    content: { system: '遵守既有事实。', request: '生成更紧凑的正文。', outputContract: '正文必须完整。' },
+  })
+  assert.equal(second.version, 2)
+  assert.equal(database.prepare('SELECT COUNT(*) AS count FROM prompt_template_versions WHERE template_id = ?').get(first.id).count, 2)
+  repository.bindPromptTemplate({ projectId: 'project-1', scopeType: 'chapter', scopeId: 'chapter-1', task: 'chapter', templateId: first.id })
+  const context = repository.resolvePromptContext({ projectId: 'project-1', chapterId: 'chapter-1', task: 'chapter' })
+  assert.equal(context.template.id, first.id)
+  assert.equal(context.template.version, 2)
+  assert.equal(context.template.content.request, '生成更紧凑的正文。')
+  database.close()
+})
+
+test('structured styles persist while canonical free text stays in project volume and chapter records', () => {
+  const { database, repository } = setup()
+  repository.saveStyleProfile({ projectId: 'project-1', scopeType: 'project', scopeId: 'project-1', text: '项目新文风', style: { pointOfView: '第三人称限知' } })
+  repository.saveStyleProfile({ projectId: 'project-1', scopeType: 'volume', scopeId: 'volume-1', text: '卷级慢燃', style: { pacing: '慢燃' } })
+  repository.saveStyleProfile({ projectId: 'project-1', scopeType: 'chapter', scopeId: 'chapter-1', text: '本章短句', style: { sentenceRhythm: '短促' } })
+  const context = repository.resolvePromptContext({ projectId: 'project-1', chapterId: 'chapter-1', task: 'chapter' })
+  assert.equal(database.prepare("SELECT style FROM projects WHERE id = 'project-1'").get().style, '项目新文风')
+  assert.equal(JSON.parse(database.prepare("SELECT data_json FROM planning_entities WHERE id = 'volume-1'").get().data_json).volumeStyle, '卷级慢燃')
+  assert.equal(JSON.parse(database.prepare("SELECT card_json FROM chapters WHERE id = 'chapter-1'").get().card_json).chapterStyle, '本章短句')
+  assert.deepEqual(context.style.mergedStyle, { pointOfView: '第三人称限知', pacing: '慢燃', sentenceRhythm: '短促' })
+  database.close()
+})
+
+test('prompt add-ons resolve by task and project-volume-chapter order', () => {
+  const { database, repository } = setup()
+  repository.setPromptAddonBinding({ projectId: 'project-1', scopeType: 'chapter', scopeId: 'chapter-1', task: 'chapter', addonId: 'addon-ending-hook', enabled: true, priority: 2 })
+  repository.setPromptAddonBinding({ projectId: 'project-1', scopeType: 'project', scopeId: 'project-1', task: 'chapter', addonId: 'addon-dialogue', enabled: true, priority: 1 })
+  repository.setPromptAddonBinding({ projectId: 'project-1', scopeType: 'volume', scopeId: 'volume-1', task: '*', addonId: 'addon-conflict', enabled: true, priority: 1 })
+  const context = repository.resolvePromptContext({ projectId: 'project-1', chapterId: 'chapter-1', task: 'chapter' })
+  assert.deepEqual(context.addons.map((item) => item.id), ['addon-dialogue', 'addon-conflict', 'addon-ending-hook'])
+  const planning = repository.resolvePromptContext({ projectId: 'project-1', chapterId: 'chapter-1', task: 'planning_field' })
+  assert.deepEqual(planning.addons.map((item) => item.id), ['addon-conflict'])
+  repository.setPromptAddonBinding({ projectId: 'project-1', scopeType: 'chapter', scopeId: 'chapter-1', task: 'chapter', addonId: 'addon-ending-hook', enabled: false })
+  assert.deepEqual(repository.resolvePromptContext({ projectId: 'project-1', chapterId: 'chapter-1', task: 'chapter' }).addons.map((item) => item.id), ['addon-dialogue', 'addon-conflict'])
+  database.close()
+})

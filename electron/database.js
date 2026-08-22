@@ -322,6 +322,30 @@ export function resolvePromptContext(input) {
   return promptStore().resolvePromptContext(input)
 }
 
+export function loadPromptCenter(projectId) {
+  return promptStore().loadPromptCenter(projectId)
+}
+
+export function savePromptTemplate(input) {
+  return promptStore().savePromptTemplate(input)
+}
+
+export function bindPromptTemplate(input) {
+  return promptStore().bindPromptTemplate(input)
+}
+
+export function saveStyleProfile(input) {
+  return promptStore().saveStyleProfile(input)
+}
+
+export function savePromptAddon(input) {
+  return promptStore().savePromptAddon(input)
+}
+
+export function setPromptAddonBinding(input) {
+  return promptStore().setPromptAddonBinding(input)
+}
+
 export function startGenerationRecord(input) {
   return promptStore().startGenerationRecord(input)
 }

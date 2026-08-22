@@ -112,6 +112,7 @@ export function compilePrompt(input = {}) {
         schemaVersion: PROMPT_SNAPSHOT_SCHEMA_VERSION,
         template: { id: template.id, name: template.name, task, version: template.version },
         styles: { sources: [], mergedText: '', mergedStyle: {}, volume: null },
+        addons: [],
         oneTimeInstruction: '',
         messages,
         promptHash: promptHash(messages),
@@ -121,6 +122,16 @@ export function compilePrompt(input = {}) {
   }
 
   const styles = styleContext(input)
+  const addons = Array.isArray(input.promptContext?.addons)
+    ? input.promptContext.addons.filter((addon) => addon?.content).map((addon) => ({
+      id: addon.id,
+      name: addon.name,
+      category: addon.category || '',
+      version: Number(addon.version || 1),
+      content: String(addon.content).trim(),
+      binding: addon.binding || null,
+    }))
+    : []
   const referenceContext = input.longContext?.text || fallbackContext(input)
   const styleLines = styles.sources.flatMap((source) => [
     source.text ? `${source.label || source.scopeType}文风：${source.text}` : '',
@@ -132,6 +143,7 @@ export function compilePrompt(input = {}) {
     '【已确认参考上下文】',
     referenceContext,
     styleLines.length ? '\n【文风继承】\n' + styleLines.join('\n') : '',
+    addons.length ? '\n【叠加写作要求】\n' + addons.map((addon) => `- ${addon.name}：${addon.content}`).join('\n') : '',
     details ? '\n【当前任务细节】\n' + details : '',
     instruction ? '\n【本次补充要求】\n' + instruction : '',
     '\n【执行任务】\n' + template.content.request,
@@ -152,6 +164,13 @@ export function compilePrompt(input = {}) {
       schemaVersion: PROMPT_SNAPSHOT_SCHEMA_VERSION,
       template: { id: template.id, name: template.name, task, version: template.version },
       styles,
+      addons: addons.map((addon) => ({
+        id: addon.id,
+        name: addon.name,
+        category: addon.category,
+        version: addon.version,
+        binding: addon.binding,
+      })),
       oneTimeInstruction: instruction,
       messages,
       promptHash: promptHash(messages),
