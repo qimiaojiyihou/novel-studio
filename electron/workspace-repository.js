@@ -170,16 +170,36 @@ export function createWorkspaceRepository(database, {
     if (!current) throw new Error('章节不存在')
     const updates = []
     const values = []
+    let nextVolumeId = null
     if (typeof patch.title === 'string') { updates.push('title = ?'); values.push(cleanText(patch.title, `第 ${current.chapter_no} 章`)) }
     if (typeof patch.status === 'string') { updates.push('status = ?'); values.push(patch.status) }
     if (typeof patch.manuscript === 'string') { updates.push('manuscript = ?'); values.push(patch.manuscript) }
     if (typeof patch.scenePlan === 'string') { updates.push('scene_plan = ?'); values.push(patch.scenePlan) }
-    if (patch.card && typeof patch.card === 'object') { updates.push('card_json = ?'); values.push(JSON.stringify(patch.card)) }
+    if (patch.card && typeof patch.card === 'object') {
+      nextVolumeId = cleanText(patch.card.volumeId)
+      if (nextVolumeId) {
+        const volume = database.prepare("SELECT id FROM planning_entities WHERE id = ? AND project_id = ? AND kind = 'volume'").get(nextVolumeId, current.project_id)
+        if (!volume) throw new Error('章节所属分卷必须来自当前项目')
+      }
+      updates.push('card_json = ?')
+      values.push(JSON.stringify(patch.card))
+    }
     if (!updates.length) return mapChapter(current)
     const updatedAt = now()
     values.push(updatedAt, chapterId)
-    database.prepare(`UPDATE chapters SET ${updates.join(', ')}, updated_at = ? WHERE id = ?`).run(...values)
-    database.prepare('UPDATE projects SET updated_at = ? WHERE id = ?').run(updatedAt, current.project_id)
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      database.prepare(`UPDATE chapters SET ${updates.join(', ')}, updated_at = ? WHERE id = ?`).run(...values)
+      if (patch.card && typeof patch.card === 'object') {
+        database.prepare('UPDATE story_arc_beats SET volume_id = ?, updated_at = ? WHERE chapter_id = ?')
+          .run(nextVolumeId || null, updatedAt, chapterId)
+      }
+      database.prepare('UPDATE projects SET updated_at = ? WHERE id = ?').run(updatedAt, current.project_id)
+      database.exec('COMMIT')
+    } catch (error) {
+      database.exec('ROLLBACK')
+      throw error
+    }
     return mapChapter(chapterById.get(chapterId))
   }
 

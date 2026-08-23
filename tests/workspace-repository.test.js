@@ -49,6 +49,33 @@ test('chapter numbering is sequential inside each project', () => {
   database.close()
 })
 
+test('moving a chapter keeps linked story arc beats in the same volume', () => {
+  const { database, repository } = testRepository()
+  const workspace = repository.createProject({ title: '情节节点归卷测试' })
+  const projectId = workspace.project.id
+  const chapterId = workspace.chapters[0].id
+  const timestamp = '2026-08-20T11:00:00.000Z'
+  database.prepare(`
+    INSERT INTO planning_entities (id, project_id, kind, title, position, data_json, created_at, updated_at)
+    VALUES ('volume-sync', ?, 'volume', '第一卷', 1, '{}', ?, ?)
+  `).run(projectId, timestamp, timestamp)
+  database.prepare(`
+    INSERT INTO story_arcs (id, project_id, title, category, premise, destination, status, color_key, position, created_at, updated_at)
+    VALUES ('arc-sync', ?, '主线', 'main', '', '', 'planned', 'copper', 1, ?, ?)
+  `).run(projectId, timestamp, timestamp)
+  database.prepare(`
+    INSERT INTO story_arc_beats (id, arc_id, volume_id, chapter_id, label, change_text, position, created_at, updated_at)
+    VALUES ('beat-sync', 'arc-sync', NULL, ?, '开端', '', 1, ?, ?)
+  `).run(chapterId, timestamp, timestamp)
+
+  repository.updateChapter({ id: chapterId, card: { volumeId: 'volume-sync', goal: '进入主线' } })
+  assert.equal(database.prepare("SELECT volume_id FROM story_arc_beats WHERE id = 'beat-sync'").get().volume_id, 'volume-sync')
+  repository.updateChapter({ id: chapterId, card: { goal: '仍在推进' } })
+  assert.equal(database.prepare("SELECT volume_id FROM story_arc_beats WHERE id = 'beat-sync'").get().volume_id, null)
+  assert.throws(() => repository.updateChapter({ id: chapterId, card: { volumeId: 'missing-volume' } }), /当前项目/)
+  database.close()
+})
+
 test('projects can be edited, archived, restored and deleted without losing the active workspace', () => {
   const { database, repository } = testRepository()
   const first = repository.createProject({ title: '第一本书', genre: '悬疑' })

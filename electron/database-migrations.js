@@ -4,7 +4,7 @@ import {
   LEGACY_PROMPT_TEMPLATE_VERSIONS,
 } from './prompt-templates.js'
 
-export const LATEST_SCHEMA_VERSION = 13
+export const LATEST_SCHEMA_VERSION = 14
 
 const migrations = [
   {
@@ -641,6 +641,47 @@ const migrations = [
           ON character_relationships(project_id, status, updated_at);
         CREATE INDEX character_relationships_from_idx ON character_relationships(from_character_id);
         CREATE INDEX character_relationships_to_idx ON character_relationships(to_character_id);
+      `)
+    },
+  },
+  {
+    version: 14,
+    name: 'cross-volume-story-arcs',
+    up(database) {
+      database.exec(`
+        CREATE TABLE story_arcs (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          title TEXT NOT NULL,
+          category TEXT NOT NULL DEFAULT 'main' CHECK(category IN ('main', 'character', 'relationship', 'mystery', 'world', 'other')),
+          premise TEXT NOT NULL DEFAULT '',
+          destination TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL DEFAULT 'planned' CHECK(status IN ('planned', 'active', 'resolved', 'paused')),
+          color_key TEXT NOT NULL DEFAULT 'copper' CHECK(color_key IN ('copper', 'pine', 'slate', 'ochre', 'plum')),
+          position INTEGER NOT NULL CHECK(position > 0),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+        );
+        CREATE UNIQUE INDEX story_arcs_project_position_idx ON story_arcs(project_id, position);
+
+        CREATE TABLE story_arc_beats (
+          id TEXT PRIMARY KEY,
+          arc_id TEXT NOT NULL,
+          volume_id TEXT,
+          chapter_id TEXT,
+          label TEXT NOT NULL,
+          change_text TEXT NOT NULL DEFAULT '',
+          position INTEGER NOT NULL CHECK(position > 0),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY(arc_id) REFERENCES story_arcs(id) ON DELETE CASCADE,
+          FOREIGN KEY(volume_id) REFERENCES planning_entities(id) ON DELETE SET NULL,
+          FOREIGN KEY(chapter_id) REFERENCES chapters(id) ON DELETE SET NULL
+        );
+        CREATE UNIQUE INDEX story_arc_beats_arc_position_idx ON story_arc_beats(arc_id, position);
+        CREATE INDEX story_arc_beats_volume_idx ON story_arc_beats(volume_id);
+        CREATE INDEX story_arc_beats_chapter_idx ON story_arc_beats(chapter_id);
       `)
     },
   },

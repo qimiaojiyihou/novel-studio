@@ -5,6 +5,9 @@ const ENTITY_KINDS = new Set(['character', 'world', 'volume'])
 const RELATION_DIRECTIONS = new Set(['mutual', 'from_to', 'to_from'])
 const RELATION_TRENDS = new Set(['warming', 'stable', 'cooling', 'hostile'])
 const RELATION_STATUSES = new Set(['active', 'changed', 'ended'])
+const ARC_CATEGORIES = new Set(['main', 'character', 'relationship', 'mystery', 'world', 'other'])
+const ARC_STATUSES = new Set(['planned', 'active', 'resolved', 'paused'])
+const ARC_COLORS = new Set(['copper', 'pine', 'slate', 'ochre', 'plum'])
 
 const DOCUMENT_DEFAULTS = {
   foundation: {
@@ -111,6 +114,40 @@ function mapRelationship(row) {
   } : null
 }
 
+function mapStoryArcBeat(row) {
+  return row ? {
+    id: row.id,
+    arcId: row.arc_id,
+    volumeId: row.volume_id || '',
+    volumeTitle: row.volume_title || '',
+    chapterId: row.chapter_id || '',
+    chapterNo: row.chapter_no ? Number(row.chapter_no) : null,
+    chapterTitle: row.chapter_title || '',
+    label: row.label,
+    changeText: row.change_text,
+    position: Number(row.position),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  } : null
+}
+
+function mapStoryArc(row, beats = []) {
+  return row ? {
+    id: row.id,
+    projectId: row.project_id,
+    title: row.title,
+    category: row.category,
+    premise: row.premise,
+    destination: row.destination,
+    status: row.status,
+    colorKey: row.color_key,
+    position: Number(row.position),
+    beats,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  } : null
+}
+
 export function createPlanningRepository(database, {
   now = () => new Date().toISOString(),
   createId = (prefix) => `${prefix}-${randomUUID()}`,
@@ -120,6 +157,8 @@ export function createPlanningRepository(database, {
   const chapterById = database.prepare('SELECT * FROM chapters WHERE id = ?')
   const candidateById = database.prepare('SELECT * FROM planning_candidates WHERE id = ?')
   const relationshipById = database.prepare('SELECT * FROM character_relationships WHERE id = ?')
+  const storyArcById = database.prepare('SELECT * FROM story_arcs WHERE id = ?')
+  const storyArcBeatById = database.prepare('SELECT * FROM story_arc_beats WHERE id = ?')
 
   function assertProject(projectId) {
     const project = projectById.get(projectId)
@@ -177,6 +216,25 @@ export function createPlanningRepository(database, {
       ORDER BY CASE relationship.status WHEN 'active' THEN 0 WHEN 'changed' THEN 1 ELSE 2 END,
         relationship.updated_at DESC, relationship.created_at
     `).all(projectId).map(mapRelationship)
+  }
+
+  function listStoryArcs(projectId) {
+    const rows = database.prepare('SELECT * FROM story_arcs WHERE project_id = ? ORDER BY position, created_at').all(projectId)
+    const beats = database.prepare(`
+      SELECT beat.*, volume.title AS volume_title, chapter.chapter_no, chapter.title AS chapter_title
+      FROM story_arc_beats beat
+      JOIN story_arcs arc ON arc.id = beat.arc_id
+      LEFT JOIN planning_entities volume ON volume.id = beat.volume_id
+      LEFT JOIN chapters chapter ON chapter.id = beat.chapter_id
+      WHERE arc.project_id = ?
+      ORDER BY arc.position, beat.position, beat.created_at
+    `).all(projectId).map(mapStoryArcBeat)
+    const beatsByArc = new Map()
+    for (const beat of beats) {
+      if (!beatsByArc.has(beat.arcId)) beatsByArc.set(beat.arcId, [])
+      beatsByArc.get(beat.arcId).push(beat)
+    }
+    return rows.map((row) => mapStoryArc(row, beatsByArc.get(row.id) || []))
   }
 
   function buildLocationView(projectId, worldElements, characters) {
@@ -264,6 +322,7 @@ export function createPlanningRepository(database, {
       candidates: listPendingCandidates(projectId),
       relationships: listRelationships(projectId),
       locations: buildLocationView(projectId, worldElements, characters),
+      storyArcs: listStoryArcs(projectId),
     }
   }
 
@@ -341,6 +400,128 @@ export function createPlanningRepository(database, {
     database.prepare('DELETE FROM character_relationships WHERE id = ?').run(id)
     database.prepare('UPDATE projects SET updated_at = ? WHERE id = ?').run(timestamp, current.project_id)
     return listRelationships(current.project_id)
+  }
+
+  function normalizeStoryArcInput(input, current = null) {
+    const projectId = current?.project_id || input.projectId
+    assertProject(projectId)
+    const category = input.category || current?.category || 'main'
+    const status = input.status || current?.status || 'planned'
+    const colorKey = input.colorKey || current?.color_key || 'copper'
+    if (!ARC_CATEGORIES.has(category)) throw new Error('情节线类型不受支持')
+    if (!ARC_STATUSES.has(status)) throw new Error('情节线状态不受支持')
+    if (!ARC_COLORS.has(colorKey)) throw new Error('情节线颜色不受支持')
+    return {
+      projectId,
+      title: cleanText(input.title, current?.title || '未命名情节线'),
+      category,
+      premise: typeof input.premise === 'string' ? input.premise.trim() : current?.premise || '',
+      destination: typeof input.destination === 'string' ? input.destination.trim() : current?.destination || '',
+      status,
+      colorKey,
+    }
+  }
+
+  function createStoryArc(input = {}) {
+    const value = normalizeStoryArcInput(input)
+    const position = Number(database.prepare('SELECT COALESCE(MAX(position), 0) + 1 AS position FROM story_arcs WHERE project_id = ?').get(value.projectId).position)
+    const id = createId('arc')
+    const timestamp = now()
+    database.prepare(`
+      INSERT INTO story_arcs (id, project_id, title, category, premise, destination, status, color_key, position, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(id, value.projectId, value.title, value.category, value.premise, value.destination, value.status, value.colorKey, position, timestamp, timestamp)
+    database.prepare('UPDATE projects SET updated_at = ? WHERE id = ?').run(timestamp, value.projectId)
+    return listStoryArcs(value.projectId).find((arc) => arc.id === id)
+  }
+
+  function updateStoryArc(input = {}) {
+    const current = storyArcById.get(input.id)
+    if (!current) throw new Error('情节线不存在')
+    const value = normalizeStoryArcInput(input, current)
+    const timestamp = now()
+    database.prepare(`
+      UPDATE story_arcs SET title = ?, category = ?, premise = ?, destination = ?, status = ?, color_key = ?, updated_at = ?
+      WHERE id = ?
+    `).run(value.title, value.category, value.premise, value.destination, value.status, value.colorKey, timestamp, current.id)
+    database.prepare('UPDATE projects SET updated_at = ? WHERE id = ?').run(timestamp, current.project_id)
+    return listStoryArcs(current.project_id).find((arc) => arc.id === current.id)
+  }
+
+  function deleteStoryArc(id) {
+    const current = storyArcById.get(id)
+    if (!current) throw new Error('情节线不存在')
+    assertProject(current.project_id)
+    const timestamp = now()
+    database.prepare('DELETE FROM story_arcs WHERE id = ?').run(id)
+    database.prepare('UPDATE projects SET updated_at = ? WHERE id = ?').run(timestamp, current.project_id)
+    return listStoryArcs(current.project_id)
+  }
+
+  function normalizeStoryArcBeatInput(input, current = null) {
+    const arcId = current?.arc_id || input.arcId
+    const arc = storyArcById.get(arcId)
+    if (!arc) throw new Error('情节线不存在')
+    assertProject(arc.project_id)
+    const hasVolume = Object.prototype.hasOwnProperty.call(input, 'volumeId')
+    const hasChapter = Object.prototype.hasOwnProperty.call(input, 'chapterId')
+    let volumeId = hasVolume ? cleanText(input.volumeId) : current?.volume_id || ''
+    const chapterId = hasChapter ? cleanText(input.chapterId) : current?.chapter_id || ''
+    if (volumeId) {
+      const volume = entityById.get(volumeId)
+      if (!volume || volume.project_id !== arc.project_id || volume.kind !== 'volume') throw new Error('情节节点必须关联当前项目的分卷')
+    }
+    if (chapterId) {
+      const chapter = chapterById.get(chapterId)
+      if (!chapter || chapter.project_id !== arc.project_id) throw new Error('情节节点必须关联当前项目的章节')
+      const chapterVolumeId = cleanText(parseJson(chapter.card_json).volumeId)
+      if (!volumeId && chapterVolumeId) volumeId = chapterVolumeId
+      if (volumeId && chapterVolumeId !== volumeId) throw new Error('章节所属分卷与情节节点不一致')
+    }
+    return {
+      arc,
+      arcId,
+      volumeId,
+      chapterId,
+      label: cleanText(input.label, current?.label || '关键变化'),
+      changeText: typeof input.changeText === 'string' ? input.changeText.trim() : current?.change_text || '',
+    }
+  }
+
+  function createStoryArcBeat(input = {}) {
+    const value = normalizeStoryArcBeatInput(input)
+    const position = Number(database.prepare('SELECT COALESCE(MAX(position), 0) + 1 AS position FROM story_arc_beats WHERE arc_id = ?').get(value.arcId).position)
+    const id = createId('arc-beat')
+    const timestamp = now()
+    database.prepare(`
+      INSERT INTO story_arc_beats (id, arc_id, volume_id, chapter_id, label, change_text, position, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(id, value.arcId, value.volumeId || null, value.chapterId || null, value.label, value.changeText, position, timestamp, timestamp)
+    database.prepare('UPDATE projects SET updated_at = ? WHERE id = ?').run(timestamp, value.arc.project_id)
+    return listStoryArcs(value.arc.project_id).find((arc) => arc.id === value.arcId)?.beats.find((beat) => beat.id === id)
+  }
+
+  function updateStoryArcBeat(input = {}) {
+    const current = storyArcBeatById.get(input.id)
+    if (!current) throw new Error('情节节点不存在')
+    const value = normalizeStoryArcBeatInput(input, current)
+    const timestamp = now()
+    database.prepare(`
+      UPDATE story_arc_beats SET volume_id = ?, chapter_id = ?, label = ?, change_text = ?, updated_at = ? WHERE id = ?
+    `).run(value.volumeId || null, value.chapterId || null, value.label, value.changeText, timestamp, current.id)
+    database.prepare('UPDATE projects SET updated_at = ? WHERE id = ?').run(timestamp, value.arc.project_id)
+    return listStoryArcs(value.arc.project_id).find((arc) => arc.id === value.arcId)?.beats.find((beat) => beat.id === current.id)
+  }
+
+  function deleteStoryArcBeat(id) {
+    const current = storyArcBeatById.get(id)
+    if (!current) throw new Error('情节节点不存在')
+    const arc = storyArcById.get(current.arc_id)
+    assertProject(arc.project_id)
+    const timestamp = now()
+    database.prepare('DELETE FROM story_arc_beats WHERE id = ?').run(id)
+    database.prepare('UPDATE projects SET updated_at = ? WHERE id = ?').run(timestamp, arc.project_id)
+    return listStoryArcs(arc.project_id).find((item) => item.id === arc.id)
   }
 
   function saveDocument({ projectId, kind, content = {} }) {
@@ -568,6 +749,12 @@ export function createPlanningRepository(database, {
     createRelationship,
     updateRelationship,
     deleteRelationship,
+    createStoryArc,
+    updateStoryArc,
+    deleteStoryArc,
+    createStoryArcBeat,
+    updateStoryArcBeat,
+    deleteStoryArcBeat,
     createCandidate,
     resolveCandidate,
   }

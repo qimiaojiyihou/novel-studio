@@ -52,6 +52,8 @@ test('fresh database migrates to the latest schema with foreign keys enabled', (
     assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'knowledge_candidates'").get())
     assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'knowledge_item_candidates'").get())
     assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'character_relationships'").get())
+    assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'story_arcs'").get())
+    assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'story_arc_beats'").get())
     assert.match(database.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'knowledge_items'").get().sql, /'ai'/)
     assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'context_profiles'").get())
     assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'chapter_memories'").get())

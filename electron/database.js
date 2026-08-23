@@ -276,6 +276,30 @@ export function deleteCharacterRelationship(id) {
   return planningStore().deleteRelationship(id)
 }
 
+export function createStoryArc(input) {
+  return planningStore().createStoryArc(input)
+}
+
+export function updateStoryArc(input) {
+  return planningStore().updateStoryArc(input)
+}
+
+export function deleteStoryArc(id) {
+  return planningStore().deleteStoryArc(id)
+}
+
+export function createStoryArcBeat(input) {
+  return planningStore().createStoryArcBeat(input)
+}
+
+export function updateStoryArcBeat(input) {
+  return planningStore().updateStoryArcBeat(input)
+}
+
+export function deleteStoryArcBeat(id) {
+  return planningStore().deleteStoryArcBeat(id)
+}
+
 export function createPlanningCandidate(input) {
   return planningStore().createCandidate(input)
 }

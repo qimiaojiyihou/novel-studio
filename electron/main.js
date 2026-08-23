@@ -10,6 +10,8 @@ import {
   bindPromptTemplate,
   createChapter,
   createCharacterRelationship,
+  createStoryArc,
+  createStoryArcBeat,
   createKnowledgeItem,
   createKnowledgeCandidate,
   createPlanningCandidate,
@@ -18,6 +20,8 @@ import {
   createRevision,
   deleteChapter,
   deleteCharacterRelationship,
+  deleteStoryArc,
+  deleteStoryArcBeat,
   deleteKnowledgeItem,
   deleteModelProfile,
   deletePlanningEntity,
@@ -54,6 +58,8 @@ import {
   startGenerationRecord,
   updateChapter,
   updateCharacterRelationship,
+  updateStoryArc,
+  updateStoryArcBeat,
   updateKnowledgeItem,
   updateKnowledgeItemCandidate,
   updateProject,
@@ -247,6 +253,12 @@ function registerIpc() {
   ipcMain.handle('planning:relationship-create', (_event, payload) => createCharacterRelationship(payload))
   ipcMain.handle('planning:relationship-update', (_event, payload) => updateCharacterRelationship(payload))
   ipcMain.handle('planning:relationship-delete', (_event, id) => deleteCharacterRelationship(id))
+  ipcMain.handle('planning:arc-create', (_event, payload) => createStoryArc(payload))
+  ipcMain.handle('planning:arc-update', (_event, payload) => updateStoryArc(payload))
+  ipcMain.handle('planning:arc-delete', (_event, id) => deleteStoryArc(id))
+  ipcMain.handle('planning:arc-beat-create', (_event, payload) => createStoryArcBeat(payload))
+  ipcMain.handle('planning:arc-beat-update', (_event, payload) => updateStoryArcBeat(payload))
+  ipcMain.handle('planning:arc-beat-delete', (_event, id) => deleteStoryArcBeat(id))
   ipcMain.handle('planning:candidate-create', (_event, payload) => createPlanningCandidate(payload))
   ipcMain.handle('planning:candidate-resolve', (_event, payload) => resolvePlanningCandidate(payload))
   ipcMain.handle('knowledge:load', (_event, projectId) => loadKnowledgeCenter(projectId))

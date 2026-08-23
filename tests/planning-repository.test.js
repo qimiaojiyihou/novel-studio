@@ -133,6 +133,50 @@ test('location view combines planned places with latest accepted character state
   database.close()
 })
 
+test('story arcs connect editable beats across volumes and chapters', () => {
+  const { database, repository } = testRepository()
+  const volumeOne = repository.createEntity({ projectId: 'project-1', kind: 'volume', title: '第一卷' })
+  const volumeTwo = repository.createEntity({ projectId: 'project-1', kind: 'volume', title: '第二卷' })
+  const world = repository.createEntity({ projectId: 'project-1', kind: 'world', title: '旧车站' })
+  database.prepare('UPDATE chapters SET card_json = ? WHERE id = ?').run(JSON.stringify({ volumeId: volumeOne.id }), 'chapter-1')
+
+  const arc = repository.createStoryArc({
+    projectId: 'project-1', title: '失踪案真相', category: 'mystery', premise: '一封伪造的遗书',
+    destination: '主角确认失踪者主动布局', colorKey: 'plum',
+  })
+  const opening = repository.createStoryArcBeat({
+    arcId: arc.id, volumeId: volumeOne.id, chapterId: 'chapter-1', label: '遗书出现', changeText: '问题被公开提出。',
+  })
+  const reversal = repository.createStoryArcBeat({
+    arcId: arc.id, volumeId: volumeTwo.id, label: '证词反转', changeText: '调查方向被迫改变。',
+  })
+  const loaded = repository.loadPlanningCenter('project-1').storyArcs[0]
+  assert.equal(loaded.title, '失踪案真相')
+  assert.equal(loaded.beats[0].chapterTitle, '第一章')
+  assert.equal(loaded.beats[0].volumeTitle, '第一卷')
+  assert.equal(loaded.beats[1].volumeTitle, '第二卷')
+
+  assert.throws(() => repository.createStoryArcBeat({ arcId: arc.id, volumeId: world.id, label: '错误节点' }), /当前项目的分卷/)
+  assert.throws(() => repository.createStoryArcBeat({ arcId: arc.id, volumeId: volumeTwo.id, chapterId: 'chapter-1', label: '错卷章节' }), /所属分卷/)
+
+  const updatedArc = repository.updateStoryArc({ id: arc.id, status: 'active', destination: '真相改写所有人的利益关系' })
+  assert.equal(updatedArc.status, 'active')
+  const updatedBeat = repository.updateStoryArcBeat({ id: reversal.id, label: '第二份证词', changeText: '盟友成为嫌疑人。' })
+  assert.equal(updatedBeat.label, '第二份证词')
+
+  repository.deleteEntity(volumeOne.id)
+  const detached = repository.loadPlanningCenter('project-1').storyArcs[0].beats.find((beat) => beat.id === opening.id)
+  assert.equal(detached.volumeId, '')
+  assert.equal(detached.chapterId, 'chapter-1')
+
+  repository.deleteStoryArcBeat(reversal.id)
+  assert.equal(repository.loadPlanningCenter('project-1').storyArcs[0].beats.length, 1)
+  repository.deleteStoryArc(arc.id)
+  assert.equal(database.prepare('SELECT COUNT(*) AS count FROM story_arcs').get().count, 0)
+  assert.equal(database.prepare('SELECT COUNT(*) AS count FROM story_arc_beats').get().count, 0)
+  database.close()
+})
+
 test('field candidates are persistent, explicit and protected from stale overwrite', () => {
   const { database, repository } = testRepository()
   repository.loadPlanningCenter('project-1')
@@ -213,6 +257,8 @@ test('project deletion cascades through all planning records', () => {
   const first = repository.createEntity({ projectId: 'project-1', kind: 'character', title: '人物 A' })
   const second = repository.createEntity({ projectId: 'project-1', kind: 'character', title: '人物 B' })
   repository.createRelationship({ projectId: 'project-1', fromCharacterId: first.id, toCharacterId: second.id, label: '盟友' })
+  const arc = repository.createStoryArc({ projectId: 'project-1', title: '主线' })
+  repository.createStoryArcBeat({ arcId: arc.id, chapterId: 'chapter-1', label: '开端' })
   repository.createCandidate({
     projectId: 'project-1',
     targetType: 'document',
@@ -226,5 +272,7 @@ test('project deletion cascades through all planning records', () => {
   assert.equal(database.prepare('SELECT COUNT(*) AS count FROM planning_entities').get().count, 0)
   assert.equal(database.prepare('SELECT COUNT(*) AS count FROM planning_candidates').get().count, 0)
   assert.equal(database.prepare('SELECT COUNT(*) AS count FROM character_relationships').get().count, 0)
+  assert.equal(database.prepare('SELECT COUNT(*) AS count FROM story_arcs').get().count, 0)
+  assert.equal(database.prepare('SELECT COUNT(*) AS count FROM story_arc_beats').get().count, 0)
   database.close()
 })

@@ -73,6 +73,24 @@ export const appService = {
   deleteCharacterRelationship(id) {
     return electronApi.deleteCharacterRelationship(id)
   },
+  createStoryArc(payload) {
+    return electronApi.createStoryArc(payload)
+  },
+  updateStoryArc(payload) {
+    return electronApi.updateStoryArc(payload)
+  },
+  deleteStoryArc(id) {
+    return electronApi.deleteStoryArc(id)
+  },
+  createStoryArcBeat(payload) {
+    return electronApi.createStoryArcBeat(payload)
+  },
+  updateStoryArcBeat(payload) {
+    return electronApi.updateStoryArcBeat(payload)
+  },
+  deleteStoryArcBeat(id) {
+    return electronApi.deleteStoryArcBeat(id)
+  },
   createPlanningCandidate(payload) {
     return electronApi.createPlanningCandidate(payload)
   },

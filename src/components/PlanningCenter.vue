@@ -84,6 +84,7 @@
           <div class="index-heading"><span>结构层级</span><small>从全书到章节</small></div>
           <button class="index-mode" :class="{ active: structureMode === 'outline' }" @click="structureMode = 'outline'">总纲骨架</button>
           <button class="index-mode" :class="{ active: structureMode === 'volumes' }" @click="structureMode = 'volumes'">分卷 / 阶段 · {{ center.volumes.length }}</button>
+          <button class="index-mode" :class="{ active: structureMode === 'arcs' }" @click="openStoryArcs">跨卷情节弧 · {{ center.storyArcs.length }}</button>
           <button class="index-mode" :class="{ active: structureMode === 'chapters' }" @click="structureMode = 'chapters'">章节规划 · {{ center.chapters.length }}</button>
           <template v-if="structureMode === 'volumes'">
             <button class="index-add" @click="createEntity('volume')">＋ 添加分卷</button>
@@ -96,6 +97,18 @@
             >
               <b>{{ String(entity.position).padStart(2, '0') }}</b>
               <span><strong>{{ entity.title }}</strong><small>{{ entity.data.chapterRange || '范围待定' }}</small></span>
+            </button>
+          </template>
+          <template v-if="structureMode === 'arcs'">
+            <button class="index-add" @click="createArc">＋ 添加情节线</button>
+            <button
+              v-for="arc in center.storyArcs"
+              :key="arc.id"
+              class="arc-index-item"
+              :class="[{ active: selectedArcId === arc.id }, `arc-${arc.colorKey}`]"
+              @click="selectArc(arc.id)"
+            >
+              <i></i><span><strong>{{ arc.title }}</strong><small>{{ arcCategoryLabel(arc.category) }} · {{ arc.beats.length }} 个节点</small></span>
             </button>
           </template>
           <template v-if="structureMode === 'chapters'">
@@ -253,7 +266,7 @@
           </template>
         </div>
 
-        <div v-else class="planning-sheet">
+        <div v-else class="planning-sheet" :class="{ 'arc-planning-sheet': structureMode === 'arcs' }">
           <template v-if="structureMode === 'outline'">
             <div class="sheet-heading">
               <div><span>STORY SPINE</span><h2>全书转折骨架</h2></div>
@@ -286,6 +299,56 @@
             @delete="requestEntityDelete(selectedVolume)"
           />
           <EmptyPlanning v-else-if="structureMode === 'volumes'" title="把长篇拆成会改变局势的阶段" copy="每一卷都应有独立目标、主要阻力、阶段变化和卷末兑现。" action="添加第一卷" @action="createEntity('volume')" />
+          <template v-else-if="structureMode === 'arcs'">
+            <div class="entity-editor-heading arc-heading">
+              <div><span>STORY THREADS</span><h2>跨卷情节弧</h2><p>沿着分卷追踪每条主线、人物线或悬疑线发生了什么实质变化。</p></div>
+              <button class="arc-create-button" @click="createArc">＋ 新情节线</button>
+            </div>
+            <div v-if="!center.storyArcs.length" class="relationship-empty arc-empty"><span>⌁</span><strong>还没有贯穿全书的情节线</strong><p>先建立一条主线，再把关键变化放进不同分卷；尚未建立分卷时也可先放在“未归卷”。</p><button @click="createArc">建立第一条线</button></div>
+            <template v-else>
+              <div class="arc-matrix">
+                <div class="arc-grid" :style="arcGridStyle">
+                  <div class="arc-corner"><span>情节线</span><small>起点 → 落点</small></div>
+                  <div v-for="column in arcColumns" :key="column.id || 'unassigned'" class="arc-column-heading"><span>{{ column.title }}</span><small>{{ arcColumnChapterRange(column.id) }}</small></div>
+                  <template v-for="arc in center.storyArcs" :key="arc.id">
+                    <button class="arc-row-label" :class="[{ active: selectedArcId === arc.id }, `arc-${arc.colorKey}`]" @click="selectArc(arc.id)">
+                      <i></i><span><strong>{{ arc.title }}</strong><small>{{ arcStatusLabel(arc.status) }} · {{ arcCategoryLabel(arc.category) }}</small></span>
+                    </button>
+                    <div v-for="column in arcColumns" :key="`${arc.id}:${column.id || 'unassigned'}`" class="arc-cell" :class="`arc-${arc.colorKey}`">
+                      <button v-for="beat in arcBeatsInColumn(arc, column.id)" :key="beat.id" class="arc-beat-card" :class="{ active: selectedArcBeatId === beat.id }" @click="selectArcBeat(arc.id, beat.id)">
+                        <strong>{{ beat.label }}</strong><small v-if="beat.chapterId">第 {{ beat.chapterNo }} 章 · {{ beat.chapterTitle }}</small><p>{{ beat.changeText || '等待补充变化结果' }}</p>
+                      </button>
+                      <button class="arc-beat-add" @click="startArcBeatCreate(arc.id, column.id)">＋ 节点</button>
+                    </div>
+                  </template>
+                </div>
+              </div>
+
+              <section v-if="arcForm" class="arc-editor" :class="`arc-${arcForm.colorKey}`">
+                <div class="arc-editor-heading"><div><span>THREAD CONTRACT</span><h3>{{ arcForm.title || '新情节线' }}</h3></div><button @click="removeArc">删除情节线</button></div>
+                <div class="arc-form-grid">
+                  <label class="wide"><span>情节线名称</span><input v-model="arcForm.title" placeholder="例如：失踪案真相"></label>
+                  <label><span>类型</span><select v-model="arcForm.category"><option value="main">主线</option><option value="character">人物弧</option><option value="relationship">关系线</option><option value="mystery">悬疑线</option><option value="world">世界变化</option><option value="other">其他</option></select></label>
+                  <label><span>状态</span><select v-model="arcForm.status"><option value="planned">待展开</option><option value="active">推进中</option><option value="resolved">已兑现</option><option value="paused">暂挂</option></select></label>
+                  <label><span>线条颜色</span><select v-model="arcForm.colorKey"><option value="copper">铜红</option><option value="pine">松绿</option><option value="slate">岩蓝</option><option value="ochre">赭黄</option><option value="plum">梅紫</option></select></label>
+                  <label class="wide"><span>起点 / 初始问题</span><textarea v-model="arcForm.premise" placeholder="这条线一开始提出什么问题、欠下什么承诺？"></textarea></label>
+                  <label class="wide"><span>终点 / 兑现结果</span><textarea v-model="arcForm.destination" placeholder="到最后，局势、认知或关系必须发生什么不可逆变化？"></textarea></label>
+                </div>
+                <div class="relationship-editor-actions"><button @click="resetArcForm">还原</button><button class="save" @click="saveArc">保存情节线</button></div>
+              </section>
+
+              <section v-if="arcBeatForm" class="arc-beat-editor">
+                <div class="arc-editor-heading"><div><span>TURNING BEAT</span><h3>{{ arcBeatForm.id ? '编辑关键节点' : '添加关键节点' }}</h3></div><button v-if="arcBeatForm.id" @click="removeArcBeat">删除节点</button></div>
+                <div class="arc-form-grid">
+                  <label><span>所属分卷</span><select v-model="arcBeatForm.volumeId" @change="handleArcBeatVolumeChange"><option value="">未归卷</option><option v-for="volume in center.volumes" :key="volume.id" :value="volume.id">{{ volume.title }}</option></select></label>
+                  <label><span>对应章节（可选）</span><select v-model="arcBeatForm.chapterId"><option value="">不绑定章节</option><option v-for="chapter in arcBeatChapterOptions" :key="chapter.id" :value="chapter.id">第 {{ chapter.chapterNo }} 章 · {{ chapter.title }}</option></select></label>
+                  <label class="wide"><span>节点名称</span><input v-model="arcBeatForm.label" placeholder="例如：第二份证词出现"></label>
+                  <label class="wide"><span>发生了什么实质变化</span><textarea v-model="arcBeatForm.changeText" placeholder="写结果，不只写事件：谁改变策略、掌握了什么、失去了什么？"></textarea></label>
+                </div>
+                <div class="relationship-editor-actions"><button @click="cancelArcBeatEdit">取消</button><button class="save" @click="saveArcBeat">保存节点</button></div>
+              </section>
+            </template>
+          </template>
           <template v-else-if="structureMode === 'chapters' && selectedChapter">
             <div class="entity-editor-heading chapter-plan-heading">
               <div><span>CHAPTER {{ String(selectedChapter.chapterNo).padStart(2, '0') }}</span><h2>{{ selectedChapter.title }}</h2><p>章节规划会直接进入正文生成上下文。</p></div>
@@ -393,7 +456,11 @@ const selectedVolumeId = ref('')
 const selectedChapterId = ref('')
 const selectedRelationshipId = ref('')
 const selectedLocationId = ref('')
+const selectedArcId = ref('')
+const selectedArcBeatId = ref('')
 const relationshipForm = ref(null)
+const arcForm = ref(null)
+const arcBeatForm = ref(null)
 const characterMode = ref('files')
 const worldMode = ref('overview')
 const structureMode = ref('outline')
@@ -420,6 +487,16 @@ const selectedWorldElement = computed(() => center.value?.worldElements.find((it
 const selectedVolume = computed(() => center.value?.volumes.find((item) => item.id === selectedVolumeId.value))
 const selectedChapter = computed(() => center.value?.chapters.find((item) => item.id === selectedChapterId.value))
 const selectedLocation = computed(() => center.value?.locations.find((item) => item.id === selectedLocationId.value) || center.value?.locations[0] || null)
+const selectedArc = computed(() => center.value?.storyArcs.find((item) => item.id === selectedArcId.value) || null)
+const arcColumns = computed(() => [...(center.value?.volumes || []), { id: '', title: '未归卷' }])
+const arcGridStyle = computed(() => {
+  const count = arcColumns.value.length
+  return { gridTemplateColumns: `220px repeat(${count}, minmax(180px, 1fr))`, minWidth: `${220 + count * 180}px` }
+})
+const arcBeatChapterOptions = computed(() => {
+  if (!arcBeatForm.value) return []
+  return (center.value?.chapters || []).filter((chapter) => (chapter.card?.volumeId || '') === arcBeatForm.value.volumeId)
+})
 const relationshipNodes = computed(() => {
   const characters = center.value?.characters || []
   const presets = [[17, 22], [50, 14], [83, 24], [18, 72], [50, 84], [82, 70]]
@@ -452,6 +529,11 @@ const completionCount = computed(() => {
   if (props.section === 'outline' && structureMode.value === 'chapters' && selectedChapter.value) {
     return { completed: chapterPlanFields.filter((field) => hasValue(chapterFieldValue(selectedChapter.value, field))).length, total: chapterPlanFields.length }
   }
+  if (props.section === 'outline' && structureMode.value === 'arcs') {
+    return selectedArc.value
+      ? { completed: [selectedArc.value.title, selectedArc.value.premise, selectedArc.value.destination].filter(hasValue).length, total: 3 }
+      : { completed: 0, total: 3 }
+  }
   const entity = props.section === 'characters' ? selectedCharacter.value : props.section === 'world' ? selectedWorldElement.value : selectedVolume.value
   const fields = props.section === 'characters' ? entityFields.character : props.section === 'world' ? entityFields.world : entityFields.volume
   return entity ? { completed: fields.filter((field) => hasValue(entity.data[field.key])).length + (hasValue(entity.title) ? 1 : 0), total: fields.length + 1 } : { completed: 0, total: fields.length + 1 }
@@ -478,12 +560,16 @@ async function loadCenter() {
     selectedChapterId.value = keepOrFirst(selectedChapterId.value, center.value.chapters)
     selectedRelationshipId.value = keepOrFirst(selectedRelationshipId.value, center.value.relationships)
     selectedLocationId.value = keepOrFirst(selectedLocationId.value, center.value.locations)
+    selectedArcId.value = keepOrFirst(selectedArcId.value, center.value.storyArcs)
+    const arcBeats = center.value.storyArcs.flatMap((arc) => arc.beats)
+    selectedArcBeatId.value = keepOrFirst(selectedArcBeatId.value, arcBeats)
     activeCandidateId.value = keepOrFirst(activeCandidateId.value, center.value.candidates)
     if (characterMode.value === 'relationships') {
       relationshipForm.value = selectedRelationshipId.value
         ? relationshipDraft(center.value.relationships.find((item) => item.id === selectedRelationshipId.value))
         : null
     }
+    if (structureMode.value === 'arcs') resetArcForm()
     saveState.value = 'saved'
   } catch (error) {
     loadError.value = error.message
@@ -581,6 +667,135 @@ async function promoteObservedLocation(location) {
     selectedLocationId.value = entity.id
     emit('toast', `“${location.title}”已转为地点卡`)
   } catch (error) { emit('toast', `建立地点卡失败：${error.message}`) }
+}
+
+function arcCategoryLabel(category) { return ({ main: '主线', character: '人物弧', relationship: '关系线', mystery: '悬疑线', world: '世界变化', other: '其他' }[category] || '其他') }
+function arcStatusLabel(status) { return ({ planned: '待展开', active: '推进中', resolved: '已兑现', paused: '暂挂' }[status] || '待展开') }
+function arcDraft(arc) {
+  return arc ? {
+    id: arc.id, title: arc.title, category: arc.category, status: arc.status,
+    colorKey: arc.colorKey, premise: arc.premise, destination: arc.destination,
+  } : null
+}
+function arcBeatDraft(beat = {}, arcId = '', volumeId = '') {
+  return {
+    id: beat.id || '', arcId: beat.arcId || arcId, volumeId: beat.volumeId ?? volumeId,
+    chapterId: beat.chapterId || '', label: beat.label || '', changeText: beat.changeText || '',
+  }
+}
+function replaceArc(saved) {
+  const index = center.value.storyArcs.findIndex((arc) => arc.id === saved.id)
+  if (index >= 0) center.value.storyArcs[index] = saved
+  else center.value.storyArcs.push(saved)
+}
+function openStoryArcs() {
+  structureMode.value = 'arcs'
+  selectedArcId.value = keepOrFirst(selectedArcId.value, center.value.storyArcs)
+  resetArcForm()
+}
+async function selectArc(id) {
+  await flushSaves()
+  selectedArcId.value = id
+  selectedArcBeatId.value = ''
+  arcBeatForm.value = null
+  resetArcForm()
+}
+function resetArcForm() { arcForm.value = arcDraft(selectedArc.value) }
+async function createArc() {
+  try {
+    await flushSaves()
+    const saved = await appService.createStoryArc({
+      projectId: props.project.id,
+      title: `情节线 ${center.value.storyArcs.length + 1}`,
+      category: center.value.storyArcs.length ? 'character' : 'main',
+    })
+    center.value.storyArcs.push(saved)
+    selectedArcId.value = saved.id
+    selectedArcBeatId.value = ''
+    arcForm.value = arcDraft(saved)
+    arcBeatForm.value = null
+    structureMode.value = 'arcs'
+    emit('toast', '新情节线已建立')
+  } catch (error) { emit('toast', `建立情节线失败：${error.message}`) }
+}
+async function saveArc() {
+  if (!arcForm.value?.id) return
+  try {
+    const saved = await appService.updateStoryArc(cloneForIpc(arcForm.value))
+    replaceArc(saved)
+    arcForm.value = arcDraft(saved)
+    emit('toast', '情节线已保存')
+  } catch (error) { emit('toast', `保存情节线失败：${error.message}`) }
+}
+async function removeArc() {
+  if (!arcForm.value?.id) return
+  try {
+    center.value.storyArcs = await appService.deleteStoryArc(arcForm.value.id)
+    selectedArcId.value = center.value.storyArcs[0]?.id || ''
+    selectedArcBeatId.value = ''
+    arcBeatForm.value = null
+    resetArcForm()
+    emit('toast', '情节线及其节点已删除')
+  } catch (error) { emit('toast', `删除情节线失败：${error.message}`) }
+}
+function startArcBeatCreate(arcId, volumeId) {
+  selectedArcId.value = arcId
+  selectedArcBeatId.value = ''
+  arcForm.value = arcDraft(selectedArc.value)
+  arcBeatForm.value = arcBeatDraft({}, arcId, volumeId)
+}
+function selectArcBeat(arcId, beatId) {
+  const arc = center.value.storyArcs.find((item) => item.id === arcId)
+  const beat = arc?.beats.find((item) => item.id === beatId)
+  if (!beat) return
+  selectedArcId.value = arcId
+  selectedArcBeatId.value = beatId
+  arcForm.value = arcDraft(arc)
+  arcBeatForm.value = arcBeatDraft(beat)
+}
+function cancelArcBeatEdit() {
+  selectedArcBeatId.value = ''
+  arcBeatForm.value = null
+}
+function handleArcBeatVolumeChange() {
+  if (!arcBeatForm.value?.chapterId) return
+  const chapter = center.value.chapters.find((item) => item.id === arcBeatForm.value.chapterId)
+  if ((chapter?.card?.volumeId || '') !== arcBeatForm.value.volumeId) arcBeatForm.value.chapterId = ''
+}
+async function saveArcBeat() {
+  if (!arcBeatForm.value?.arcId) return
+  try {
+    const payload = cloneForIpc(arcBeatForm.value)
+    const saved = payload.id
+      ? await appService.updateStoryArcBeat(payload)
+      : await appService.createStoryArcBeat(payload)
+    const arc = center.value.storyArcs.find((item) => item.id === payload.arcId)
+    const index = arc.beats.findIndex((beat) => beat.id === saved.id)
+    if (index >= 0) arc.beats[index] = saved
+    else arc.beats.push(saved)
+    selectedArcBeatId.value = saved.id
+    arcBeatForm.value = arcBeatDraft(saved)
+    emit('toast', payload.id ? '情节节点已保存' : '情节节点已添加')
+  } catch (error) { emit('toast', `保存情节节点失败：${error.message}`) }
+}
+async function removeArcBeat() {
+  if (!arcBeatForm.value?.id) return
+  try {
+    const savedArc = await appService.deleteStoryArcBeat(arcBeatForm.value.id)
+    replaceArc(savedArc)
+    selectedArcBeatId.value = ''
+    arcBeatForm.value = null
+    arcForm.value = arcDraft(savedArc)
+    emit('toast', '情节节点已删除')
+  } catch (error) { emit('toast', `删除情节节点失败：${error.message}`) }
+}
+function arcBeatsInColumn(arc, volumeId) { return arc.beats.filter((beat) => (beat.volumeId || '') === volumeId) }
+function arcColumnChapterRange(volumeId) {
+  const chapters = center.value.chapters.filter((chapter) => (chapter.card?.volumeId || '') === volumeId)
+  if (!chapters.length) return volumeId ? '尚无章节' : '暂存节点'
+  const first = chapters[0].chapterNo
+  const last = chapters.at(-1).chapterNo
+  return first === last ? `第 ${first} 章` : `第 ${first}–${last} 章`
 }
 
 function updateDocumentField(kind, key, value) {
@@ -754,7 +969,15 @@ async function confirmEntityDelete() {
       relationshipForm.value = selectedRelationshipId.value ? relationshipDraft(center.value.relationships.find((item) => item.id === selectedRelationshipId.value)) : null
     }
     if (entity.kind === 'world') { center.value.worldElements = remaining; selectedWorldId.value = remaining[0]?.id || '' }
-    if (entity.kind === 'volume') { center.value.volumes = remaining; selectedVolumeId.value = remaining[0]?.id || '' }
+    if (entity.kind === 'volume') {
+      center.value.volumes = remaining
+      selectedVolumeId.value = remaining[0]?.id || ''
+      center.value.chapters.forEach((chapter) => { if (chapter.card?.volumeId === entity.id) delete chapter.card.volumeId })
+      center.value.storyArcs.forEach((arc) => arc.beats.forEach((beat) => {
+        if (beat.volumeId === entity.id) { beat.volumeId = ''; beat.volumeTitle = '' }
+      }))
+      if (arcBeatForm.value?.volumeId === entity.id) arcBeatForm.value.volumeId = ''
+    }
     center.value.candidates = center.value.candidates.filter((item) => !(item.targetType === 'entity' && item.targetId === entity.id))
     deleteTarget.value = null
     emit('toast', `“${entity.title}”已删除`)
@@ -915,6 +1138,12 @@ defineExpose({ flushSaves })
 .relationship-heading, .location-heading { align-items: center; }.relationship-graph { position: relative; min-height: 440px; overflow: hidden; margin-top: 20px; border: 1px solid #c8c1b6; background-color: #e7e4dc; background-image: linear-gradient(rgba(82,96,101,.08) 1px, transparent 1px), linear-gradient(90deg, rgba(82,96,101,.08) 1px, transparent 1px); background-size: 28px 28px; box-shadow: inset 0 0 80px rgba(67,77,81,.06); }.relationship-graph::before { content: ''; position: absolute; inset: 18px; border: 1px solid rgba(91,108,115,.16); pointer-events: none; }.relationship-graph svg { position: absolute; inset: 0; z-index: 1; width: 100%; height: 100%; overflow: visible; }.relationship-edge { cursor: pointer; }.relationship-edge line { stroke: #71848c; stroke-width: .42; vector-effect: non-scaling-stroke; transition: stroke-width .15s, opacity .15s; }.relationship-edge text { fill: #65757c; paint-order: stroke; stroke: #e7e4dc; stroke-width: .8px; font: 2.2px var(--font-ui); text-anchor: middle; dominant-baseline: central; }.relationship-edge.trend-warming line { stroke: #648b78; }.relationship-edge.trend-cooling line { stroke: #878d99; stroke-dasharray: 2 1; }.relationship-edge.trend-hostile line { stroke: #a25443; stroke-dasharray: 1.3 .8; }.relationship-edge.active line, .relationship-edge:hover line { stroke-width: 1.2; opacity: 1; }.relationship-node { position: absolute; z-index: 2; display: grid; justify-items: center; width: 112px; padding: 0; color: #455057; border: 0; background: transparent; transform: translate(-50%, -50%); }.relationship-node > span { display: grid; place-items: center; width: 47px; height: 47px; color: #fffaf2; border: 3px solid #e7e4dc; border-radius: 50%; background: #53656d; box-shadow: 0 0 0 1px #86969d, 0 7px 18px rgba(57,66,70,.18); font: 19px var(--font-display); }.relationship-node strong { max-width: 112px; margin-top: 8px; overflow: hidden; font: 13px var(--font-display); text-overflow: ellipsis; white-space: nowrap; }.relationship-node small { margin-top: 2px; color: #7d878b; font-size: 7px; }.relationship-node:hover > span, .relationship-node.active > span { background: var(--copper); box-shadow: 0 0 0 1px var(--copper), 0 8px 20px rgba(132,75,58,.2); }.relationship-graph-hint { position: absolute; z-index: 3; left: 50%; top: 50%; padding: 12px 15px; color: #788387; background: rgba(231,228,220,.9); text-align: center; transform: translate(-50%, -50%); font: 9px/1.6 var(--font-body); }.relationship-graph-hint button { margin-top: 5px; padding: 6px 8px; color: #fff8ef; border: 0; background: #53656d; font-size: 8px; }
 .relationship-editor { margin-top: 18px; padding: 20px 22px; border: 1px solid #d1c5b7; background: rgba(255,252,246,.72); }.relationship-editor-heading, .location-detail-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding-bottom: 13px; border-bottom: 1px solid #ded4c8; }.relationship-editor-heading span, .location-detail-heading span { color: #71848c; font: 600 8px var(--font-ui); letter-spacing: .12em; }.relationship-editor-heading h3, .location-detail-heading h3 { margin: 5px 0 0; font: 18px var(--font-display); }.relationship-editor-heading .danger-link { color: #a34e3c; border: 0; background: transparent; font-size: 8px; }.relationship-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 16px; padding-top: 17px; }.relationship-form-grid label { display: grid; gap: 6px; }.relationship-form-grid label.wide { grid-column: 1 / -1; }.relationship-form-grid label > span { color: #6e655c; font: 10px var(--font-display); }.relationship-form-grid input, .relationship-form-grid select, .relationship-form-grid textarea { width: 100%; min-height: 35px; padding: 7px 9px; color: #504840; border: 1px solid #d4c7b8; outline: 0; background: rgba(255,255,255,.5); font: 10px/1.55 var(--font-body); }.relationship-form-grid textarea { min-height: 68px; resize: vertical; }.relationship-form-grid input:focus, .relationship-form-grid select:focus, .relationship-form-grid textarea:focus { border-color: #7e949d; box-shadow: 0 0 0 2px rgba(94,116,125,.08); }.relationship-editor-actions { display: flex; justify-content: flex-end; gap: 7px; margin-top: 16px; }.relationship-editor-actions button { padding: 8px 10px; color: #786c62; border: 1px solid #c9baaa; background: transparent; font-size: 8px; }.relationship-editor-actions .save { color: #fff8ef; border-color: #53656d; background: #53656d; }.relationship-selection-empty, .relationship-empty { display: grid; justify-items: center; padding: 28px; color: #887d72; border: 1px dashed #c7baac; text-align: center; }.relationship-empty { min-height: 330px; align-content: center; }.relationship-empty > span { color: #687b83; font-size: 30px; }.relationship-empty strong { margin-top: 8px; font: 16px var(--font-display); }.relationship-empty p { max-width: 320px; margin: 7px 0 12px; font: 9px/1.65 var(--font-body); }.relationship-empty button { padding: 8px 10px; color: #fff8ef; border: 0; background: #53656d; font-size: 8px; }
 .location-atlas { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 11px; margin-top: 18px; }.location-card { min-width: 0; min-height: 150px; padding: 15px 16px; color: #595149; border: 1px solid #d2c5b6; border-top: 3px solid #758a92; background: rgba(255,252,246,.65); text-align: left; }.location-card.observed { border-top-style: dashed; border-top-color: #b27a5e; }.location-card:hover, .location-card.active { border-color: #758a92; background: #fffaf2; box-shadow: 0 8px 22px rgba(67,78,83,.09); }.location-card > div:first-child { display: flex; justify-content: space-between; gap: 10px; color: #7d8c91; font-size: 7px; }.location-card > div:first-child small { color: #9a8d81; }.location-card h3 { margin: 11px 0 5px; font: 18px var(--font-display); }.location-card p { min-height: 31px; margin: 0; overflow: hidden; color: #877a6e; font: 9px/1.55 var(--font-body); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }.location-occupants { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 12px; }.location-occupants span { padding: 3px 5px; color: #53656d; border: 1px solid #b9c4c5; font-size: 7px; }.location-detail { margin-top: 16px; padding: 20px 22px; border: 1px solid #d2c5b6; background: rgba(255,252,246,.72); }.location-detail-heading button { padding: 7px 9px; color: #fff8ef; border: 0; background: #758a92; font-size: 8px; }.location-detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 18px; padding: 16px 0; }.location-detail-grid .wide { grid-column: 1 / -1; }.location-detail-grid span { color: #79898f; font-size: 8px; }.location-detail-grid p { margin: 5px 0 0; color: #73695f; font: 10px/1.6 var(--font-body); white-space: pre-line; }.location-state-list { display: grid; gap: 6px; padding-top: 13px; border-top: 1px solid #ded4c8; }.location-state-list article { display: grid; grid-template-columns: minmax(90px, .4fr) auto minmax(150px, 1fr); align-items: baseline; gap: 10px; padding: 7px 0; }.location-state-list strong { font: 12px var(--font-display); }.location-state-list span { color: #8b989c; font-size: 7px; }.location-state-list p { margin: 0; color: #7b7065; font: 9px var(--font-body); }
+.arc-copper { --arc-color: #a85e47; --arc-wash: rgba(168,94,71,.1); }.arc-pine { --arc-color: #587b69; --arc-wash: rgba(88,123,105,.1); }.arc-slate { --arc-color: #647d8a; --arc-wash: rgba(100,125,138,.1); }.arc-ochre { --arc-color: #a47b35; --arc-wash: rgba(164,123,53,.11); }.arc-plum { --arc-color: #806079; --arc-wash: rgba(128,96,121,.1); }
+.arc-index-item { display: flex; align-items: flex-start; gap: 8px; width: 100%; padding: 9px 8px; color: #aeb4b6; border: 0; border-left: 2px solid transparent; background: transparent; text-align: left; }.arc-index-item > i { flex: 0 0 auto; width: 8px; height: 8px; margin-top: 2px; border-radius: 50%; background: var(--arc-color); box-shadow: 0 0 0 3px color-mix(in srgb, var(--arc-color) 16%, transparent); }.arc-index-item > span { min-width: 0; display: grid; gap: 4px; }.arc-index-item strong, .arc-index-item small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.arc-index-item strong { font: 10px var(--font-display); }.arc-index-item small { color: #727d82; font-size: 7px; }.arc-index-item:hover, .arc-index-item.active { color: #fff8ef; border-left-color: var(--arc-color); background: #353e44; }
+.arc-planning-sheet { width: min(1120px, 100%); }.arc-heading { align-items: center; }.arc-create-button { padding: 8px 10px; color: #fff8ef; border: 0; background: #596a70; font-size: 8px; }.arc-empty { min-height: 320px; }.arc-matrix { overflow-x: auto; margin-top: 18px; border: 1px solid #c9bdaf; background: #e9e2d7; box-shadow: inset 0 0 35px rgba(72,60,50,.04); }.arc-grid { display: grid; align-items: stretch; }.arc-corner, .arc-column-heading { min-height: 62px; padding: 13px 14px; border-right: 1px solid #cfc4b7; border-bottom: 1px solid #c7baac; background: #dfd6c8; }.arc-corner, .arc-column-heading { display: grid; align-content: center; gap: 5px; }.arc-corner span, .arc-column-heading span { color: #5f5750; font: 12px var(--font-display); }.arc-corner small, .arc-column-heading small { color: #94877a; font-size: 7px; }.arc-column-heading { text-align: center; background: #e4dccf; }
+.arc-row-label { position: relative; display: flex; align-items: flex-start; gap: 10px; min-height: 126px; padding: 19px 14px; color: #5b534c; border: 0; border-right: 1px solid #cfc4b7; border-bottom: 1px solid #d0c5b8; background: #e8e0d4; text-align: left; }.arc-row-label::after { content: ''; position: absolute; right: -7px; top: 29px; z-index: 2; width: 14px; height: 2px; background: var(--arc-color); }.arc-row-label > i { flex: 0 0 auto; width: 9px; height: 9px; margin-top: 3px; border: 2px solid #e8e0d4; border-radius: 50%; background: var(--arc-color); box-shadow: 0 0 0 1px var(--arc-color); }.arc-row-label > span { min-width: 0; display: grid; gap: 6px; }.arc-row-label strong { font: 14px/1.3 var(--font-display); }.arc-row-label small { color: #908477; font-size: 7px; }.arc-row-label:hover, .arc-row-label.active { background: #f4ede3; box-shadow: inset 3px 0 0 var(--arc-color); }
+.arc-cell { position: relative; min-height: 126px; padding: 18px 11px 10px; border-right: 1px solid #d3c8bb; border-bottom: 1px solid #d0c5b8; background: rgba(255,252,246,.38); }.arc-cell::before { content: ''; position: absolute; left: 0; right: 0; top: 29px; height: 2px; background: var(--arc-color); opacity: .72; }.arc-beat-card { position: relative; z-index: 1; display: grid; gap: 5px; width: 100%; margin-bottom: 7px; padding: 10px 10px 9px; color: #5a514a; border: 1px solid color-mix(in srgb, var(--arc-color) 44%, #cfc4b8); border-left: 3px solid var(--arc-color); background: #fffaf2; text-align: left; box-shadow: 0 5px 12px rgba(67,55,47,.07); }.arc-beat-card::before { content: ''; position: absolute; left: 12px; top: -10px; width: 7px; height: 7px; border: 2px solid #e8e0d4; border-radius: 50%; background: var(--arc-color); }.arc-beat-card:hover, .arc-beat-card.active { background: #fffdf8; box-shadow: 0 7px 16px var(--arc-wash); transform: translateY(-1px); }.arc-beat-card strong { font: 11px var(--font-display); }.arc-beat-card small { color: var(--arc-color); font-size: 7px; }.arc-beat-card p { margin: 0; color: #86796d; font: 8px/1.5 var(--font-body); }.arc-beat-add { position: relative; z-index: 1; width: 100%; padding: 6px; color: #93867a; border: 1px dashed #c6b9aa; background: rgba(244,237,227,.9); font-size: 7px; }.arc-beat-add:hover { color: var(--arc-color); border-color: var(--arc-color); }
+.arc-editor, .arc-beat-editor { margin-top: 18px; padding: 20px 22px; border: 1px solid #cec1b3; border-top: 3px solid var(--arc-color, #647d8a); background: rgba(255,252,246,.72); }.arc-beat-editor { --arc-color: #647d8a; }.arc-editor-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding-bottom: 13px; border-bottom: 1px solid #ded4c8; }.arc-editor-heading span { color: var(--arc-color, #647d8a); font: 600 8px var(--font-ui); letter-spacing: .12em; }.arc-editor-heading h3 { margin: 5px 0 0; font: 18px var(--font-display); }.arc-editor-heading > button { color: #a34e3c; border: 0; background: transparent; font-size: 8px; }.arc-form-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px 16px; padding-top: 17px; }.arc-form-grid label { display: grid; gap: 6px; }.arc-form-grid label.wide { grid-column: 1 / -1; }.arc-form-grid label > span { color: #6e655c; font: 10px var(--font-display); }.arc-form-grid input, .arc-form-grid select, .arc-form-grid textarea { width: 100%; min-height: 35px; padding: 7px 9px; color: #504840; border: 1px solid #d4c7b8; outline: 0; background: rgba(255,255,255,.5); font: 10px/1.55 var(--font-body); }.arc-form-grid textarea { min-height: 64px; resize: vertical; }.arc-form-grid input:focus, .arc-form-grid select:focus, .arc-form-grid textarea:focus { border-color: var(--arc-color, #647d8a); box-shadow: 0 0 0 2px var(--arc-wash, rgba(100,125,138,.1)); }
 .planning-loading { grid-column: 2 / 4; display: grid; place-items: center; color: #9b8d7e; background: var(--paper); font: 16px var(--font-display); }
 @keyframes save-pulse { 50% { opacity: .35; transform: scale(.75); } }
 @media (max-width: 1240px) { .planning-layout { grid-template-columns: 180px minmax(400px, 1fr) 250px; }.planning-canvas { padding-right: 18px; padding-left: 18px; }.planning-sheet { padding-right: 24px; padding-left: 24px; } }
