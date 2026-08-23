@@ -4,7 +4,7 @@ import {
   LEGACY_PROMPT_TEMPLATE_VERSIONS,
 } from './prompt-templates.js'
 
-export const LATEST_SCHEMA_VERSION = 12
+export const LATEST_SCHEMA_VERSION = 13
 
 const migrations = [
   {
@@ -609,6 +609,38 @@ const migrations = [
           ON knowledge_item_candidates(project_id, status, kind, created_at);
         CREATE INDEX knowledge_item_candidates_source_idx
           ON knowledge_item_candidates(source_candidate_id, position);
+      `)
+    },
+  },
+  {
+    version: 13,
+    name: 'character-relationship-graph',
+    up(database) {
+      database.exec(`
+        CREATE TABLE character_relationships (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          from_character_id TEXT NOT NULL,
+          to_character_id TEXT NOT NULL,
+          label TEXT NOT NULL,
+          surface TEXT NOT NULL DEFAULT '',
+          tension TEXT NOT NULL DEFAULT '',
+          direction TEXT NOT NULL DEFAULT 'mutual' CHECK(direction IN ('mutual', 'from_to', 'to_from')),
+          trend TEXT NOT NULL DEFAULT 'stable' CHECK(trend IN ('warming', 'stable', 'cooling', 'hostile')),
+          status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'changed', 'ended')),
+          source_type TEXT NOT NULL DEFAULT 'manual' CHECK(source_type IN ('manual', 'ai')),
+          source_id TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          CHECK(from_character_id != to_character_id),
+          FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
+          FOREIGN KEY(from_character_id) REFERENCES planning_entities(id) ON DELETE CASCADE,
+          FOREIGN KEY(to_character_id) REFERENCES planning_entities(id) ON DELETE CASCADE
+        );
+        CREATE INDEX character_relationships_project_idx
+          ON character_relationships(project_id, status, updated_at);
+        CREATE INDEX character_relationships_from_idx ON character_relationships(from_character_id);
+        CREATE INDEX character_relationships_to_idx ON character_relationships(to_character_id);
       `)
     },
   },

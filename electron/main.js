@@ -9,6 +9,7 @@ import {
   buildGenerationContext,
   bindPromptTemplate,
   createChapter,
+  createCharacterRelationship,
   createKnowledgeItem,
   createKnowledgeCandidate,
   createPlanningCandidate,
@@ -16,6 +17,7 @@ import {
   createProject,
   createRevision,
   deleteChapter,
+  deleteCharacterRelationship,
   deleteKnowledgeItem,
   deleteModelProfile,
   deletePlanningEntity,
@@ -51,6 +53,7 @@ import {
   saveModelProfile,
   startGenerationRecord,
   updateChapter,
+  updateCharacterRelationship,
   updateKnowledgeItem,
   updateKnowledgeItemCandidate,
   updateProject,
@@ -241,6 +244,9 @@ function registerIpc() {
   ipcMain.handle('planning:entity-update', (_event, payload) => updatePlanningEntity(payload))
   ipcMain.handle('planning:entities-reorder', (_event, payload) => reorderPlanningEntities(payload))
   ipcMain.handle('planning:entity-delete', (_event, entityId) => deletePlanningEntity(entityId))
+  ipcMain.handle('planning:relationship-create', (_event, payload) => createCharacterRelationship(payload))
+  ipcMain.handle('planning:relationship-update', (_event, payload) => updateCharacterRelationship(payload))
+  ipcMain.handle('planning:relationship-delete', (_event, id) => deleteCharacterRelationship(id))
   ipcMain.handle('planning:candidate-create', (_event, payload) => createPlanningCandidate(payload))
   ipcMain.handle('planning:candidate-resolve', (_event, payload) => resolvePlanningCandidate(payload))
   ipcMain.handle('knowledge:load', (_event, projectId) => loadKnowledgeCenter(projectId))

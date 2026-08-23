@@ -264,6 +264,18 @@ export function deletePlanningEntity(entityId) {
   return planningStore().deleteEntity(entityId)
 }
 
+export function createCharacterRelationship(input) {
+  return planningStore().createRelationship(input)
+}
+
+export function updateCharacterRelationship(input) {
+  return planningStore().updateRelationship(input)
+}
+
+export function deleteCharacterRelationship(id) {
+  return planningStore().deleteRelationship(id)
+}
+
 export function createPlanningCandidate(input) {
   return planningStore().createCandidate(input)
 }

@@ -77,6 +77,62 @@ test('characters, world elements and volumes support create edit reorder and del
   database.close()
 })
 
+test('relationship graph is editable and character deletion removes connected edges', () => {
+  const { database, repository } = testRepository()
+  const lin = repository.createEntity({ projectId: 'project-1', kind: 'character', title: '林默', data: { role: '主角' } })
+  const zhou = repository.createEntity({ projectId: 'project-1', kind: 'character', title: '周岚', data: { role: '对手' } })
+  const relationship = repository.createRelationship({
+    projectId: 'project-1', fromCharacterId: lin.id, toCharacterId: zhou.id,
+    label: '旧搭档', surface: '公开竞争', tension: '彼此掌握对方的旧失误', direction: 'mutual', trend: 'cooling',
+  })
+  assert.equal(relationship.fromCharacterName, '林默')
+  assert.equal(relationship.toCharacterName, '周岚')
+  assert.equal(repository.loadPlanningCenter('project-1').relationships.length, 1)
+  assert.throws(() => repository.createRelationship({
+    projectId: 'project-1', fromCharacterId: zhou.id, toCharacterId: lin.id, label: '重复关系',
+  }), /已经存在关系/)
+
+  const updated = repository.updateRelationship({ id: relationship.id, label: '竞争中的旧搭档', trend: 'hostile', status: 'changed' })
+  assert.equal(updated.label, '竞争中的旧搭档')
+  assert.equal(updated.trend, 'hostile')
+  assert.equal(updated.status, 'changed')
+
+  repository.deleteEntity(zhou.id)
+  assert.equal(database.prepare('SELECT COUNT(*) AS count FROM character_relationships').get().count, 0)
+  database.close()
+})
+
+test('location view combines planned places with latest accepted character state', () => {
+  const { database, repository } = testRepository()
+  const lin = repository.createEntity({ projectId: 'project-1', kind: 'character', title: '林默', data: { role: '主角' } })
+  const station = repository.createEntity({
+    projectId: 'project-1', kind: 'world', title: '旧车站',
+    data: { category: '地点', summary: '城郊停用站房', rules: '末班车后封锁', connections: '通往北仓库' },
+  })
+  const timestamp = '2026-08-24T12:00:00.000Z'
+  database.prepare(`
+    INSERT INTO knowledge_candidates (id, project_id, chapter_id, task, payload_json, model_json, status, created_at, resolved_at)
+    VALUES (?, ?, ?, 'chapter_state_extract', ?, '{}', 'accepted', ?, ?)
+  `).run('state-location-1', 'project-1', 'chapter-1', JSON.stringify({
+    summary: '', facts: [],
+    characterStates: [
+      { character: '林默', location: '旧车站', physical: '左手擦伤', emotional: '戒备' },
+      { character: '周岚', location: '北仓库', physical: '', emotional: '平静' },
+    ],
+    relationshipChanges: [], timelineEvents: [], foreshadow: { setups: [], payoffs: [] }, openThreads: [],
+  }), timestamp, timestamp)
+
+  const locations = repository.loadPlanningCenter('project-1').locations
+  const planned = locations.find((location) => location.id === station.id)
+  assert.equal(planned.sourceType, 'planning')
+  assert.equal(planned.occupants[0].characterId, lin.id)
+  assert.equal(planned.occupants[0].physical, '左手擦伤')
+  const observed = locations.find((location) => location.title === '北仓库')
+  assert.equal(observed.sourceType, 'observed')
+  assert.equal(observed.occupants[0].characterName, '周岚')
+  database.close()
+})
+
 test('field candidates are persistent, explicit and protected from stale overwrite', () => {
   const { database, repository } = testRepository()
   repository.loadPlanningCenter('project-1')
@@ -154,6 +210,9 @@ test('project deletion cascades through all planning records', () => {
   const { database, repository } = testRepository()
   repository.loadPlanningCenter('project-1')
   repository.createEntity({ projectId: 'project-1', kind: 'world', title: '规则' })
+  const first = repository.createEntity({ projectId: 'project-1', kind: 'character', title: '人物 A' })
+  const second = repository.createEntity({ projectId: 'project-1', kind: 'character', title: '人物 B' })
+  repository.createRelationship({ projectId: 'project-1', fromCharacterId: first.id, toCharacterId: second.id, label: '盟友' })
   repository.createCandidate({
     projectId: 'project-1',
     targetType: 'document',
@@ -166,5 +225,6 @@ test('project deletion cascades through all planning records', () => {
   assert.equal(database.prepare('SELECT COUNT(*) AS count FROM planning_documents').get().count, 0)
   assert.equal(database.prepare('SELECT COUNT(*) AS count FROM planning_entities').get().count, 0)
   assert.equal(database.prepare('SELECT COUNT(*) AS count FROM planning_candidates').get().count, 0)
+  assert.equal(database.prepare('SELECT COUNT(*) AS count FROM character_relationships').get().count, 0)
   database.close()
 })

@@ -2,6 +2,9 @@ import { randomUUID } from 'node:crypto'
 
 const DOCUMENT_KINDS = new Set(['foundation', 'world', 'outline'])
 const ENTITY_KINDS = new Set(['character', 'world', 'volume'])
+const RELATION_DIRECTIONS = new Set(['mutual', 'from_to', 'to_from'])
+const RELATION_TRENDS = new Set(['warming', 'stable', 'cooling', 'hostile'])
+const RELATION_STATUSES = new Set(['active', 'changed', 'ended'])
 
 const DOCUMENT_DEFAULTS = {
   foundation: {
@@ -87,6 +90,27 @@ function mapCandidate(row) {
   } : null
 }
 
+function mapRelationship(row) {
+  return row ? {
+    id: row.id,
+    projectId: row.project_id,
+    fromCharacterId: row.from_character_id,
+    fromCharacterName: row.from_character_name || '',
+    toCharacterId: row.to_character_id,
+    toCharacterName: row.to_character_name || '',
+    label: row.label,
+    surface: row.surface,
+    tension: row.tension,
+    direction: row.direction,
+    trend: row.trend,
+    status: row.status,
+    sourceType: row.source_type,
+    sourceId: row.source_id,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  } : null
+}
+
 export function createPlanningRepository(database, {
   now = () => new Date().toISOString(),
   createId = (prefix) => `${prefix}-${randomUUID()}`,
@@ -95,6 +119,7 @@ export function createPlanningRepository(database, {
   const entityById = database.prepare('SELECT * FROM planning_entities WHERE id = ?')
   const chapterById = database.prepare('SELECT * FROM chapters WHERE id = ?')
   const candidateById = database.prepare('SELECT * FROM planning_candidates WHERE id = ?')
+  const relationshipById = database.prepare('SELECT * FROM character_relationships WHERE id = ?')
 
   function assertProject(projectId) {
     const project = projectById.get(projectId)
@@ -142,6 +167,82 @@ export function createPlanningRepository(database, {
     `).all(projectId).map(mapCandidate)
   }
 
+  function listRelationships(projectId) {
+    return database.prepare(`
+      SELECT relationship.*, source.title AS from_character_name, target.title AS to_character_name
+      FROM character_relationships relationship
+      JOIN planning_entities source ON source.id = relationship.from_character_id
+      JOIN planning_entities target ON target.id = relationship.to_character_id
+      WHERE relationship.project_id = ?
+      ORDER BY CASE relationship.status WHEN 'active' THEN 0 WHEN 'changed' THEN 1 ELSE 2 END,
+        relationship.updated_at DESC, relationship.created_at
+    `).all(projectId).map(mapRelationship)
+  }
+
+  function buildLocationView(projectId, worldElements, characters) {
+    const locationPattern = /地点|城市|区域|场所|空间|建筑|国家|城镇|村庄|街区/
+    const locations = worldElements.filter((entity) => locationPattern.test(cleanText(entity.data.category)))
+      .map((entity) => ({
+        id: entity.id,
+        entityId: entity.id,
+        title: entity.title,
+        category: cleanText(entity.data.category, '地点'),
+        summary: cleanText(entity.data.summary),
+        rules: cleanText(entity.data.rules),
+        storyUse: cleanText(entity.data.storyUse),
+        connections: cleanText(entity.data.connections),
+        constraints: cleanText(entity.data.constraints),
+        sourceType: 'planning',
+        occupants: [],
+      }))
+    const byTitle = new Map(locations.map((location) => [location.title.toLocaleLowerCase('zh-CN'), location]))
+    const characterByTitle = new Map(characters.map((character) => [character.title.toLocaleLowerCase('zh-CN'), character]))
+    const latestByCharacter = new Map()
+    const snapshots = database.prepare(`
+      SELECT candidate.payload_json, chapter.chapter_no, chapter.title AS chapter_title, candidate.resolved_at
+      FROM knowledge_candidates candidate
+      JOIN chapters chapter ON chapter.id = candidate.chapter_id
+      WHERE candidate.project_id = ? AND candidate.task = 'chapter_state_extract' AND candidate.status = 'accepted'
+      ORDER BY chapter.chapter_no DESC, candidate.created_at DESC
+    `).all(projectId)
+    for (const snapshot of snapshots) {
+      for (const state of parseJson(snapshot.payload_json).characterStates || []) {
+        const characterName = cleanText(state?.character)
+        const locationName = cleanText(state?.location)
+        const key = characterName.toLocaleLowerCase('zh-CN')
+        if (!characterName || !locationName || latestByCharacter.has(key)) continue
+        latestByCharacter.set(key, { characterName, locationName, snapshot, state })
+      }
+    }
+    for (const current of latestByCharacter.values()) {
+      const locationKey = current.locationName.toLocaleLowerCase('zh-CN')
+      let location = byTitle.get(locationKey)
+      if (!location) {
+        location = {
+          id: `observed:${current.locationName}`,
+          entityId: '',
+          title: current.locationName,
+          category: '正文地点',
+          summary: '', rules: '', storyUse: '', connections: '', constraints: '',
+          sourceType: 'observed', occupants: [],
+        }
+        locations.push(location)
+        byTitle.set(locationKey, location)
+      }
+      const character = characterByTitle.get(current.characterName.toLocaleLowerCase('zh-CN'))
+      location.occupants.push({
+        characterId: character?.id || '',
+        characterName: current.characterName,
+        physical: cleanText(current.state?.physical),
+        emotional: cleanText(current.state?.emotional),
+        chapterNo: Number(current.snapshot.chapter_no),
+        chapterTitle: current.snapshot.chapter_title,
+        resolvedAt: current.snapshot.resolved_at,
+      })
+    }
+    return locations
+  }
+
   function loadPlanningCenter(projectId) {
     ensureDocuments(projectId)
     const documents = Object.fromEntries(database.prepare(`
@@ -152,14 +253,94 @@ export function createPlanningRepository(database, {
         card_json AS cardJson, scene_plan AS scenePlan, updated_at AS updatedAt
       FROM chapters WHERE project_id = ? ORDER BY chapter_no
     `).all(projectId).map((chapter) => ({ ...chapter, card: parseJson(chapter.cardJson) }))
+    const characters = listEntities(projectId, 'character')
+    const worldElements = listEntities(projectId, 'world')
     return {
       documents,
-      characters: listEntities(projectId, 'character'),
-      worldElements: listEntities(projectId, 'world'),
+      characters,
+      worldElements,
       volumes: listEntities(projectId, 'volume'),
       chapters,
       candidates: listPendingCandidates(projectId),
+      relationships: listRelationships(projectId),
+      locations: buildLocationView(projectId, worldElements, characters),
     }
+  }
+
+  function assertCharacter(projectId, characterId) {
+    const character = entityById.get(characterId)
+    if (!character || character.project_id !== projectId || character.kind !== 'character') throw new Error('关系节点必须是当前项目的人物卡')
+    return character
+  }
+
+  function normalizeRelationshipInput(input, current = null) {
+    const projectId = current?.project_id || input.projectId
+    const fromCharacterId = input.fromCharacterId || current?.from_character_id
+    const toCharacterId = input.toCharacterId || current?.to_character_id
+    assertProject(projectId)
+    assertCharacter(projectId, fromCharacterId)
+    assertCharacter(projectId, toCharacterId)
+    if (fromCharacterId === toCharacterId) throw new Error('人物不能与自己建立关系')
+    const duplicate = database.prepare(`
+      SELECT id FROM character_relationships
+      WHERE project_id = ? AND id != ? AND (
+        (from_character_id = ? AND to_character_id = ?) OR
+        (from_character_id = ? AND to_character_id = ?)
+      )
+    `).get(projectId, current?.id || '', fromCharacterId, toCharacterId, toCharacterId, fromCharacterId)
+    if (duplicate) throw new Error('这两个人物之间已经存在关系，请编辑现有连线')
+    const direction = input.direction || current?.direction || 'mutual'
+    const trend = input.trend || current?.trend || 'stable'
+    const status = input.status || current?.status || 'active'
+    if (!RELATION_DIRECTIONS.has(direction)) throw new Error('关系方向不受支持')
+    if (!RELATION_TRENDS.has(trend)) throw new Error('关系趋势不受支持')
+    if (!RELATION_STATUSES.has(status)) throw new Error('关系状态不受支持')
+    return {
+      projectId, fromCharacterId, toCharacterId,
+      label: cleanText(input.label, current?.label || '未定义关系'),
+      surface: typeof input.surface === 'string' ? input.surface.trim() : current?.surface || '',
+      tension: typeof input.tension === 'string' ? input.tension.trim() : current?.tension || '',
+      direction, trend, status,
+    }
+  }
+
+  function createRelationship(input = {}) {
+    const value = normalizeRelationshipInput(input)
+    const id = createId('relationship')
+    const timestamp = now()
+    database.prepare(`
+      INSERT INTO character_relationships (
+        id, project_id, from_character_id, to_character_id, label, surface, tension,
+        direction, trend, status, source_type, source_id, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'manual', '', ?, ?)
+    `).run(id, value.projectId, value.fromCharacterId, value.toCharacterId, value.label, value.surface, value.tension, value.direction, value.trend, value.status, timestamp, timestamp)
+    database.prepare('UPDATE projects SET updated_at = ? WHERE id = ?').run(timestamp, value.projectId)
+    return listRelationships(value.projectId).find((relationship) => relationship.id === id)
+  }
+
+  function updateRelationship(input = {}) {
+    const current = relationshipById.get(input.id)
+    if (!current) throw new Error('人物关系不存在')
+    const value = normalizeRelationshipInput(input, current)
+    const timestamp = now()
+    database.prepare(`
+      UPDATE character_relationships
+      SET from_character_id = ?, to_character_id = ?, label = ?, surface = ?, tension = ?,
+        direction = ?, trend = ?, status = ?, updated_at = ?
+      WHERE id = ?
+    `).run(value.fromCharacterId, value.toCharacterId, value.label, value.surface, value.tension, value.direction, value.trend, value.status, timestamp, current.id)
+    database.prepare('UPDATE projects SET updated_at = ? WHERE id = ?').run(timestamp, current.project_id)
+    return listRelationships(current.project_id).find((relationship) => relationship.id === current.id)
+  }
+
+  function deleteRelationship(id) {
+    const current = relationshipById.get(id)
+    if (!current) throw new Error('人物关系不存在')
+    assertProject(current.project_id)
+    const timestamp = now()
+    database.prepare('DELETE FROM character_relationships WHERE id = ?').run(id)
+    database.prepare('UPDATE projects SET updated_at = ? WHERE id = ?').run(timestamp, current.project_id)
+    return listRelationships(current.project_id)
   }
 
   function saveDocument({ projectId, kind, content = {} }) {
@@ -384,6 +565,9 @@ export function createPlanningRepository(database, {
     updateEntity,
     reorderEntities,
     deleteEntity,
+    createRelationship,
+    updateRelationship,
+    deleteRelationship,
     createCandidate,
     resolveCandidate,
   }

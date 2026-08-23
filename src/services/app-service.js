@@ -64,6 +64,15 @@ export const appService = {
   deletePlanningEntity(entityId) {
     return electronApi.deletePlanningEntity(entityId)
   },
+  createCharacterRelationship(payload) {
+    return electronApi.createCharacterRelationship(payload)
+  },
+  updateCharacterRelationship(payload) {
+    return electronApi.updateCharacterRelationship(payload)
+  },
+  deleteCharacterRelationship(id) {
+    return electronApi.deleteCharacterRelationship(id)
+  },
   createPlanningCandidate(payload) {
     return electronApi.createPlanningCandidate(payload)
   },
