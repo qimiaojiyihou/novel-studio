@@ -4,7 +4,7 @@ import {
   LEGACY_PROMPT_TEMPLATE_VERSIONS,
 } from './prompt-templates.js'
 
-export const LATEST_SCHEMA_VERSION = 10
+export const LATEST_SCHEMA_VERSION = 11
 
 const migrations = [
   {
@@ -488,6 +488,73 @@ const migrations = [
       for (const addon of BUILTIN_PROMPT_ADDONS) {
         insertAddon.run(addon.id, addon.name, addon.category, createdAt, createdAt)
         insertAddonVersion.run(`${addon.id}-version-1`, addon.id, addon.content, createdAt)
+      }
+    },
+  },
+  {
+    version: 11,
+    name: 'knowledge-ai-candidates',
+    up(database, now) {
+      database.exec(`
+        CREATE TABLE continuity_checks_v11 (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          chapter_id TEXT,
+          kind TEXT NOT NULL,
+          severity TEXT NOT NULL CHECK(severity IN ('info', 'warning', 'critical')),
+          title TEXT NOT NULL,
+          detail TEXT NOT NULL DEFAULT '',
+          source_json TEXT NOT NULL DEFAULT '{}',
+          origin TEXT NOT NULL DEFAULT 'system' CHECK(origin IN ('system', 'manual', 'ai')),
+          status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open', 'resolved', 'dismissed')),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          resolved_at TEXT NOT NULL DEFAULT '',
+          FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
+          FOREIGN KEY(chapter_id) REFERENCES chapters(id) ON DELETE CASCADE
+        );
+        INSERT INTO continuity_checks_v11
+        SELECT * FROM continuity_checks;
+        DROP TABLE continuity_checks;
+        ALTER TABLE continuity_checks_v11 RENAME TO continuity_checks;
+        CREATE INDEX continuity_checks_project_status_idx ON continuity_checks(project_id, status, severity, updated_at);
+        CREATE INDEX continuity_checks_chapter_idx ON continuity_checks(chapter_id);
+
+        CREATE TABLE knowledge_candidates (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          chapter_id TEXT NOT NULL,
+          task TEXT NOT NULL CHECK(task IN ('chapter_state_extract', 'continuity_audit')),
+          payload_json TEXT NOT NULL DEFAULT '{}',
+          model_json TEXT NOT NULL DEFAULT '{}',
+          status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'accepted', 'discarded')),
+          created_at TEXT NOT NULL,
+          resolved_at TEXT NOT NULL DEFAULT '',
+          FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
+          FOREIGN KEY(chapter_id) REFERENCES chapters(id) ON DELETE CASCADE
+        );
+        CREATE INDEX knowledge_candidates_project_status_idx ON knowledge_candidates(project_id, status, created_at);
+        CREATE INDEX knowledge_candidates_chapter_task_idx ON knowledge_candidates(chapter_id, task, status, created_at);
+      `)
+
+      const createdAt = now()
+      const tasks = new Set(['chapter_state_extract', 'continuity_audit'])
+      const insertTemplate = database.prepare(`
+        INSERT OR IGNORE INTO prompt_templates (id, task, name, kind, enabled, current_version, created_at, updated_at)
+        VALUES (?, ?, ?, 'built_in', 1, ?, ?, ?)
+      `)
+      const insertVersion = database.prepare(`
+        INSERT OR IGNORE INTO prompt_template_versions (id, template_id, version, content_json, created_at)
+        VALUES (?, ?, ?, ?, ?)
+      `)
+      const insertBinding = database.prepare(`
+        INSERT OR IGNORE INTO prompt_bindings (id, project_id, scope_type, scope_id, task, template_id, enabled, priority, created_at, updated_at)
+        VALUES (?, NULL, 'global', '', ?, ?, 1, 0, ?, ?)
+      `)
+      for (const template of BUILTIN_PROMPT_TEMPLATES.filter((item) => tasks.has(item.task))) {
+        insertTemplate.run(template.id, template.task, template.name, template.version, createdAt, createdAt)
+        insertVersion.run(`${template.id}-version-${template.version}`, template.id, template.version, JSON.stringify(template.content), createdAt)
+        insertBinding.run(`binding-global-${template.task}`, template.task, template.id, createdAt, createdAt)
       }
     },
   },

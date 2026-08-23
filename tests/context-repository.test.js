@@ -82,6 +82,19 @@ test('generation context keeps recent chapters and recalls relevant older chapte
   database.close()
 })
 
+test('accepted chapter state snapshots enter later chapter context', () => {
+  const { database, repository, now } = setup()
+  database.prepare(`
+    INSERT INTO knowledge_candidates (id, project_id, chapter_id, task, payload_json, model_json, status, created_at, resolved_at)
+    VALUES ('state-1', 'project-1', 'chapter-1', 'chapter_state_extract', ?, '{}', 'accepted', ?, ?)
+  `).run(JSON.stringify({ summary: '主角把蓝色钥匙藏进外套内袋。', facts: [], characterStates: [], relationshipChanges: [], timelineEvents: [], foreshadow: { setups: [], payoffs: [] }, openThreads: ['钥匙来源'] }), now(), now())
+  const context = repository.buildGenerationContext({ projectId: 'project-1', chapterId: 'chapter-5' })
+  assert.match(context.text, /已确认章后状态/)
+  assert.match(context.text, /钥匙来源/)
+  assert.deepEqual(context.diagnostics.stateCandidateIds, ['state-1'])
+  database.close()
+})
+
 test('context budget is enforced and project deletion cascades profiles and memories', () => {
   const { database, repository } = setup()
   database.prepare(`

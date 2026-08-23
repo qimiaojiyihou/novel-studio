@@ -253,3 +253,19 @@ test('prebuilt long-form context replaces the legacy all-record context and retu
   const result = await runEmbeddedModelTask(prepared)
   assert.equal(result.contextDiagnostics.budgetChars, 8000)
 })
+
+test('structured knowledge tasks use JSON output and shape reviewable objects', async () => {
+  for (const task of ['chapter_state_extract', 'continuity_audit']) {
+    const prepared = prepareModelTask({
+      ...baseInput,
+      task,
+      chapter: { ...baseInput.chapter, manuscript: '主角把钥匙放进外套内袋。' },
+      modelProfile: { id: 'deepseek-default', provider: 'deepseek', name: 'DeepSeek', baseUrl: '', model: '', settings: { responseFormat: 'auto' } },
+      mockDelayMs: 0,
+    })
+    const result = await runEmbeddedModelTask(prepared)
+    assert.deepEqual(prepared.parameters.response_format, { type: 'json_object' })
+    if (task === 'chapter_state_extract') assert.ok(Array.isArray(result.stateSnapshot.facts))
+    else assert.ok(Array.isArray(result.audit.issues))
+  }
+})

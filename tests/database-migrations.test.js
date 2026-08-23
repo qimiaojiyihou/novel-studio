@@ -49,6 +49,7 @@ test('fresh database migrates to the latest schema with foreign keys enabled', (
     assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'planning_candidates'").get())
     assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'knowledge_items'").get())
     assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'continuity_checks'").get())
+    assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'knowledge_candidates'").get())
     assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'context_profiles'").get())
     assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'chapter_memories'").get())
     assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'prompt_templates'").get())
@@ -59,8 +60,8 @@ test('fresh database migrates to the latest schema with foreign keys enabled', (
     assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'prompt_addons'").get())
     assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'prompt_addon_versions'").get())
     assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'prompt_addon_bindings'").get())
-    assert.equal(database.prepare("SELECT COUNT(*) AS count FROM prompt_templates WHERE kind = 'built_in'").get().count, 6)
-    assert.equal(database.prepare("SELECT COUNT(*) AS count FROM prompt_bindings WHERE scope_type = 'global'").get().count, 6)
+    assert.equal(database.prepare("SELECT COUNT(*) AS count FROM prompt_templates WHERE kind = 'built_in'").get().count, 8)
+    assert.equal(database.prepare("SELECT COUNT(*) AS count FROM prompt_bindings WHERE scope_type = 'global'").get().count, 8)
     assert.equal(database.prepare("SELECT COUNT(*) AS count FROM prompt_addons WHERE kind = 'built_in'").get().count, 17)
     assert.equal(database.prepare("SELECT current_version FROM prompt_templates WHERE id = 'builtin-chapter-card-v1'").get().current_version, 2)
     assert.equal(database.prepare("SELECT current_version FROM prompt_templates WHERE id = 'builtin-scene-plan-v1'").get().current_version, 2)
@@ -100,7 +101,7 @@ test('v10 upgrades existing prompt records while preserving v1 template versions
     }
 
     runMigrations(database, { now: () => '2026-08-23T01:00:00.000Z' })
-    assert.equal(getSchemaVersion(database), 10)
+    assert.equal(getSchemaVersion(database), LATEST_SCHEMA_VERSION)
     assert.equal(database.prepare("SELECT COUNT(*) AS count FROM prompt_template_versions WHERE template_id = 'builtin-chapter-v1'").get().count, 2)
     assert.equal(database.prepare("SELECT current_version FROM prompt_templates WHERE id = 'builtin-chapter-v1'").get().current_version, 2)
     assert.equal(database.prepare("SELECT COUNT(*) AS count FROM prompt_addons WHERE kind = 'built_in'").get().count, 17)

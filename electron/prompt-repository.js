@@ -13,7 +13,7 @@ function cleanText(value) {
   return String(value ?? '').trim()
 }
 
-const PROMPT_TASKS = ['planning_field', 'chapter_card', 'scene_plan', 'chapter', 'rewrite']
+const PROMPT_TASKS = ['planning_field', 'chapter_card', 'scene_plan', 'chapter', 'rewrite', 'chapter_state_extract', 'continuity_audit']
 const SCOPE_RANK = { project: 1, volume: 2, chapter: 3 }
 
 function mapTemplate(row) {

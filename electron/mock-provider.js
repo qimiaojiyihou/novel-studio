@@ -96,6 +96,33 @@ export function generateMock({ task, project, chapter, planning = {}, instructio
     }
   }
 
+  if (task === 'chapter_state_extract') {
+    const evidence = String(chapter?.manuscript || '').trim().split(/\n+/).find(Boolean) || '本章正文尚未提供明确证据。'
+    return {
+      task,
+      model,
+      generatedAt: now(),
+      stateSnapshot: {
+        summary: `第${chapter?.chapter_no || 1}章中，人物完成了一次会影响后续选择的行动。`,
+        facts: [{ subject: '主角', predicate: '完成', object: '本章核心行动', certainty: 'confirmed', evidence: evidence.slice(0, 120) }],
+        characterStates: [{ character: '主角', location: '本章结束地点', physical: '无新增明确伤势', emotional: '保持警觉', possessions: [], knows: ['本章新获得的信息'] }],
+        relationshipChanges: [],
+        timelineEvents: [`第${chapter?.chapter_no || 1}章事件已经发生`],
+        foreshadow: { setups: [], payoffs: [] },
+        openThreads: ['本章行动造成的后续结果仍待处理'],
+      },
+    }
+  }
+
+  if (task === 'continuity_audit') {
+    return {
+      task,
+      model,
+      generatedAt: now(),
+      audit: { issues: [], uncertain: ['Mock 模式未发现可由双向证据确认的连续性冲突。'] },
+    }
+  }
+
   return {
     task,
     model,

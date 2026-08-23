@@ -94,6 +94,12 @@ export const appService = {
   resolveContinuityCheck(payload) {
     return electronApi.resolveContinuityCheck(payload)
   },
+  createKnowledgeCandidate(payload) {
+    return electronApi.createKnowledgeCandidate(payload)
+  },
+  resolveKnowledgeCandidate(payload) {
+    return electronApi.resolveKnowledgeCandidate(payload)
+  },
   loadContextManager(projectId) {
     return electronApi.loadContextManager(projectId)
   },

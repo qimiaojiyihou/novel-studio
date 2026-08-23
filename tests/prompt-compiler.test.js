@@ -122,3 +122,14 @@ test('rewrite preset adds focused instructions without weakening protected contr
   assert.equal(compiled.snapshot.schemaVersion, 3)
   assert.equal(compiled.snapshot.rewritePreset.id, 'dialogue')
 })
+
+test('state extraction and continuity audit receive the full manuscript with protected JSON contracts', () => {
+  const manuscript = '第一段正文。\n\n结尾处主角把钥匙交给周岚。'
+  for (const task of ['chapter_state_extract', 'continuity_audit']) {
+    const compiled = compilePrompt({ ...baseInput, task, chapter: { ...baseInput.chapter, manuscript }, promptContext: null })
+    assert.match(compiled.messages[1].content, /以下是本次任务唯一的待处理正文/)
+    assert.match(compiled.messages[1].content, /结尾处主角把钥匙交给周岚/)
+    assert.match(compiled.messages[0].content, /只返回 JSON/)
+    assert.equal(compiled.snapshot.template.task, task)
+  }
+})

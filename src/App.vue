@@ -252,6 +252,8 @@
         v-else-if="workspaceView === 'knowledge'"
         ref="knowledgeCenterRef"
         :project="project"
+        :chapters="chapters"
+        :active-chapter-id="activeChapterId"
         @toast="showToast"
       />
       <PromptCenter

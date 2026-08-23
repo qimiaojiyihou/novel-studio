@@ -37,3 +37,14 @@ test('JSON request config protects prompts, model routing and encrypted key boun
   assert.throws(() => parseRequestConfigJson('{"endpointPath":123}'), /endpointPath 必须是字符串/)
   assert.throws(() => parseRequestConfigJson('{"stream":"false"}'), /stream 必须是 true 或 false/)
 })
+
+test('JSON request config accepts per-task overrides for knowledge workflows', () => {
+  const config = parseRequestConfigJson(JSON.stringify({
+    taskBody: {
+      chapter_state_extract: { temperature: 0.1 },
+      continuity_audit: { max_tokens: 6000 },
+    },
+  }))
+  assert.equal(requestParametersFor('chapter_state_extract', {}, config).temperature, 0.1)
+  assert.equal(requestParametersFor('continuity_audit', {}, config).max_tokens, 6000)
+})

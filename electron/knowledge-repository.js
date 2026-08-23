@@ -3,6 +3,8 @@ import { randomUUID } from 'node:crypto'
 const KNOWLEDGE_KINDS = new Set(['fact', 'timeline', 'foreshadow'])
 const ITEM_STATUSES = new Set(['open', 'resolved', 'archived'])
 const CHECK_STATUSES = new Set(['open', 'resolved', 'dismissed'])
+const CANDIDATE_TASKS = new Set(['chapter_state_extract', 'continuity_audit'])
+const CANDIDATE_STATUSES = new Set(['accepted', 'discarded'])
 
 function parseJson(value, fallback = {}) {
   try {
@@ -53,6 +55,23 @@ function mapCheck(row) {
   }
 }
 
+function mapCandidate(row) {
+  if (!row) return null
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    chapterId: row.chapter_id,
+    chapterNo: Number(row.chapter_no || 0),
+    chapterTitle: row.chapter_title || '',
+    task: row.task,
+    payload: parseJson(row.payload_json),
+    model: parseJson(row.model_json),
+    status: row.status,
+    createdAt: row.created_at,
+    resolvedAt: row.resolved_at,
+  }
+}
+
 function contentText(content, keys = []) {
   return keys.map((key) => cleanText(content?.[key])).filter(Boolean).join('；')
 }
@@ -62,8 +81,10 @@ export function createKnowledgeRepository(database, {
   createId = (prefix) => `${prefix}-${randomUUID()}`,
 } = {}) {
   const projectById = database.prepare('SELECT * FROM projects WHERE id = ?')
+  const chapterById = database.prepare('SELECT * FROM chapters WHERE id = ?')
   const itemById = database.prepare('SELECT * FROM knowledge_items WHERE id = ?')
   const checkById = database.prepare('SELECT * FROM continuity_checks WHERE id = ?')
+  const candidateById = database.prepare('SELECT * FROM knowledge_candidates WHERE id = ?')
 
   function assertProject(projectId) {
     const project = projectById.get(projectId)
@@ -87,6 +108,69 @@ export function createKnowledgeRepository(database, {
         CASE severity WHEN 'critical' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END,
         updated_at DESC
     `).all(projectId).map(mapCheck)
+  }
+
+  function listCandidates(projectId) {
+    return database.prepare(`
+      SELECT candidate.*, chapter.chapter_no, chapter.title AS chapter_title
+      FROM knowledge_candidates candidate
+      JOIN chapters chapter ON chapter.id = candidate.chapter_id
+      WHERE candidate.project_id = ?
+      ORDER BY CASE candidate.status WHEN 'pending' THEN 0 ELSE 1 END, candidate.created_at DESC
+      LIMIT 100
+    `).all(projectId).map(mapCandidate)
+  }
+
+  function listStateSnapshots(projectId) {
+    const rows = database.prepare(`
+      SELECT candidate.*, chapter.chapter_no, chapter.title AS chapter_title
+      FROM knowledge_candidates candidate
+      JOIN chapters chapter ON chapter.id = candidate.chapter_id
+      WHERE candidate.project_id = ?
+        AND candidate.task = 'chapter_state_extract'
+        AND candidate.status = 'accepted'
+      ORDER BY chapter.chapter_no DESC, candidate.created_at DESC
+    `).all(projectId)
+    const seen = new Set()
+    return rows.filter((row) => {
+      if (seen.has(row.chapter_id)) return false
+      seen.add(row.chapter_id)
+      return true
+    }).map(mapCandidate)
+  }
+
+  function normalizedCandidatePayload(task, payload) {
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error('知识候选必须是 JSON 对象')
+    if (task === 'continuity_audit') {
+      if (!Array.isArray(payload.issues) || !Array.isArray(payload.uncertain)) throw new Error('连续性审计结果缺少 issues 或 uncertain 数组')
+      return {
+        issues: payload.issues.map((issue) => ({
+          severity: ['info', 'warning', 'critical'].includes(issue?.severity) ? issue.severity : 'warning',
+          category: cleanText(issue?.category, '连续性'),
+          claimA: cleanText(issue?.claimA),
+          claimB: cleanText(issue?.claimB),
+          location: cleanText(issue?.location),
+          minimalFix: cleanText(issue?.minimalFix),
+        })).filter((issue) => issue.claimA && issue.claimB),
+        uncertain: payload.uncertain.map((item) => cleanText(item)).filter(Boolean),
+      }
+    }
+    for (const key of ['facts', 'characterStates', 'relationshipChanges', 'timelineEvents', 'openThreads']) {
+      if (!Array.isArray(payload[key])) throw new Error(`章后状态结果缺少 ${key} 数组`)
+    }
+    const foreshadow = payload.foreshadow && typeof payload.foreshadow === 'object' ? payload.foreshadow : {}
+    return {
+      summary: cleanText(payload.summary),
+      facts: payload.facts,
+      characterStates: payload.characterStates,
+      relationshipChanges: payload.relationshipChanges,
+      timelineEvents: payload.timelineEvents,
+      foreshadow: {
+        setups: Array.isArray(foreshadow.setups) ? foreshadow.setups : [],
+        payoffs: Array.isArray(foreshadow.payoffs) ? foreshadow.payoffs : [],
+      },
+      openThreads: payload.openThreads,
+    }
   }
 
   function derivedRecords(projectId) {
@@ -338,19 +422,85 @@ export function createKnowledgeRepository(database, {
     refreshSystemChecks(projectId)
     const items = listItems(projectId)
     const checks = listChecks(projectId)
+    const candidates = listCandidates(projectId)
+    const stateSnapshots = listStateSnapshots(projectId)
     return {
       items,
       facts: items.filter((item) => item.kind === 'fact'),
       timeline: items.filter((item) => item.kind === 'timeline'),
       foreshadows: items.filter((item) => item.kind === 'foreshadow'),
       checks,
+      candidates,
+      stateSnapshots,
       counts: {
         facts: items.filter((item) => item.kind === 'fact' && item.status !== 'archived').length,
         timeline: items.filter((item) => item.kind === 'timeline' && item.status !== 'archived').length,
         foreshadows: items.filter((item) => item.kind === 'foreshadow' && item.status !== 'archived').length,
         openChecks: checks.filter((check) => check.status === 'open').length,
+        pendingCandidates: candidates.filter((candidate) => candidate.status === 'pending').length,
       },
     }
+  }
+
+  function createCandidate({ projectId, chapterId, task, payload, model = {} }) {
+    assertProject(projectId)
+    const chapter = chapterById.get(chapterId)
+    if (!chapter || chapter.project_id !== projectId) throw new Error('候选稿章节不属于当前项目')
+    if (!CANDIDATE_TASKS.has(task)) throw new Error('知识候选任务类型不受支持')
+    const normalizedPayload = normalizedCandidatePayload(task, payload)
+    const timestamp = now()
+    const id = createId('knowledge-candidate')
+    database.prepare(`
+      INSERT INTO knowledge_candidates (id, project_id, chapter_id, task, payload_json, model_json, status, created_at, resolved_at)
+      VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, '')
+    `).run(id, projectId, chapterId, task, JSON.stringify(normalizedPayload), JSON.stringify(model || {}), timestamp)
+    return mapCandidate({ ...candidateById.get(id), chapter_no: chapter.chapter_no, chapter_title: chapter.title })
+  }
+
+  function resolveCandidate({ id, status }) {
+    const current = candidateById.get(id)
+    if (!current) throw new Error('知识候选不存在')
+    assertProject(current.project_id)
+    if (!CANDIDATE_STATUSES.has(status)) throw new Error('知识候选处理方式不受支持')
+    if (current.status !== 'pending') return loadKnowledgeCenter(current.project_id)
+    const timestamp = now()
+    const payload = parseJson(current.payload_json)
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      database.prepare('UPDATE knowledge_candidates SET status = ?, resolved_at = ? WHERE id = ?').run(status, timestamp, id)
+      if (status === 'accepted' && current.task === 'continuity_audit') {
+        const insert = database.prepare(`
+          INSERT INTO continuity_checks (id, project_id, chapter_id, kind, severity, title, detail, source_json, origin, status, created_at, updated_at, resolved_at)
+          VALUES (?, ?, ?, 'ai-continuity', ?, ?, ?, ?, 'ai', 'open', ?, ?, '')
+        `)
+        for (const issue of payload.issues || []) {
+          const location = cleanText(issue.location)
+          const title = location ? `${cleanText(issue.category, '连续性')} · ${location}` : cleanText(issue.category, '连续性问题')
+          const detail = [
+            `证据 A：${cleanText(issue.claimA)}`,
+            `证据 B：${cleanText(issue.claimB)}`,
+            cleanText(issue.minimalFix) ? `最小修改：${cleanText(issue.minimalFix)}` : '',
+          ].filter(Boolean).join('\n')
+          insert.run(
+            createId('check'),
+            current.project_id,
+            current.chapter_id,
+            ['info', 'warning', 'critical'].includes(issue.severity) ? issue.severity : 'warning',
+            title,
+            detail,
+            JSON.stringify({ candidateId: id, ...issue }),
+            timestamp,
+            timestamp,
+          )
+        }
+      }
+      database.prepare('UPDATE projects SET updated_at = ? WHERE id = ?').run(timestamp, current.project_id)
+      database.exec('COMMIT')
+    } catch (error) {
+      database.exec('ROLLBACK')
+      throw error
+    }
+    return loadKnowledgeCenter(current.project_id)
   }
 
   function createItem({ projectId, kind, title = '', content = {}, status = 'open' }) {
@@ -448,5 +598,7 @@ export function createKnowledgeRepository(database, {
     reorderItems,
     deleteItem,
     resolveCheck,
+    createCandidate,
+    resolveCandidate,
   }
 }

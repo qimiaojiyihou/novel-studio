@@ -14,6 +14,8 @@ export const PROTECTED_OUTPUT_CONTRACTS = Object.freeze({
   scene_plan: '按场景拆分，每个场景写出目标、阻力、行动和变化；只返回场景计划，不要解释过程。',
   chapter: '只返回正文，不要添加标题、分析、注释或解释，不要越过章节卡约定的结尾。',
   rewrite: '只返回重写后的文字，不要添加标题、引号、差异说明或解释；不得擅自改变已确认事实。',
+  chapter_state_extract: '只返回 JSON，不要使用 Markdown 代码围栏。字段为 summary、facts、characterStates、relationshipChanges、timelineEvents、foreshadow、openThreads；每条事实必须附正文证据，猜测不得登记为 confirmed。',
+  continuity_audit: '只返回 JSON，不要使用 Markdown 代码围栏。字段为 issues 和 uncertain；issues 每项包含 severity、category、claimA、claimB、location、minimalFix。没有明确冲突时 issues 返回空数组，不直接重写正文。',
 })
 
 export const LEGACY_PROMPT_TEMPLATE_VERSIONS = Object.freeze({
@@ -153,6 +155,28 @@ export const BUILTIN_PROMPT_TEMPLATES = Object.freeze([
       system: CORE_SYSTEM_RULES,
       request: '按照指定方式重写选中文字。',
       outputContract: '只返回重写后的文字，不要添加标题、引号、差异说明或解释；不得擅自改变已确认事实。',
+    },
+  },
+  {
+    id: 'builtin-chapter-state-extract-v1',
+    task: 'chapter_state_extract',
+    name: '章后状态提取',
+    version: 1,
+    content: {
+      system: `${CORE_SYSTEM_RULES}你是小说连续性记录员。只记录正文中明确发生或可直接推出的变化；计划、暗示、比喻和人物猜测不能登记为客观事实。对不确定内容使用 reported 或 suspected。`,
+      request: '读取本章正文，提取新增事实、人物位置与身体状态、持有物、关系变化、人物新获知信息、时间推进、已设置与已兑现伏笔、未解决问题和一段中性章节摘要。每条事实附正文证据短句或位置说明。',
+      outputContract: PROTECTED_OUTPUT_CONTRACTS.chapter_state_extract,
+    },
+  },
+  {
+    id: 'builtin-continuity-audit-v1',
+    task: 'continuity_audit',
+    name: '连续性审计',
+    version: 1,
+    content: {
+      system: `${CORE_SYSTEM_RULES}你是小说连续性编辑。区分明确冲突、信息不足和合理变化；不要把个人文风偏好当成连续性错误。每个问题必须指出两项互相不兼容的证据。`,
+      request: '检查人物知情范围、位置与移动时间、身体状态、物件归属、称谓关系、能力限制、时间顺序、世界规则和章节边界。为每项问题给出 severity、category、claimA、claimB、location、minimalFix；若无冲突，返回空 issues。',
+      outputContract: PROTECTED_OUTPUT_CONTRACTS.continuity_audit,
     },
   },
 ])

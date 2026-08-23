@@ -32,6 +32,8 @@ contextBridge.exposeInMainWorld('novelStudio', {
   reorderKnowledgeItems: (payload) => ipcRenderer.invoke('knowledge:items-reorder', payload),
   deleteKnowledgeItem: (itemId) => ipcRenderer.invoke('knowledge:item-delete', itemId),
   resolveContinuityCheck: (payload) => ipcRenderer.invoke('knowledge:check-resolve', payload),
+  createKnowledgeCandidate: (payload) => ipcRenderer.invoke('knowledge:candidate-create', payload),
+  resolveKnowledgeCandidate: (payload) => ipcRenderer.invoke('knowledge:candidate-resolve', payload),
   loadContextManager: (projectId) => ipcRenderer.invoke('context:load', projectId),
   updateContextProfile: (payload) => ipcRenderer.invoke('context:update', payload),
   rebuildContextMemories: (projectId) => ipcRenderer.invoke('context:rebuild', projectId),

@@ -11,7 +11,9 @@ function now() {
   return new Date().toISOString()
 }
 
-function parseJsonObject(value) {
+const STRUCTURED_TASKS = new Set(['chapter_card', 'chapter_state_extract', 'continuity_audit'])
+
+function parseJsonObject(value, label = '结构化任务') {
   const fence = String.fromCharCode(96).repeat(3)
   let source = String(value || '').trim()
   source = source.replace(fence + 'json', '').replace(fence, '').trim()
@@ -21,12 +23,14 @@ function parseJsonObject(value) {
     const start = source.indexOf('{')
     const end = source.lastIndexOf('}')
     if (start >= 0 && end > start) return JSON.parse(source.slice(start, end + 1))
-    throw new Error('章节卡返回内容不是有效 JSON')
+    throw new Error(`${label}返回内容不是有效 JSON`)
   }
 }
 
 function mockContentFor(task, result) {
   if (task === 'chapter_card') return JSON.stringify(result.card)
+  if (task === 'chapter_state_extract') return JSON.stringify(result.stateSnapshot)
+  if (task === 'continuity_audit') return JSON.stringify(result.audit)
   if (task === 'scene_plan') return result.scenePlan || ''
   if (task === 'chapter') return result.manuscript || ''
   return result.text || ''
@@ -49,7 +53,11 @@ function finiteNumber(value, minimum, maximum) {
 function parametersFor(task, modelProfile) {
   const provider = modelProfile?.provider || 'mock'
   const settings = modelProfile?.settings || {}
-  const taskTemperature = task === 'rewrite' ? 0.55 : task === 'planning_field' ? 0.68 : task === 'connection_test' ? 0 : 0.78
+  const taskTemperature = task === 'rewrite' ? 0.55
+    : task === 'planning_field' ? 0.68
+      : task === 'connection_test' ? 0
+        : STRUCTURED_TASKS.has(task) ? 0.25
+          : 0.78
   if (provider !== 'deepseek') return { temperature: taskTemperature }
 
   const parameters = {
@@ -57,7 +65,7 @@ function parametersFor(task, modelProfile) {
     reasoning_effort: ['low', 'high', 'max'].includes(settings.reasoningEffort) ? settings.reasoningEffort : 'high',
     max_tokens: Math.round(finiteNumber(settings.maxTokens, 1, 131072) || (task === 'connection_test' ? 32 : 4096)),
     response_format: {
-      type: settings.responseFormat === 'json_object' || (settings.responseFormat !== 'text' && task === 'chapter_card')
+      type: settings.responseFormat === 'json_object' || (settings.responseFormat !== 'text' && STRUCTURED_TASKS.has(task))
         ? 'json_object'
         : 'text',
     },
@@ -147,7 +155,9 @@ export function shapeModelResult(prepared, content, gateway = 'embedded') {
   }
   if (prepared.fallbackReason) base.fallbackReason = prepared.fallbackReason
   if (prepared.contextDiagnostics) base.contextDiagnostics = prepared.contextDiagnostics
-  if (prepared.task === 'chapter_card') return { ...base, card: parseJsonObject(content) }
+  if (prepared.task === 'chapter_card') return { ...base, card: parseJsonObject(content, '章节卡') }
+  if (prepared.task === 'chapter_state_extract') return { ...base, stateSnapshot: parseJsonObject(content, '章后状态') }
+  if (prepared.task === 'continuity_audit') return { ...base, audit: parseJsonObject(content, '连续性审计') }
   if (prepared.task === 'scene_plan') return { ...base, scenePlan: String(content).trim() }
   if (prepared.task === 'rewrite' || prepared.task === 'planning_field' || prepared.task === 'connection_test') return { ...base, text: String(content).trim() }
   return { ...base, manuscript: String(content).trim() }

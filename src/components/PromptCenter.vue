@@ -128,6 +128,7 @@ const modes = [
 const taskOptions = [
   { value: 'planning_field', label: '规划字段' }, { value: 'chapter_card', label: '章节卡' },
   { value: 'scene_plan', label: '场景计划' }, { value: 'chapter', label: '正文创作' }, { value: 'rewrite', label: '局部重写' },
+  { value: 'chapter_state_extract', label: '章后状态提取' }, { value: 'continuity_audit', label: '连续性审计' },
 ]
 const styleFields = [
   { key: 'pointOfView', label: '叙事视角', hint: '镜头跟随谁', options: ['第一人称', '第三人称限知', '第三人称全知', '多视角轮换'] },

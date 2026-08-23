@@ -282,6 +282,32 @@ export function createContextRepository(database, { now = () => new Date().toISO
     return [...items, ...checks]
   }
 
+  function acceptedStateSnapshots(projectId, chapterNo, limit) {
+    const rows = database.prepare(`
+      SELECT candidate.id, candidate.chapter_id, candidate.payload_json, candidate.created_at,
+        chapter.chapter_no, chapter.title
+      FROM knowledge_candidates candidate
+      JOIN chapters chapter ON chapter.id = candidate.chapter_id
+      WHERE candidate.project_id = ?
+        AND candidate.task = 'chapter_state_extract'
+        AND candidate.status = 'accepted'
+        AND chapter.chapter_no < ?
+      ORDER BY chapter.chapter_no DESC, candidate.created_at DESC
+    `).all(projectId, chapterNo)
+    const seen = new Set()
+    return rows.filter((row) => {
+      if (seen.has(row.chapter_id)) return false
+      seen.add(row.chapter_id)
+      return true
+    }).slice(0, limit).reverse().map((row) => ({
+      id: row.id,
+      chapterId: row.chapter_id,
+      chapterNo: Number(row.chapter_no),
+      title: row.title,
+      payload: parseJson(row.payload_json, {}),
+    }))
+  }
+
   function buildGenerationContext(input = {}) {
     const projectId = String(input.projectId || '')
     const project = assertProject(projectId)
@@ -305,6 +331,11 @@ export function createContextRepository(database, { now = () => new Date().toISO
     const knowledge = knowledgeCandidates(projectId, queryTerms)
       .sort((left, right) => right.score - left.score)
       .slice(0, profile.knowledgeLimit)
+    const stateSnapshots = acceptedStateSnapshots(
+      projectId,
+      Number(chapter.chapter_no),
+      Math.max(3, profile.recentChapterCount + profile.relevantChapterCount),
+    )
 
     const planningDocuments = database.prepare('SELECT kind, content_json FROM planning_documents WHERE project_id = ? ORDER BY kind').all(projectId)
     const planningEntities = database.prepare('SELECT kind, title, data_json FROM planning_entities WHERE project_id = ? ORDER BY kind, position').all(projectId)
@@ -331,6 +362,12 @@ export function createContextRepository(database, { now = () => new Date().toISO
       cleanText(chapter.manuscript) ? `当前正文尾部：${excerpt(chapter.manuscript, Math.min(5000, Math.floor(profile.maxContextChars * 0.18)))}` : '',
     ].filter(Boolean).join('\n'))
     append('已确认故事规划', planningExcerpt)
+    if (stateSnapshots.length) {
+      const snapshotLimit = Math.max(800, Math.floor(profile.chapterSummaryChars * 1.5))
+      append('已确认章后状态', stateSnapshots.map((snapshot) => (
+        `第 ${snapshot.chapterNo} 章《${snapshot.title}》：${excerpt(JSON.stringify(snapshot.payload), snapshotLimit)}`
+      )).join('\n'))
+    }
     if (recent.length) append('最近章节记忆', recent.map((memory) => memory.summary).join('\n\n'))
     if (relevant.length) append('相关旧章召回', relevant.map((memory) => memory.summary).join('\n\n'))
     if (knowledge.length) append('相关知识与连续性', knowledge.map((item) => `[${item.kind}] ${item.text}`).join('\n'))
@@ -344,6 +381,7 @@ export function createContextRepository(database, { now = () => new Date().toISO
         recentChapterIds: recent.map((memory) => memory.chapterId),
         relevantChapterIds: relevant.map((memory) => memory.chapterId),
         knowledgeItemIds: knowledge.map((item) => item.id),
+        stateCandidateIds: stateSnapshots.map((snapshot) => snapshot.id),
         memoryCount: memories.length,
         truncated,
       },

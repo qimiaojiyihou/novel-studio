@@ -176,6 +176,8 @@ function seedModelProfiles() {
   insert.run('chapter_card', 'deepseek-default', createdAt)
   insert.run('scene_plan', 'deepseek-default', createdAt)
   insert.run('rewrite', 'local-default', createdAt)
+  insert.run('chapter_state_extract', 'deepseek-default', createdAt)
+  insert.run('continuity_audit', 'deepseek-default', createdAt)
 }
 
 export function loadWorkspace(projectId = '') {
@@ -300,6 +302,14 @@ export function deleteKnowledgeItem(itemId) {
 
 export function resolveContinuityCheck(input) {
   return knowledgeStore().resolveCheck(input)
+}
+
+export function createKnowledgeCandidate(input) {
+  return knowledgeStore().createCandidate(input)
+}
+
+export function resolveKnowledgeCandidate(input) {
+  return knowledgeStore().resolveCandidate(input)
 }
 
 export function loadContextManager(projectId) {

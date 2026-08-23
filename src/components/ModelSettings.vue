@@ -204,6 +204,8 @@ const taskDefinitions = [
   { id: 'chapter_card', label: '章节卡', description: '将想法拆成可执行的章节合同' },
   { id: 'scene_plan', label: '场景计划', description: '把章节卡变成场景动作链' },
   { id: 'rewrite', label: '局部重写', description: '处理编辑器中选中的文字' },
+  { id: 'chapter_state_extract', label: '章后状态', description: '从已写正文提取下一章可用的事实与人物状态' },
+  { id: 'continuity_audit', label: '连续性审计', description: '核对正文与已确认事实并生成待处理提醒' },
 ]
 
 const editingId = ref(null)

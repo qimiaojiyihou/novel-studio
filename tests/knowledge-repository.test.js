@@ -96,3 +96,46 @@ test('project deletion cascades knowledge and continuity data', () => {
   assert.equal(database.prepare('SELECT COUNT(*) AS count FROM continuity_checks').get().count, 0)
   database.close()
 })
+
+test('AI state and audit outputs stay pending until the author accepts them', () => {
+  const { database, repository } = testRepository()
+  const state = repository.createCandidate({
+    projectId: 'project-1',
+    chapterId: 'chapter-1',
+    task: 'chapter_state_extract',
+    payload: {
+      summary: '主角确认旧稿规则，并决定继续追查。',
+      facts: [{ subject: '主角', predicate: '知道', object: '旧稿只能由原作者修改', certainty: 'confirmed', evidence: '他终于确认了规则。' }],
+      characterStates: [{ character: '主角', location: '工作室', physical: '', emotional: '警觉', possessions: ['旧稿'], knows: ['旧稿规则'] }],
+      relationshipChanges: [], timelineEvents: ['当夜确认规则'],
+      foreshadow: { setups: ['旧稿页码异常'], payoffs: [] },
+      openThreads: ['原作者身份'],
+    },
+    model: { provider: 'local' },
+  })
+  assert.equal(state.status, 'pending')
+  assert.equal(repository.loadKnowledgeCenter('project-1').stateSnapshots.length, 0)
+  let center = repository.resolveCandidate({ id: state.id, status: 'accepted' })
+  assert.equal(center.stateSnapshots.length, 1)
+  assert.equal(center.stateSnapshots[0].payload.openThreads[0], '原作者身份')
+
+  const audit = repository.createCandidate({
+    projectId: 'project-1',
+    chapterId: 'chapter-2',
+    task: 'continuity_audit',
+    payload: {
+      issues: [{ severity: 'critical', category: '人物知情', claimA: '第一章主角没有见过钥匙', claimB: '第二章主角认出钥匙主人', location: '第二章中段', minimalFix: '补一处获得信息的动作' }],
+      uncertain: ['钥匙是否有照片证据'],
+    },
+  })
+  center = repository.loadKnowledgeCenter('project-1')
+  assert.equal(center.checks.filter((check) => check.origin === 'ai').length, 0)
+  center = repository.resolveCandidate({ id: audit.id, status: 'accepted' })
+  const aiCheck = center.checks.find((check) => check.origin === 'ai')
+  assert.ok(aiCheck)
+  assert.equal(aiCheck.kind, 'ai-continuity')
+  assert.match(aiCheck.detail, /证据 A/)
+  assert.match(aiCheck.detail, /最小修改/)
+  assert.equal(center.counts.pendingCandidates, 0)
+  database.close()
+})

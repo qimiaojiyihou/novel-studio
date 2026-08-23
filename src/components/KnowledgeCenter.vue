@@ -35,6 +35,7 @@
         <div class="knowledge-index-note">
           <span class="eyebrow">WORKING RULE</span>
           <p>同步只更新规划来源。你编辑过的条目会变成手工记录，保留你的判断。</p>
+          <button v-if="pendingCandidates.length" class="candidate-inbox" @click="openCandidate(pendingCandidates[0])">{{ pendingCandidates.length }} 份 AI 候选待确认</button>
         </div>
       </aside>
 
@@ -102,7 +103,13 @@
         <template v-else-if="mode === 'context'">
           <div class="knowledge-sheet-heading context-heading">
             <div><span class="eyebrow copper">LONG-FORM CONTEXT</span><h2>长篇上下文</h2><p>模型不会吞下整本小说，而是优先携带当前章、最近章节，再按本次任务召回相关旧章和知识记录。</p></div>
-            <button class="knowledge-add" @click="rebuildMemories" :disabled="contextSaving">{{ contextSaving ? '正在重建…' : '重建章节记忆' }}</button>
+            <div class="knowledge-heading-actions">
+              <button @click="runKnowledgeAi('chapter_state_extract')" :disabled="aiRunning || !chapterHasManuscript">{{ aiTask?.task === 'chapter_state_extract' ? '正在提取…' : 'AI 提取当前章状态' }}</button>
+              <button class="knowledge-add" @click="rebuildMemories" :disabled="contextSaving">{{ contextSaving ? '正在重建…' : '重建章节记忆' }}</button>
+            </div>
+          </div>
+          <div v-if="pendingStateCandidates.length" class="candidate-strip">
+            <button v-for="candidate in pendingStateCandidates" :key="candidate.id" @click="openCandidate(candidate)"><span>待确认</span><strong>第 {{ candidate.chapterNo }} 章状态候选</strong><small>{{ formatTime(candidate.createdAt) }}</small></button>
           </div>
           <div v-if="contextManager" class="context-workbench">
             <section class="context-profile-card">
@@ -115,6 +122,13 @@
                 <label><span><strong>单章记忆长度</strong><small>章节合同、场景推进与正文首尾的摘要容量</small></span><input v-model.number="contextManager.profile.chapterSummaryChars" type="number" min="200" max="4000" step="100" /></label>
               </div>
               <div class="context-profile-actions"><p>修改记忆长度后会自动重建全部章节摘要。</p><button @click="saveContextProfile" :disabled="contextSaving">保存上下文设置</button></div>
+            </section>
+            <section v-if="center.stateSnapshots?.length" class="memory-ledger state-ledger">
+              <div class="context-card-heading"><span>CONFIRMED STATE SNAPSHOTS</span><strong>{{ center.stateSnapshots.length }} 章</strong></div>
+              <article v-for="snapshot in center.stateSnapshots" :key="snapshot.id" class="memory-entry state-entry">
+                <div class="memory-number">{{ String(snapshot.chapterNo).padStart(2, '0') }}</div>
+                <div><div class="memory-title"><strong>{{ snapshot.chapterTitle }}</strong><small>{{ formatTime(snapshot.resolvedAt) }}</small></div><p>{{ snapshot.payload.summary || '这份状态快照没有摘要。' }}</p><div class="memory-keywords"><span>{{ snapshot.payload.facts?.length || 0 }} 条事实</span><span>{{ snapshot.payload.characterStates?.length || 0 }} 个人物状态</span><span>{{ snapshot.payload.openThreads?.length || 0 }} 条悬线</span></div></div>
+              </article>
             </section>
             <section class="memory-ledger">
               <div class="context-card-heading"><span>CHAPTER MEMORY LEDGER</span><strong>{{ contextManager.stats.memoryCount }} / {{ contextManager.stats.chapterCount }} 章</strong></div>
@@ -131,7 +145,10 @@
         <template v-else>
           <div class="knowledge-sheet-heading checks-heading">
             <div><span class="eyebrow copper">CONTINUITY AUDIT</span><h2>连续性检查</h2><p>这里的提醒来自章节合同、时间节点、伏笔账本和事实键冲突。每一条都留给作者做最后判断。</p></div>
-            <div class="check-summary"><strong>{{ openChecks.length }}</strong><span>待处理提醒</span></div>
+            <div class="checks-heading-actions"><button class="knowledge-add" @click="runKnowledgeAi('continuity_audit')" :disabled="aiRunning || !chapterHasManuscript">{{ aiTask?.task === 'continuity_audit' ? '正在审计…' : 'AI 审计当前章' }}</button><div class="check-summary"><strong>{{ openChecks.length }}</strong><span>待处理提醒</span></div></div>
+          </div>
+          <div v-if="pendingAuditCandidates.length" class="candidate-strip">
+            <button v-for="candidate in pendingAuditCandidates" :key="candidate.id" @click="openCandidate(candidate)"><span>待确认</span><strong>第 {{ candidate.chapterNo }} 章审计候选</strong><small>{{ candidate.payload.issues?.length || 0 }} 项问题</small></button>
           </div>
           <div v-if="!center.checks.length" class="knowledge-empty checks-empty"><span>✓</span><strong>目前没有连续性提醒</strong><p>随着章节卡、时间线和伏笔增加，检查结果会出现在这里。</p></div>
           <div v-else class="check-list">
@@ -159,6 +176,7 @@
           <div class="check-rule-card"><span>01</span><strong>章节合同</strong><p>正文开始后是否仍有明确的章节目标和可回看的变化。</p></div>
           <div class="check-rule-card"><span>02</span><strong>时间顺序</strong><p>章节事件和伏笔回收是否落在合理的时间节点上。</p></div>
           <div class="check-rule-card"><span>03</span><strong>事实键</strong><p>同一个事实键不能同时拥有互相冲突的值。</p></div>
+          <div class="check-rule-card"><span>AI</span><strong>双向证据</strong><p>AI 审计候选只有在你接受后才会进入检查列表，并保留冲突双方与最小修改建议。</p></div>
         </template>
         <template v-else-if="mode === 'context'">
           <div class="context-stat"><span>摘要字符</span><strong>{{ formatNumber(contextManager?.stats.memoryCharacters || 0) }}</strong></div>
@@ -172,6 +190,16 @@
       </aside>
     </div>
 
+    <div v-if="selectedCandidate" class="knowledge-confirm-backdrop" @mousedown.self="selectedCandidate = null">
+      <section class="knowledge-confirm candidate-review">
+        <span class="eyebrow copper">AI CANDIDATE REVIEW</span>
+        <h2>{{ candidateTitle(selectedCandidate) }}</h2>
+        <p>{{ selectedCandidate.task === 'chapter_state_extract' ? '接受后，这份状态快照会进入后续章节的生成上下文；原正文和手工知识不会被改动。' : '接受后，明确冲突会进入连续性检查列表；正文不会被自动修改。' }}</p>
+        <pre>{{ formatCandidate(selectedCandidate) }}</pre>
+        <div><button @click="resolveCandidate(selectedCandidate, 'discarded')">丢弃候选</button><button class="accept-candidate" @click="resolveCandidate(selectedCandidate, 'accepted')">接受并应用</button></div>
+      </section>
+    </div>
+
     <div v-if="deleteTarget" class="knowledge-confirm-backdrop" @mousedown.self="deleteTarget = null">
       <section class="knowledge-confirm"><span class="eyebrow copper">REMOVE MEMORY</span><h2>删除“{{ deleteTarget.title }}”？</h2><p>这条知识记录会从当前项目的上下文中移除，来源章节和规划内容不会被删除。</p><div><button @click="deleteTarget = null">取消</button><button class="danger" @click="confirmDelete">删除记录</button></div></section>
     </div>
@@ -183,7 +211,11 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { appService } from '../services/app-service.js'
 
-const props = defineProps({ project: { type: Object, required: true } })
+const props = defineProps({
+  project: { type: Object, required: true },
+  chapters: { type: Array, default: () => [] },
+  activeChapterId: { type: String, default: '' },
+})
 const emit = defineEmits(['toast'])
 const center = ref(null)
 const contextManager = ref(null)
@@ -194,6 +226,8 @@ const saveState = ref('saved')
 const syncing = ref(false)
 const contextSaving = ref(false)
 const deleteTarget = ref(null)
+const selectedCandidate = ref(null)
+const aiTask = ref(null)
 const itemTimers = new Map()
 const dirtyItems = new Set()
 const activeSaves = new Set()
@@ -235,13 +269,19 @@ const modeItems = computed(() => center.value?.items.filter((item) => item.kind 
 const selectedItem = computed(() => modeItems.value.find((item) => item.id === selectedItemId.value) || modeItems.value[0] || null)
 const fieldsForMode = computed(() => fieldSets[mode.value] || [])
 const openChecks = computed(() => center.value?.checks.filter((check) => check.status === 'open') || [])
+const activeChapter = computed(() => props.chapters.find((chapter) => chapter.id === props.activeChapterId) || props.chapters[0] || null)
+const chapterHasManuscript = computed(() => Boolean(String(activeChapter.value?.manuscript || '').trim()))
+const aiRunning = computed(() => Boolean(aiTask.value))
+const pendingCandidates = computed(() => center.value?.candidates.filter((candidate) => candidate.status === 'pending') || [])
+const pendingStateCandidates = computed(() => pendingCandidates.value.filter((candidate) => candidate.task === 'chapter_state_extract'))
+const pendingAuditCandidates = computed(() => pendingCandidates.value.filter((candidate) => candidate.task === 'continuity_audit'))
 const itemMark = computed(() => mode.value === 'facts' ? 'F' : mode.value === 'timeline' ? 'T' : 'P')
 const saveStateLabel = computed(() => ({ dirty: '等待自动保存', saving: '正在保存', saved: '已保存', error: '保存失败' }[saveState.value]))
 const editorNote = computed(() => selectedItem.value?.sourceType === 'manual' ? '这是作者手工维护的记忆。同步规划时会保留它。' : '这是从已确认规划或章节生成的来源事实。编辑后会转为手工记录。')
 
 onMounted(loadCenter)
 watch(() => props.project.id, async () => { await flushSaves(); await loadCenter() })
-onBeforeUnmount(() => { void flushSaves() })
+onBeforeUnmount(() => { if (aiTask.value?.cancel) void aiTask.value.cancel(); void flushSaves() })
 
 async function loadCenter() {
   loadError.value = ''
@@ -282,6 +322,57 @@ async function rebuildMemories() {
   try { contextManager.value = await appService.rebuildContextMemories(props.project.id); emit('toast', '章节记忆已经重建') }
   catch (error) { emit('toast', `重建章节记忆失败：${error.message}`) }
   finally { contextSaving.value = false }
+}
+
+async function runKnowledgeAi(task) {
+  if (aiTask.value || !activeChapter.value) return
+  if (!chapterHasManuscript.value) {
+    emit('toast', '当前章节还没有正文，先写入或生成正文再执行分析')
+    return
+  }
+  await flushSaves()
+  const handle = appService.startGeneration({
+    task,
+    projectId: props.project.id,
+    chapterId: activeChapter.value.id,
+  })
+  aiTask.value = { task, taskId: handle.taskId, cancel: handle.cancel }
+  try {
+    const result = await handle.promise
+    const payload = task === 'chapter_state_extract' ? result.stateSnapshot : result.audit
+    const candidate = await appService.createKnowledgeCandidate({
+      projectId: props.project.id,
+      chapterId: activeChapter.value.id,
+      task,
+      payload,
+      model: result.model || {},
+    })
+    center.value.candidates.unshift(candidate)
+    center.value.counts.pendingCandidates = pendingCandidates.value.length
+    selectedCandidate.value = candidate
+    emit('toast', task === 'chapter_state_extract' ? '章后状态候选已生成，请确认后再纳入上下文' : '连续性审计候选已生成，请确认后再建立提醒')
+  } catch (error) {
+    emit('toast', `${task === 'chapter_state_extract' ? '章后状态提取' : '连续性审计'}失败：${error.message}`)
+  } finally {
+    aiTask.value = null
+  }
+}
+
+function openCandidate(candidate) { selectedCandidate.value = candidate }
+function candidateTitle(candidate) { return `第 ${candidate.chapterNo} 章《${candidate.chapterTitle}》${candidate.task === 'chapter_state_extract' ? '状态候选' : '连续性审计'}` }
+function formatCandidate(candidate) { return JSON.stringify(candidate.payload || {}, null, 2) }
+async function resolveCandidate(candidate, status) {
+  try {
+    center.value = await appService.resolveKnowledgeCandidate({ id: candidate.id, status })
+    selectedCandidate.value = null
+    if (candidate.task === 'chapter_state_extract' && status === 'accepted') {
+      contextManager.value = await appService.loadContextManager(props.project.id)
+    }
+    const action = status === 'accepted' ? '已接受' : '已丢弃'
+    emit('toast', `${action}${candidate.task === 'chapter_state_extract' ? '章后状态候选' : '连续性审计候选'}`)
+  } catch (error) {
+    emit('toast', `处理 AI 候选失败：${error.message}`)
+  }
 }
 
 function updateTitle(item, value) { item.title = value; markDirty(item) }
@@ -372,7 +463,7 @@ function reopenCheck(check) { resolveCheck(check, 'open') }
 function itemSummary(item) { return item.kind === 'fact' ? item.content.statement || item.content.value || '等待填写事实陈述' : item.kind === 'timeline' ? item.content.event || item.content.consequence || '等待填写事件' : item.content.seed || item.content.promise || '等待填写伏笔种子' }
 function itemOriginLabel(item) { return item.sourceType === 'planning' ? '规划来源' : item.sourceType === 'chapter' ? '章节来源' : '手工记录' }
 function sourceDescription(item) { return item.sourceType === 'planning' ? '这条记录来自故事基础、人物、世界观或结构规划。' : item.sourceType === 'chapter' ? '这条记录来自章节合同或章节事件。' : '这条记录由作者直接维护，不会被规划同步覆盖。' }
-function checkKindLabel(kind) { return ({ 'missing-contract': '章节合同', 'missing-scene-plan': '场景计划', 'overdue-foreshadow': '伏笔回收', 'conflicting-fact': '事实冲突' }[kind] || '连续性') }
+function checkKindLabel(kind) { return ({ 'missing-contract': '章节合同', 'missing-scene-plan': '场景计划', 'overdue-foreshadow': '伏笔回收', 'conflicting-fact': '事实冲突', 'ai-continuity': 'AI 审计' }[kind] || '连续性') }
 function checkStatusLabel(status) { return status === 'resolved' ? '已处理' : status === 'dismissed' ? '已忽略' : '待处理' }
 
 defineExpose({ flushSaves })
@@ -386,6 +477,10 @@ defineExpose({ flushSaves })
 .knowledge-source-rail { min-height: 0; overflow: auto; color: #514a43; border-left: 1px solid #cec2b3; background: #e5dccd; }.source-rail-heading { padding: 22px 20px 17px; border-bottom: 1px solid #cfc3b4; }.source-rail-heading h2 { margin: 8px 0 0; font: 19px var(--font-display); }.source-badge { display: inline-flex; align-items: center; gap: 6px; margin: 19px 20px 0; padding: 5px 7px; color: #8b7769; border: 1px solid #cdb7a5; font-size: 8px; }.source-badge i { width: 5px; height: 5px; border-radius: 50%; background: #a88a70; }.source-badge.manual { color: var(--pine); border-color: #a7b8aa; }.source-badge.manual i { background: var(--pine); }.source-badge.chapter { color: #80654f; }.source-copy { padding: 14px 20px 18px; }.source-copy strong { font: 15px var(--font-display); }.source-copy p { margin: 8px 0 0; color: #8d8073; font: 10px/1.6 var(--font-body); }.source-meta { display: flex; justify-content: space-between; gap: 10px; padding: 10px 20px; border-top: 1px solid #d0c4b5; color: #978a7c; font-size: 8px; }.source-meta strong { color: #6e6258; font-size: 8px; }.source-meta .included { color: var(--pine); }.source-rule { margin: 18px 20px; border-top: 1px solid #cdbfaf; }.source-help { margin: 0 20px; color: #887b6f; font: 10px/1.7 var(--font-body); }.source-empty { display: grid; justify-items: center; padding: 50px 25px; color: #8d8073; text-align: center; }.source-empty span { color: var(--copper); font-size: 27px; }.source-empty p { font: 10px/1.6 var(--font-body); }.check-rule-card { margin: 14px 20px 0; padding: 12px 0 14px 29px; border-bottom: 1px solid #cfc3b4; position: relative; }.check-rule-card span { position: absolute; left: 0; top: 12px; color: var(--copper); font: 9px var(--font-ui); }.check-rule-card strong { font: 14px var(--font-display); }.check-rule-card p { margin: 6px 0 0; color: #8d8073; font: 10px/1.6 var(--font-body); }
 .checks-heading { align-items: center; }.check-summary { display: grid; justify-items: end; color: #927c69; }.check-summary strong { color: var(--copper); font: 29px var(--font-display); }.check-summary span { font-size: 8px; }.check-list { display: grid; gap: 9px; width: min(980px, 100%); margin: 0 auto; }.check-card { display: grid; grid-template-columns: 32px minmax(0, 1fr) auto; align-items: start; gap: 13px; padding: 17px 18px; border: 1px solid #d1c1b1; border-left: 3px solid #c89b82; background: var(--paper-soft); }.check-card.severity-warning { border-left-color: #bd8a48; }.check-card.severity-critical { border-left-color: #a34e3c; }.check-card.resolved { opacity: .62; border-left-color: #799786; }.check-card-mark { display: grid; place-items: center; width: 27px; height: 27px; color: #a9795d; border: 1px solid #d6b6a2; border-radius: 50%; font: 14px var(--font-display); }.severity-warning .check-card-mark { color: #a5793e; border-color: #d5b680; }.severity-critical .check-card-mark { color: #a34e3c; border-color: #d29b8c; }.resolved .check-card-mark { color: var(--pine); border-color: #9bb2a2; }.check-card-copy > div { display: flex; gap: 8px; }.check-kind { color: var(--copper); font-size: 8px; letter-spacing: .08em; }.check-status { color: #a09385; font-size: 8px; }.check-card h3 { margin: 7px 0 4px; color: #4c433c; font: 15px var(--font-display); }.check-card p { margin: 0; color: #897c6e; font: 10px/1.6 var(--font-body); }.check-card-actions { display: flex; gap: 6px; align-self: center; }.check-card-actions button { padding: 7px 8px; color: #776b60; border: 1px solid #c8baaa; background: transparent; font-size: 8px; white-space: nowrap; }.check-card-actions button.resolve { color: #fff8ef; border-color: var(--copper); background: var(--copper); }.checks-empty { width: min(980px, 100%); margin: 0 auto; }.checks-empty > span { color: var(--pine); font-size: 27px; }.knowledge-confirm-backdrop { position: fixed; inset: 0; z-index: 90; display: grid; place-items: center; background: rgba(20,23,26,.7); backdrop-filter: blur(4px); }.knowledge-confirm { width: min(430px, 90vw); padding: 29px 31px; background: var(--paper-soft); box-shadow: 0 24px 65px rgba(10,12,14,.38); }.knowledge-confirm h2 { margin: 10px 0 8px; font: 23px var(--font-display); }.knowledge-confirm p { color: #8c7f72; font: 10px/1.65 var(--font-body); }.knowledge-confirm > div { display: flex; justify-content: flex-end; gap: 7px; margin-top: 20px; }.knowledge-confirm button { padding: 8px 11px; color: #766b61; border: 1px solid var(--line); background: transparent; font-size: 8px; }.knowledge-confirm button.danger { color: white; border-color: #9b4332; background: #9b4332; }.knowledge-loading { grid-column: 2 / 4; display: grid; place-items: center; color: #9b8d7e; background: var(--paper); font: 16px var(--font-display); }
 .context-workbench { display: grid; gap: 18px; width: min(980px, 100%); margin: 0 auto; }.context-profile-card, .memory-ledger { padding: 20px 22px; border: 1px solid #d2c4b4; background: var(--paper-soft); box-shadow: 0 8px 28px rgba(62,49,39,.06); }.context-card-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-bottom: 13px; color: #9b6f58; border-bottom: 1px solid #ddd1c3; font: 600 8px var(--font-ui); letter-spacing: .12em; }.context-card-heading strong { color: #544a41; font: 15px var(--font-display); letter-spacing: 0; }.context-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; padding: 18px 0; }.context-fields label { display: grid; gap: 8px; }.context-fields label > span { display: grid; gap: 4px; }.context-fields strong { color: #4f473f; font: 12px var(--font-display); }.context-fields small { color: #9a8d80; font: 8px/1.45 var(--font-body); }.context-fields input { min-width: 0; height: 37px; padding: 7px 9px; color: #51483f; border: 1px solid #d5c8b9; outline: 0; background: rgba(255,255,255,.5); font: 11px var(--font-ui); }.context-fields input:focus { border-color: var(--copper-light); }.context-profile-actions { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-top: 13px; border-top: 1px solid #ddd1c3; }.context-profile-actions p { margin: 0; color: #938678; font: 9px var(--font-body); }.context-profile-actions button { padding: 8px 10px; color: #fff8ef; border: 1px solid var(--pine); background: var(--pine); font-size: 9px; }.memory-ledger { display: grid; gap: 0; }.memory-entry { display: grid; grid-template-columns: 42px minmax(0, 1fr); gap: 13px; padding: 16px 0; border-bottom: 1px solid #ded3c6; }.memory-entry:last-child { border-bottom: 0; }.memory-number { color: var(--copper); font: 17px var(--font-display); }.memory-title { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }.memory-title strong { color: #4c443c; font: 14px var(--font-display); }.memory-title small { color: #a09385; font-size: 8px; }.memory-entry p { margin: 7px 0 9px; color: #817568; font: 10px/1.65 var(--font-body); white-space: pre-line; }.memory-keywords { display: flex; flex-wrap: wrap; gap: 5px; }.memory-keywords span { padding: 3px 5px; color: #7b6b5e; border: 1px solid #d5c4b4; font-size: 7px; }.context-stat { display: flex; align-items: flex-end; justify-content: space-between; margin: 18px 20px 8px; padding: 0 0 14px; border-bottom: 1px solid #cfc3b4; color: #938577; font-size: 8px; }.context-stat strong { color: var(--copper); font: 25px var(--font-display); }.context-help { margin-top: 20px; }.context-heading button:disabled, .context-profile-actions button:disabled { opacity: .55; }
+.candidate-inbox { width: 100%; margin-top: 12px; padding: 8px; color: #e8c9b8; border: 1px solid #765546; background: rgba(182,85,62,.12); font-size: 8px; text-align: left; }.candidate-inbox:hover { color: #fff8ef; border-color: var(--copper); }
+.knowledge-heading-actions, .checks-heading-actions { display: flex; align-items: center; gap: 8px; }.knowledge-heading-actions > button, .checks-heading-actions > button { padding: 8px 10px; color: #76685d; border: 1px solid #c8b8a7; background: transparent; font-size: 9px; white-space: nowrap; }.knowledge-heading-actions > button:hover, .checks-heading-actions > button:hover { color: var(--copper); border-color: var(--copper); }.knowledge-heading-actions > button:disabled, .checks-heading-actions > button:disabled { opacity: .48; }.knowledge-heading-actions .knowledge-add, .checks-heading-actions .knowledge-add { color: #fff8ef; border-color: var(--copper); background: var(--copper); }.checks-heading-actions { align-items: flex-end; }.checks-heading-actions .check-summary { min-width: 74px; }
+.candidate-strip { display: grid; gap: 7px; width: min(980px, 100%); margin: 0 auto 16px; }.candidate-strip button { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 10px 12px; color: #6e6258; border: 1px solid #d1b8a6; border-left: 3px solid var(--copper); background: #fff8ef; text-align: left; }.candidate-strip button:hover { border-color: var(--copper); }.candidate-strip span { color: var(--copper); font-size: 8px; }.candidate-strip strong { font: 12px var(--font-display); }.candidate-strip small { color: #9a8b7e; font-size: 8px; }.state-ledger { border-left: 3px solid #769180; }.state-entry .memory-number { color: var(--pine); }
+.candidate-review { width: min(760px, 92vw); max-height: 84vh; display: grid; grid-template-rows: auto auto auto minmax(180px, 1fr) auto; }.candidate-review pre { min-width: 0; max-height: 48vh; overflow: auto; margin: 10px 0 0; padding: 16px; color: #51483f; border: 1px solid #d4c5b5; background: #f4ecdf; font: 10px/1.65 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; word-break: break-word; }.knowledge-confirm button.accept-candidate { color: #fff; border-color: var(--pine); background: var(--pine); }
 @keyframes knowledge-pulse { 50% { opacity: .35; transform: scale(.75); } }
 @media (max-width: 1240px) { .knowledge-layout { grid-template-columns: 180px minmax(430px, 1fr) 250px; }.knowledge-canvas { padding-right: 18px; padding-left: 18px; }.knowledge-item-layout { grid-template-columns: minmax(155px, .34fr) minmax(300px, 1fr); }.context-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 </style>

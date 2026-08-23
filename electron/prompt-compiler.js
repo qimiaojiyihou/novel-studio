@@ -69,6 +69,13 @@ function planningDetails(input) {
 
 function taskDetails(task, input) {
   if (task === 'planning_field') return planningDetails(input)
+  if (task === 'chapter_state_extract' || task === 'continuity_audit') {
+    return [
+      `待处理章节：第 ${input.chapter?.chapter_no || 1} 章《${input.chapter?.title || '未命名章节'}》`,
+      '以下是本次任务唯一的待处理正文；引用证据和位置必须来自这里：',
+      input.chapter?.manuscript || '（正文为空）',
+    ].join('\n')
+  }
   if (task === 'rewrite') {
     const preset = resolveRewritePreset(input.rewriteMode)
     return [

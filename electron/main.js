@@ -10,6 +10,7 @@ import {
   bindPromptTemplate,
   createChapter,
   createKnowledgeItem,
+  createKnowledgeCandidate,
   createPlanningCandidate,
   createPlanningEntity,
   createProject,
@@ -41,6 +42,7 @@ import {
   restoreRevision,
   resolvePlanningCandidate,
   resolveContinuityCheck,
+  resolveKnowledgeCandidate,
   savePlanningDocument,
   savePromptAddon,
   savePromptTemplate,
@@ -181,6 +183,8 @@ function generationOutput(result = {}) {
   if (typeof result.scenePlan === 'string') return result.scenePlan
   if (typeof result.text === 'string') return result.text
   if (result.card && typeof result.card === 'object') return JSON.stringify(result.card)
+  if (result.stateSnapshot && typeof result.stateSnapshot === 'object') return JSON.stringify(result.stateSnapshot)
+  if (result.audit && typeof result.audit === 'object') return JSON.stringify(result.audit)
   return ''
 }
 
@@ -245,6 +249,8 @@ function registerIpc() {
   ipcMain.handle('knowledge:items-reorder', (_event, payload) => reorderKnowledgeItems(payload))
   ipcMain.handle('knowledge:item-delete', (_event, itemId) => deleteKnowledgeItem(itemId))
   ipcMain.handle('knowledge:check-resolve', (_event, payload) => resolveContinuityCheck(payload))
+  ipcMain.handle('knowledge:candidate-create', (_event, payload) => createKnowledgeCandidate(payload))
+  ipcMain.handle('knowledge:candidate-resolve', (_event, payload) => resolveKnowledgeCandidate(payload))
   ipcMain.handle('context:load', (_event, projectId) => loadContextManager(projectId))
   ipcMain.handle('context:update', (_event, payload) => updateContextProfile(payload))
   ipcMain.handle('context:rebuild', (_event, projectId) => rebuildContextMemories(projectId))
@@ -282,7 +288,7 @@ function registerIpc() {
     const chapter = workspace.chapters.find((item) => item.id === payload?.chapterId) || workspace.chapters[0]
     const planningCenter = workspace.project ? loadPlanningCenter(workspace.project.id) : null
     const knowledgeCenter = workspace.project ? loadKnowledgeCenter(workspace.project.id) : null
-    const chapterScopedTasks = new Set(['chapter', 'chapter_card', 'scene_plan', 'rewrite'])
+    const chapterScopedTasks = new Set(['chapter', 'chapter_card', 'scene_plan', 'rewrite', 'chapter_state_extract', 'continuity_audit'])
     const promptChapterId = payload?.chapterId || (chapterScopedTasks.has(payload?.task) ? chapter?.id : '')
     const promptVolumeId = payload?.planning?.scopeType === 'volume' ? payload.planning.scopeId : ''
     const promptContext = workspace.project ? resolvePromptContext({
