@@ -6,6 +6,7 @@ import { getSchemaVersion, runMigrations } from './database-migrations.js'
 import { createKnowledgeRepository } from './knowledge-repository.js'
 import { createContextRepository } from './context-repository.js'
 import { createPlanningRepository } from './planning-repository.js'
+import { createProjectBackup, importManuscriptProject, restoreProjectBackup } from './project-portability.js'
 import { createPromptRepository } from './prompt-repository.js'
 import { createWorkspaceRepository } from './workspace-repository.js'
 
@@ -210,6 +211,23 @@ export function restoreProject(projectId) {
 
 export function deleteProject(projectId) {
   return workspaceStore().deleteProject(projectId)
+}
+
+export function exportProjectBackup(projectId) {
+  openDatabase()
+  return createProjectBackup(database, projectId)
+}
+
+export function restoreProjectBackupData(bundle) {
+  openDatabase()
+  const restored = restoreProjectBackup(database, bundle)
+  return { ...restored, workspace: workspaceStore().loadWorkspace(restored.projectId) }
+}
+
+export function importManuscriptData(manuscript) {
+  openDatabase()
+  const imported = importManuscriptProject(database, manuscript)
+  return { ...imported, workspace: workspaceStore().loadWorkspace(imported.projectId) }
 }
 
 export function updateChapter(patch) {

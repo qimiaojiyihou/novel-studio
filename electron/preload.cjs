@@ -8,6 +8,8 @@ contextBridge.exposeInMainWorld('novelStudio', {
   archiveProject: (projectId) => ipcRenderer.invoke('project:archive', projectId),
   restoreProject: (projectId) => ipcRenderer.invoke('project:restore', projectId),
   deleteProject: (projectId) => ipcRenderer.invoke('project:delete', projectId),
+  exportProjectFile: (payload) => ipcRenderer.invoke('project:export-file', payload),
+  importProjectFile: () => ipcRenderer.invoke('project:import-file'),
   createChapter: (input) => ipcRenderer.invoke('chapter:create', input),
   updateChapter: (patch) => ipcRenderer.invoke('chapter:update', patch),
   reorderChapters: (input) => ipcRenderer.invoke('chapters:reorder', input),

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain } from 'electron'
 import path from 'node:path'
 import fs from 'node:fs'
 import { spawn } from 'node:child_process'
@@ -28,6 +28,7 @@ import {
   deleteProject,
   duplicateChapter,
   finishGenerationRecord,
+  exportProjectBackup,
   getDatabaseInfo,
   getModelApiKey,
   listProjects,
@@ -38,6 +39,7 @@ import {
   loadContextManager,
   loadModelSettings,
   loadWorkspace,
+  importManuscriptData,
   openDatabase,
   reorderChapters,
   reorderKnowledgeItems,
@@ -46,6 +48,7 @@ import {
   resolvePromptContext,
   restoreProject,
   restoreRevision,
+  restoreProjectBackupData,
   resolvePlanningCandidate,
   resolveContinuityCheck,
   resolveKnowledgeCandidate,
@@ -70,6 +73,7 @@ import {
   syncKnowledgeSources,
   setPromptAddonBinding,
 } from './database.js'
+import { manuscriptExport, parseManuscript } from './manuscript-formats.js'
 import { createModelGateway } from './model-gateway.js'
 import { compilePrompt } from './prompt-compiler.js'
 
@@ -228,6 +232,75 @@ function compilePromptPreview(payload = {}) {
   })
 }
 
+const PROJECT_FILE_FORMATS = {
+  txt: { extension: 'txt', label: '纯文本', filters: [{ name: '纯文本', extensions: ['txt'] }] },
+  markdown: { extension: 'md', label: 'Markdown', filters: [{ name: 'Markdown', extensions: ['md', 'markdown'] }] },
+  docx: { extension: 'docx', label: 'Word 文档', filters: [{ name: 'Word 文档', extensions: ['docx'] }] },
+  json: { extension: 'novelstudio.json', label: 'Novel Studio 项目备份', filters: [{ name: 'Novel Studio 项目备份', extensions: ['json'] }] },
+}
+
+function safeFileName(value = '未命名小说') {
+  return String(value).trim().replace(/[<>:"/\\|?*\u0000-\u001F]/g, '-').replace(/[.\s]+$/g, '').slice(0, 80) || '未命名小说'
+}
+
+function dialogOptions(method, options) {
+  return mainWindow && !mainWindow.isDestroyed() ? dialog[method](mainWindow, options) : dialog[method](options)
+}
+
+async function exportProjectFile(payload = {}) {
+  const format = String(payload.format || '').toLowerCase()
+  const formatInfo = PROJECT_FILE_FORMATS[format]
+  if (!formatInfo) throw new Error(`不支持的导出格式：${format}`)
+  const workspace = loadWorkspace(payload.projectId)
+  const content = format === 'json'
+    ? `${JSON.stringify(exportProjectBackup(workspace.project.id), null, 2)}\n`
+    : manuscriptExport(workspace, format)
+  const result = await dialogOptions('showSaveDialog', {
+    title: `导出${formatInfo.label}`,
+    defaultPath: `${safeFileName(workspace.project.title)}.${formatInfo.extension}`,
+    filters: formatInfo.filters,
+  })
+  if (result.canceled || !result.filePath) return { cancelled: true }
+  fs.writeFileSync(result.filePath, content)
+  return { cancelled: false, filePath: result.filePath, format }
+}
+
+function importFormatFromPath(filePath) {
+  const extension = path.extname(filePath).toLowerCase()
+  if (extension === '.docx') return 'docx'
+  if (extension === '.md' || extension === '.markdown') return 'markdown'
+  if (extension === '.json') return 'json'
+  return 'txt'
+}
+
+async function importProjectFile() {
+  const result = await dialogOptions('showOpenDialog', {
+    title: '导入小说正文或项目备份',
+    properties: ['openFile'],
+    filters: [
+      { name: '支持的小说与项目文件', extensions: ['txt', 'md', 'markdown', 'docx', 'json'] },
+      ...Object.values(PROJECT_FILE_FORMATS).map((item) => item.filters[0]),
+    ],
+  })
+  const filePath = result.filePaths?.[0]
+  if (result.canceled || !filePath) return { cancelled: true }
+  const stat = fs.statSync(filePath)
+  if (stat.size > 100 * 1024 * 1024) throw new Error('导入文件超过 100 MB，请拆分后重试')
+  const format = importFormatFromPath(filePath)
+  const parsed = parseManuscript(fs.readFileSync(filePath), {
+    format,
+    fallbackTitle: path.basename(filePath, path.extname(filePath)),
+  })
+  const imported = parsed.backup ? restoreProjectBackupData(parsed.backup) : importManuscriptData(parsed)
+  return {
+    cancelled: false,
+    filePath,
+    format,
+    mode: parsed.backup ? 'backup' : 'manuscript',
+    ...imported,
+  }
+}
+
 function registerIpc() {
   ipcMain.handle('workspace:load', (_event, projectId) => loadWorkspace(projectId))
   ipcMain.handle('projects:list', listProjects)
@@ -236,6 +309,8 @@ function registerIpc() {
   ipcMain.handle('project:archive', (_event, projectId) => archiveProject(projectId))
   ipcMain.handle('project:restore', (_event, projectId) => restoreProject(projectId))
   ipcMain.handle('project:delete', (_event, projectId) => deleteProject(projectId))
+  ipcMain.handle('project:export-file', (_event, payload) => exportProjectFile(payload))
+  ipcMain.handle('project:import-file', () => importProjectFile())
   ipcMain.handle('chapter:create', (_event, input) => createChapter(input))
   ipcMain.handle('chapter:update', (_event, patch) => updateChapter(patch))
   ipcMain.handle('chapters:reorder', (_event, input) => reorderChapters(input))

@@ -22,6 +22,12 @@ export const appService = {
   deleteProject(projectId) {
     return electronApi.deleteProject(projectId)
   },
+  exportProjectFile(payload) {
+    return electronApi.exportProjectFile(payload)
+  },
+  importProjectFile() {
+    return electronApi.importProjectFile()
+  },
   createChapter(input) {
     return electronApi.createChapter(input)
   },

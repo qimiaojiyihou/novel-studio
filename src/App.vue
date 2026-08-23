@@ -43,6 +43,7 @@
             <button class="row-more" :aria-label="`管理《${item.title}》`" @click.stop="toggleProjectActions(item.id)">⋯</button>
             <div v-if="projectActionId === item.id" class="row-action-menu project-action-menu" @click.stop>
               <button @click="openEditProject(item)">编辑项目信息</button>
+              <button @click="openProjectTransfer(item)">导入与导出</button>
               <button @click="askArchiveProject(item)">归档项目</button>
               <button class="danger" @click="askDeleteProject(item)">删除项目</button>
             </div>
@@ -64,6 +65,7 @@
             </div>
           </div>
           <button class="new-project-link" @click="openNewProject">＋ 新建小说项目</button>
+          <button class="new-project-link" @click="openProjectTransfer(project)">⇩ 导入文件或项目备份</button>
         </div>
 
         <nav class="side-nav" aria-label="项目导航">
@@ -285,6 +287,14 @@
       @delete-profile="deleteModelProfile"
       @route-change="changeTaskRoute"
     />
+    <ProjectTransfer
+      :visible="projectTransferOpen"
+      :project="transferProject || project"
+      :busy="projectTransferBusy"
+      @close="projectTransferOpen = false"
+      @export="exportProjectFile"
+      @import="importProjectFile"
+    />
     <DiffReview
       :visible="candidate.visible"
       :original="candidate.original"
@@ -396,6 +406,7 @@ import KnowledgeCenter from './components/KnowledgeCenter.vue'
 import ModelSettings from './components/ModelSettings.vue'
 import NovelEditor from './components/NovelEditor.vue'
 import PlanningCenter from './components/PlanningCenter.vue'
+import ProjectTransfer from './components/ProjectTransfer.vue'
 import PromptCenter from './components/PromptCenter.vue'
 import VersionHistory from './components/VersionHistory.vue'
 import { REWRITE_PRESETS } from '../electron/prompt-templates.js'
@@ -427,6 +438,9 @@ const chapterActionId = ref('')
 const archiveListOpen = ref(false)
 const newProjectOpen = ref(false)
 const projectCreating = ref(false)
+const projectTransferOpen = ref(false)
+const projectTransferBusy = ref(false)
+const transferProject = ref(null)
 const editProjectOpen = ref(false)
 const newChapterOpen = ref(false)
 const renameChapterOpen = ref(false)
@@ -627,6 +641,64 @@ function openNewProject() {
   newProjectDraft.genre = ''
   newProjectDraft.idea = ''
   newProjectOpen.value = true
+}
+
+async function openProjectTransfer(item = project) {
+  if (projectTransferBusy.value || runningTask.value) return
+  try {
+    await flushPlanningMemory()
+    await saveManuscript({ createRevision: false, source: 'before-project-transfer' })
+    if (item.id && item.id !== project.id) {
+      const loaded = await appService.loadWorkspace(item.id)
+      applyWorkspace(loaded)
+      transferProject.value = loaded.project
+    } else {
+      transferProject.value = { ...project }
+    }
+    projectActionId.value = ''
+    projectMenuOpen.value = false
+    projectTransferOpen.value = true
+  } catch (error) {
+    showToast(`打开导入导出失败：${error.message}`)
+  }
+}
+
+async function exportProjectFile(format) {
+  if (projectTransferBusy.value || !project.id) return
+  projectTransferBusy.value = true
+  try {
+    await flushPlanningMemory()
+    await saveManuscript({ createRevision: false, source: 'before-project-export' })
+    const result = await appService.exportProjectFile({ projectId: project.id, format })
+    if (!result.cancelled) {
+      const fileName = result.filePath.split(/[\\/]/).pop()
+      showToast(`已导出 ${fileName}`)
+    }
+  } catch (error) {
+    showToast(`导出失败：${error.message}`)
+  } finally {
+    projectTransferBusy.value = false
+  }
+}
+
+async function importProjectFile() {
+  if (projectTransferBusy.value || runningTask.value) return
+  projectTransferBusy.value = true
+  try {
+    await flushPlanningMemory()
+    await saveManuscript({ createRevision: false, source: 'before-project-import' })
+    const result = await appService.importProjectFile()
+    if (!result.cancelled) {
+      applyWorkspace(result.workspace)
+      projectTransferOpen.value = false
+      transferProject.value = null
+      showToast(result.mode === 'backup' ? `项目备份已恢复为《${result.workspace.project.title}》` : `文稿已导入为《${result.workspace.project.title}》`)
+    }
+  } catch (error) {
+    showToast(`导入失败：${error.message}`)
+  } finally {
+    projectTransferBusy.value = false
+  }
 }
 
 async function createNewProject() {
