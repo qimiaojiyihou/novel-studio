@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import {
   GenerationCancelledError,
   prepareModelTask,
+  probeModelCapabilities,
   runEmbeddedModelTask,
 } from '../electron/model-adapter.js'
 
@@ -267,5 +268,94 @@ test('structured knowledge tasks use JSON output and shape reviewable objects', 
     assert.deepEqual(prepared.parameters.response_format, { type: 'json_object' })
     if (task === 'chapter_state_extract') assert.ok(Array.isArray(result.stateSnapshot.facts))
     else assert.ok(Array.isArray(result.audit.issues))
+  }
+})
+
+test('provider capability probe checks model listing, text, streaming, and structured output', async () => {
+  const originalFetch = globalThis.fetch
+  const requests = []
+  globalThis.fetch = async (url, options = {}) => {
+    requests.push({ url: String(url), method: options.method || 'GET', body: options.body ? JSON.parse(options.body) : null })
+    if (String(url).endsWith('/models')) {
+      return new Response(JSON.stringify({ data: [{ id: 'novel-pro' }, { id: 'novel-lite' }] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
+    const body = JSON.parse(options.body)
+    if (body.stream) {
+      const encoder = new TextEncoder()
+      const stream = new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"NOVEL_STUDIO_OK"}}]}\n\n'))
+          controller.enqueue(encoder.encode('data: [DONE]\n\n'))
+          controller.close()
+        },
+      })
+      return new Response(stream, { status: 200, headers: { 'Content-Type': 'text/event-stream' } })
+    }
+    const content = body.response_format ? '{"status":"ok"}' : 'NOVEL_STUDIO_OK'
+    return new Response(JSON.stringify({ choices: [{ message: { content } }] }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }
+
+  try {
+    const result = await probeModelCapabilities({
+      id: 'custom',
+      provider: 'custom',
+      name: '自定义模型',
+      baseUrl: 'https://model.test/v1',
+      model: 'novel-pro',
+      settings: {},
+    }, 'secret-key')
+
+    assert.equal(result.overall, 'ready')
+    assert.equal(result.modelList.supported, true)
+    assert.deepEqual(result.modelList.models, ['novel-pro', 'novel-lite'])
+    assert.equal(result.text.supported, true)
+    assert.equal(result.streaming.supported, true)
+    assert.equal(result.structuredOutput.supported, true)
+    assert.equal(requests.length, 4)
+    assert.equal(requests.some((request) => request.body?.response_format?.type === 'json_object'), true)
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('provider capability probe reports optional capability failures without hiding text readiness', async () => {
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async (url, options = {}) => {
+    if (String(url).endsWith('/models')) return new Response('not exposed', { status: 404 })
+    const body = JSON.parse(options.body)
+    if (body.response_format) return new Response('unsupported', { status: 400 })
+    if (body.stream) {
+      const encoder = new TextEncoder()
+      return new Response(new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"NOVEL_STUDIO_OK"}}]}\n\n'))
+          controller.enqueue(encoder.encode('data: [DONE]\n\n'))
+          controller.close()
+        },
+      }), { status: 200, headers: { 'Content-Type': 'text/event-stream' } })
+    }
+    return new Response(JSON.stringify({ choices: [{ message: { content: 'NOVEL_STUDIO_OK' } }] }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }
+
+  try {
+    const result = await probeModelCapabilities({
+      provider: 'custom', name: '兼容模型', baseUrl: 'https://model.test/v1', model: 'novel', settings: {},
+    }, 'secret-key')
+    assert.equal(result.overall, 'limited')
+    assert.equal(result.text.supported, true)
+    assert.equal(result.streaming.supported, true)
+    assert.equal(result.modelList.supported, false)
+    assert.equal(result.structuredOutput.supported, false)
+  } finally {
+    globalThis.fetch = originalFetch
   }
 })

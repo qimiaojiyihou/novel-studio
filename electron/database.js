@@ -426,10 +426,19 @@ export function finishGenerationRecord(input) {
   return promptStore().finishGenerationRecord(input)
 }
 
+export function getGenerationRecord(id) {
+  return promptStore().getGenerationRecord(id)
+}
+
+export function listGenerationRecords(input) {
+  return promptStore().listGenerationRecords(input)
+}
+
 export function loadModelSettings() {
   openDatabase()
   const profiles = database.prepare(`
     SELECT id, provider, name, base_url AS baseUrl, model, enabled, settings_json AS settingsJson,
+      capabilities_json AS capabilitiesJson, tested_at AS testedAt,
       created_at AS createdAt, updated_at AS updatedAt,
       CASE WHEN api_key_cipher != '' THEN 1 ELSE 0 END AS apiKeyConfigured
     FROM model_profiles
@@ -443,7 +452,9 @@ export function loadModelSettings() {
   `).all().map((profile) => ({
     ...profile,
     settings: { ...defaultModelSettings(profile.provider), ...parseJson(profile.settingsJson) },
+    capabilities: parseJson(profile.capabilitiesJson),
     settingsJson: undefined,
+    capabilitiesJson: undefined,
     enabled: Boolean(profile.enabled),
     apiKeyConfigured: Boolean(profile.apiKeyConfigured),
   }))
@@ -469,8 +480,8 @@ export function saveModelProfile(profile = {}) {
     ...(profile.settings && typeof profile.settings === 'object' ? profile.settings : {}),
   }
   database.prepare(`
-    INSERT INTO model_profiles (id, provider, name, base_url, model, api_key_cipher, enabled, created_at, updated_at, settings_json)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO model_profiles (id, provider, name, base_url, model, api_key_cipher, enabled, created_at, updated_at, settings_json, capabilities_json, tested_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       provider = excluded.provider,
       name = excluded.name,
@@ -479,6 +490,8 @@ export function saveModelProfile(profile = {}) {
       api_key_cipher = excluded.api_key_cipher,
       enabled = excluded.enabled,
       settings_json = excluded.settings_json,
+      capabilities_json = excluded.capabilities_json,
+      tested_at = excluded.tested_at,
       updated_at = excluded.updated_at
   `).run(
     id,
@@ -491,6 +504,8 @@ export function saveModelProfile(profile = {}) {
     createdAt,
     updatedAt,
     JSON.stringify(settings),
+    JSON.stringify(profile.capabilities || parseJson(existing?.capabilities_json)),
+    profile.testedAt || existing?.tested_at || '',
   )
   return loadModelSettings().profiles.find((item) => item.id === id)
 }

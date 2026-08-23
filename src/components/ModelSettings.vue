@@ -50,6 +50,9 @@
                 <strong>{{ profile.name }}</strong>
                 <small>{{ providerLabel(profile.provider) }} · {{ profile.model || '模型名称待填写' }}</small>
               </div>
+              <span v-if="profile.testedAt" class="capability-state" :class="profile.capabilities?.overall || 'unavailable'">
+                {{ capabilityOverallLabel(profile.capabilities?.overall) }}
+              </span>
               <span v-if="profile.apiKeyConfigured" class="key-state">密钥已配置</span>
               <span v-else class="key-state empty">待配置</span>
               <button class="profile-edit" @click="editProfile(profile)">编辑</button>
@@ -168,6 +171,18 @@
             <div v-if="connectionTest.state !== 'idle'" class="connection-result" :class="connectionTest.state">
               <i></i><span>{{ connectionTest.message }}</span>
             </div>
+            <section v-if="draft.testedAt" class="capability-proof">
+              <div class="capability-proof-head">
+                <div><span class="settings-kicker">CAPABILITY PROOF</span><strong>供应商能力探测</strong></div>
+                <small>{{ formatTestedAt(draft.testedAt) }} · 保存配置后保留结果</small>
+              </div>
+              <div class="capability-grid">
+                <article v-for="item in capabilityDefinitions" :key="item.key" :class="capabilityResult(item.key)?.supported ? 'supported' : 'unsupported'">
+                  <span>{{ item.marker }}</span>
+                  <div><strong>{{ item.label }}</strong><small>{{ capabilityDetail(item.key) }}</small></div>
+                </article>
+              </div>
+            </section>
             <div class="form-actions">
               <button type="button" class="outline-button" @click="cancelEdit">取消</button>
               <button type="button" class="test-button" :disabled="connectionTest.state === 'testing'" @click="testConnection">
@@ -222,12 +237,20 @@ watch(() => props.visible, (visible) => {
 function emptyDraft() {
   return {
     id: '', provider: 'custom', name: '', baseUrl: '', model: '', apiKey: '', enabled: true,
+    capabilities: {}, testedAt: '',
     settings: {
       thinkingEnabled: true, reasoningEffort: 'high', samplingMode: 'task-default', temperature: 1, topP: 1, maxTokens: 4096, responseFormat: 'auto',
       requestConfig: normalizeRequestConfig(REQUEST_CONFIG_TEMPLATE),
     },
   }
 }
+
+const capabilityDefinitions = [
+  { key: 'text', label: '基础文本', marker: 'T' },
+  { key: 'streaming', label: '流式输出', marker: 'S' },
+  { key: 'structuredOutput', label: '结构化 JSON', marker: '{}' },
+  { key: 'modelList', label: '模型列表', marker: '≡' },
+]
 
 function providerLabel(provider) {
   return {
@@ -241,6 +264,27 @@ function providerLabel(provider) {
 
 function isBuiltIn(profile) {
   return ['local-default', 'deepseek-default', 'openai-default', 'kimi-default'].includes(profile.id)
+}
+
+function capabilityOverallLabel(value) {
+  return { ready: '能力完整', limited: '部分可用', unavailable: '探测失败' }[value] || '未探测'
+}
+
+function capabilityResult(key) {
+  return draft.capabilities?.[key] || null
+}
+
+function capabilityDetail(key) {
+  const result = capabilityResult(key)
+  if (!result) return '尚未探测'
+  if (!result.supported) return result.error || '供应商未开放'
+  if (key === 'modelList') return `${result.modelCount || 0} 个模型 · ${result.latencyMs} ms`
+  return `可用 · ${result.latencyMs} ms`
+}
+
+function formatTestedAt(value) {
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? '刚刚探测' : date.toLocaleString('zh-CN', { hour12: false })
 }
 
 function editProfile(profile) {
@@ -304,11 +348,15 @@ function validateRequestConfig() {
 async function testConnection() {
   if (!validateRequestConfig()) return
   connectionTest.state = 'testing'
-  connectionTest.message = '正在验证鉴权、模型名称和流式返回…'
+  connectionTest.message = '正在探测鉴权、基础文本、流式返回与结构化输出…'
   try {
     const result = await appService.testModelProfile({ ...draft, settings: { ...draft.settings, requestConfig: normalizeRequestConfig(draft.settings.requestConfig) } })
-    connectionTest.state = 'success'
-    connectionTest.message = `连接成功 · ${result.model?.name || draft.name} · ${result.latencyMs} ms · ${result.gateway === 'go-service' ? 'Go 服务' : '内置服务'}`
+    draft.capabilities = result.capabilities || {}
+    draft.testedAt = result.testedAt || result.capabilities?.checkedAt || new Date().toISOString()
+    connectionTest.state = result.ok ? 'success' : 'error'
+    connectionTest.message = result.ok
+      ? `${capabilityOverallLabel(result.capabilities?.overall)} · 基础文本 ${result.latencyMs} ms · 已完成 4 项探测`
+      : `基础文本不可用：${result.capabilities?.text?.error || '请检查地址、模型名称和密钥'}`
   } catch (error) {
     connectionTest.state = 'error'
     connectionTest.message = `连接失败：${error.message}`

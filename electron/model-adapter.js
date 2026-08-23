@@ -195,6 +195,15 @@ function requestSignal(externalSignal, timeoutMilliseconds) {
   }
 }
 
+const RETRYABLE_HTTP_STATUS = new Set([408, 409, 425, 429, 500, 502, 503, 504])
+
+function retryableError(message, { status = 0, cause } = {}) {
+  const error = new Error(message, cause ? { cause } : undefined)
+  error.status = status
+  error.retryable = status ? RETRYABLE_HTTP_STATUS.has(status) : true
+  return error
+}
+
 async function readSSEContent(response, signal, onDelta) {
   if (!response.body) throw new Error('模型接口没有返回响应流')
   const reader = response.body.getReader()
@@ -246,7 +255,8 @@ async function readSSEContent(response, signal, onDelta) {
 }
 
 async function requestRemote(prepared, signal, onDelta) {
-  const linkedSignal = requestSignal(signal, 120000)
+  const linkedSignal = requestSignal(signal, Number(prepared.timeoutMilliseconds || 120000))
+  let receivedContent = false
   try {
     const response = await fetch(requestEndpointFor(prepared.endpoint, prepared.requestConfig), {
       method: 'POST',
@@ -261,24 +271,106 @@ async function requestRemote(prepared, signal, onDelta) {
     })
     if (!response.ok) {
       const detail = await response.text()
-      throw new Error(prepared.modelProfile.name + ' 请求失败（' + response.status + '）：' + detail.slice(0, 180))
+      throw retryableError(prepared.modelProfile.name + ' 请求失败（' + response.status + '）：' + detail.slice(0, 180), { status: response.status })
     }
     const contentType = response.headers.get('content-type') || ''
     if (contentType.includes('text/event-stream')) {
-      const content = await readSSEContent(response, linkedSignal.signal, onDelta)
+      const content = await readSSEContent(response, linkedSignal.signal, (delta) => { receivedContent = true; onDelta(delta) })
       if (!content) throw new Error(prepared.modelProfile.name + ' 没有返回可用内容')
       return content
     }
     const payload = await response.json()
     const content = payload.choices?.[0]?.message?.content
     if (!content) throw new Error(prepared.modelProfile.name + ' 没有返回可用内容')
+    receivedContent = true
     onDelta(content)
     return content
   } catch (error) {
     if (signal?.aborted) throw new GenerationCancelledError()
+    if (linkedSignal.signal.aborted) throw retryableError('模型请求超时', { cause: error })
+    if (!receivedContent && (error instanceof TypeError || /network|fetch|socket|ECONN|连接/i.test(error?.message || ''))) {
+      throw retryableError(error.message || '模型网络请求失败', { cause: error })
+    }
     throw error
   } finally {
     linkedSignal.dispose()
+  }
+}
+
+function modelListEndpoint(baseUrl) {
+  const url = new URL(baseUrl)
+  url.pathname = url.pathname.replace(/\/chat\/completions\/?$/, '').replace(/\/$/, '') + '/models'
+  url.search = ''
+  return url.toString()
+}
+
+function shortProbeError(error) {
+  return String(error?.message || error || '探测失败').replace(/\s+/g, ' ').slice(0, 180)
+}
+
+async function timedProbe(run) {
+  const startedAt = Date.now()
+  try {
+    const detail = await run()
+    return { supported: true, latencyMs: Date.now() - startedAt, ...detail }
+  } catch (error) {
+    return { supported: false, latencyMs: Date.now() - startedAt, error: shortProbeError(error) }
+  }
+}
+
+async function probeCompletion(modelProfile, apiKey, { stream, structured = false }) {
+  const requestConfig = normalizeRequestConfig({ ...(modelProfile?.settings?.requestConfig || {}), stream })
+  const profile = { ...modelProfile, settings: { ...(modelProfile?.settings || {}), requestConfig } }
+  const compiledPrompt = {
+    messages: [
+      { role: 'system', content: structured ? 'Return one valid JSON object only.' : 'Reply with NOVEL_STUDIO_OK only.' },
+      { role: 'user', content: structured ? 'Return {"status":"ok"}.' : 'Connection test.' },
+    ],
+    snapshot: { template: { id: 'capability-probe', version: 1 }, promptHash: '', estimatedChars: 32 },
+  }
+  const prepared = prepareModelTask({ task: 'connection_test', modelProfile: profile, apiKey, compiledPrompt })
+  if (prepared.execution !== 'remote') throw new Error(prepared.fallbackReason || '模型配置不完整')
+  prepared.timeoutMilliseconds = 20000
+  prepared.stream = stream
+  prepared.requestConfig = requestConfig
+  if (structured) prepared.parameters = { ...prepared.parameters, response_format: { type: 'json_object' } }
+  const content = await requestRemote(prepared, undefined, () => {})
+  if (structured) parseJsonObject(content, '结构化输出探测')
+  return { response: String(content).trim().slice(0, 80) }
+}
+
+export async function probeModelCapabilities(modelProfile, apiKey = '') {
+  const checkedAt = now()
+  const requestConfig = normalizeRequestConfig(modelProfile?.settings?.requestConfig)
+  const modelList = await timedProbe(async () => {
+    const linked = requestSignal(undefined, 15000)
+    try {
+      const response = await fetch(modelListEndpoint(modelProfile.baseUrl), {
+        headers: requestHeadersFor(requestConfig, apiKey),
+        signal: linked.signal,
+      })
+      if (!response.ok) throw new Error(`模型列表请求失败（${response.status}）`)
+      const payload = await response.json()
+      const models = Array.isArray(payload?.data) ? payload.data : []
+      return {
+        modelCount: models.length,
+        models: models.map((item) => item?.id).filter(Boolean).slice(0, 20),
+        selectedModelFound: models.some((item) => item?.id === modelProfile.model),
+      }
+    } finally {
+      linked.dispose()
+    }
+  })
+  const text = await timedProbe(() => probeCompletion(modelProfile, apiKey, { stream: false }))
+  const streaming = await timedProbe(() => probeCompletion(modelProfile, apiKey, { stream: true }))
+  const structuredOutput = await timedProbe(() => probeCompletion(modelProfile, apiKey, { stream: false, structured: true }))
+  return {
+    checkedAt,
+    overall: text.supported ? (streaming.supported && structuredOutput.supported ? 'ready' : 'limited') : 'unavailable',
+    modelList,
+    text,
+    streaming,
+    structuredOutput,
   }
 }
 

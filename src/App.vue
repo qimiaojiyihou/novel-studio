@@ -19,6 +19,7 @@
           <span class="status-dot"></span>{{ runtimeLabel }}
         </span>
         <span class="save-label" :class="saveState">{{ saveLabel }}</span>
+        <button class="icon-button history-button" title="生成记录" @click="openGenerationHistory">↺</button>
         <button class="icon-button" title="模型与项目设置" @click="openSettings">⋯</button>
       </div>
     </header>
@@ -287,6 +288,15 @@
       @delete-profile="deleteModelProfile"
       @route-change="changeTaskRoute"
     />
+    <GenerationHistory
+      :visible="generationHistoryOpen"
+      :records="generationRecords"
+      :loading="generationHistoryLoading"
+      :retrying-id="retryingRecordId"
+      @close="generationHistoryOpen = false"
+      @refresh="refreshGenerationHistory"
+      @retry="retryGenerationRecord"
+    />
     <ProjectTransfer
       :visible="projectTransferOpen"
       :project="transferProject || project"
@@ -402,6 +412,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import DiffReview from './components/DiffReview.vue'
+import GenerationHistory from './components/GenerationHistory.vue'
 import KnowledgeCenter from './components/KnowledgeCenter.vue'
 import ModelSettings from './components/ModelSettings.vue'
 import NovelEditor from './components/NovelEditor.vue'
@@ -432,6 +443,10 @@ const isDirty = ref(false)
 const toast = ref('')
 const loadError = ref('')
 const settingsOpen = ref(false)
+const generationHistoryOpen = ref(false)
+const generationHistoryLoading = ref(false)
+const generationRecords = ref([])
+const retryingRecordId = ref('')
 const projectMenuOpen = ref(false)
 const projectActionId = ref('')
 const chapterActionId = ref('')
@@ -1118,6 +1133,10 @@ function handleGenerationEvent(event) {
     streamPreview.status = '模型已接收任务，等待第一段内容…'
     return
   }
+  if (event.type === 'retrying') {
+    streamPreview.status = `第 ${event.attempt} 次请求暂未成功，${event.delayMs} ms 后自动重试…`
+    return
+  }
   if (event.type === 'delta') {
     streamPreview.content += event.delta || ''
     streamPreview.status = '内容持续抵达中…'
@@ -1314,7 +1333,149 @@ async function handleCloseRequest() {
 }
 
 function openSettings() {
+  generationHistoryOpen.value = false
   settingsOpen.value = true
+}
+
+async function openGenerationHistory() {
+  if (!project.id) return
+  try {
+    await flushPlanningMemory()
+    if (workspaceView.value === 'writing') await saveManuscript({ createRevision: false, source: 'generation-history-open' })
+    settingsOpen.value = false
+    generationHistoryOpen.value = true
+    await refreshGenerationHistory()
+  } catch (error) {
+    showToast(`打开生成记录失败：${error.message}`)
+  }
+}
+
+async function refreshGenerationHistory() {
+  if (!project.id || generationHistoryLoading.value) return
+  generationHistoryLoading.value = true
+  try {
+    generationRecords.value = await appService.listGenerationRecords({ projectId: project.id, limit: 150 })
+  } catch (error) {
+    showToast(`读取生成记录失败：${error.message}`)
+  } finally {
+    generationHistoryLoading.value = false
+  }
+}
+
+function planningSection(sectionLabel = '') {
+  return { '故事基础': 'foundation', '人物与关系': 'characters', '世界观': 'world', '结构规划': 'outline' }[sectionLabel] || 'foundation'
+}
+
+function currentPlanningValue(center, planning = {}) {
+  if (planning.targetType === 'document') return String(center.documents?.[planning.targetId]?.content?.[planning.fieldKey] ?? '')
+  if (planning.targetType === 'entity') {
+    const entity = [...(center.characters || []), ...(center.worldElements || []), ...(center.volumes || [])].find((item) => item.id === planning.targetId)
+    return planning.fieldKey === 'title' ? String(entity?.title || '') : String(entity?.data?.[planning.fieldKey] ?? '')
+  }
+  const chapter = (center.chapters || []).find((item) => item.id === planning.targetId)
+  if (planning.fieldKey === 'title') return String(chapter?.title || '')
+  if (planning.fieldKey === 'card') return JSON.stringify(chapter?.card || {})
+  if (planning.fieldKey === 'scenePlan') return String(chapter?.scenePlan || '')
+  return String(chapter?.card?.[planning.fieldKey] ?? '')
+}
+
+async function presentRetriedGeneration(record, result) {
+  const request = record.request || {}
+  if (record.task === 'chapter') {
+    const target = chapters.value.find((chapter) => chapter.id === request.chapterId) || activeChapter.value
+    activeChapterId.value = target.id
+    workspaceView.value = 'writing'
+    activeTab.value = 'manuscript'
+    candidate.original = target.manuscript || ''
+    candidate.content = result.manuscript || ''
+    candidate.title = '重试生成的正文候选稿'
+    candidate.subtitle = `生成来源：${executionLabel(result)}。确认后才会写入第 ${target.chapter_no} 章。`
+    candidate.hint = '重试不会覆盖原稿；请在差异视图中决定是否接受。'
+    candidate.language = 'markdown'
+    candidate.task = 'chapter'
+    candidate.candidateId = ''
+    candidate.targetTab = 'manuscript'
+    candidate.visible = true
+    generationHistoryOpen.value = false
+    return
+  }
+  if (record.task === 'chapter_card' || record.task === 'scene_plan') {
+    const target = chapters.value.find((chapter) => chapter.id === request.chapterId) || activeChapter.value
+    const isCard = record.task === 'chapter_card'
+    const originalValue = isCard ? JSON.stringify(target.card || {}) : target.scene_plan || ''
+    const generatedValue = isCard ? JSON.stringify(result.card || {}) : result.scenePlan || ''
+    const pending = await appService.createPlanningCandidate({
+      projectId: project.id, targetType: 'chapter', targetId: target.id,
+      fieldKey: isCard ? 'card' : 'scenePlan', fieldLabel: isCard ? '章节卡' : '场景计划',
+      originalValue, candidateValue: generatedValue, instruction: request.instruction || '', model: result.model || {},
+    })
+    activeChapterId.value = target.id
+    workspaceView.value = 'writing'
+    activeTab.value = isCard ? 'card' : 'scene'
+    Object.assign(candidate, {
+      original: isCard ? JSON.stringify(target.card || {}, null, 2) : target.scene_plan || '',
+      content: isCard ? JSON.stringify(result.card || {}, null, 2) : result.scenePlan || '',
+      title: `${isCard ? '章节卡' : '场景计划'}重试候选`,
+      subtitle: `生成来源：${executionLabel(result)}。确认后才会替换当前规划。`,
+      hint: '候选尚未写入，接受前可以逐行检查差异。', language: isCard ? 'json' : 'markdown',
+      task: record.task, candidateId: pending.id, targetTab: isCard ? 'card' : 'scene', visible: true,
+    })
+    generationHistoryOpen.value = false
+    return
+  }
+  if (record.task === 'planning_field') {
+    const planning = request.planning || {}
+    if (!planning.targetType || !planning.targetId) throw new Error('这条旧规划记录缺少候选目标信息，请在规划页重新生成')
+    const center = await appService.loadPlanningCenter(project.id)
+    await appService.createPlanningCandidate({
+      projectId: project.id, targetType: planning.targetType, targetId: planning.targetId,
+      fieldKey: planning.fieldKey, fieldLabel: planning.fieldLabel,
+      originalValue: currentPlanningValue(center, planning), candidateValue: result.text || '',
+      instruction: request.instruction || '', model: result.model || {},
+    })
+    generationHistoryOpen.value = false
+    workspaceView.value = planningSection(planning.sectionLabel)
+    showToast(`${planning.fieldLabel || '规划'}重试候选已放入规划中心`)
+    return
+  }
+  if (record.task === 'chapter_state_extract' || record.task === 'continuity_audit') {
+    await appService.createKnowledgeCandidate({
+      projectId: project.id, chapterId: request.chapterId, task: record.task,
+      payload: record.task === 'chapter_state_extract' ? result.stateSnapshot : result.audit,
+      model: result.model || {},
+    })
+    generationHistoryOpen.value = false
+    workspaceView.value = 'knowledge'
+    showToast(record.task === 'chapter_state_extract' ? '章后状态重试候选已放入知识中心' : '连续性审计重试候选已放入知识中心')
+  }
+}
+
+async function retryGenerationRecord(record) {
+  if (runningTask.value || retryingRecordId.value) return
+  retryingRecordId.value = record.id
+  runningTask.value = `retry:${record.task}`
+  streamPreview.visible = true
+  streamPreview.task = record.task
+  streamPreview.status = '正在按原任务参数重新生成…'
+  streamPreview.content = ''
+  streamPreview.gateway = runtime.mode === 'go-service' ? 'go-service' : 'embedded'
+  const generation = appService.retryGeneration(record.id, handleGenerationEvent)
+  activeGeneration = generation
+  try {
+    const result = await generation.promise
+    await presentRetriedGeneration(record, result)
+    await refreshGenerationHistory()
+    showToast('重试生成完成，已建立新的候选稿')
+  } catch (error) {
+    showToast(generationErrorMessage(error, '重试生成失败'))
+    await refreshGenerationHistory()
+  } finally {
+    if (activeGeneration?.taskId === generation.taskId) activeGeneration = null
+    streamPreview.visible = false
+    generationCancelPending.value = false
+    retryingRecordId.value = ''
+    runningTask.value = ''
+  }
 }
 
 async function refreshModelSettings() {

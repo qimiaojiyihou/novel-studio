@@ -1032,6 +1032,8 @@ async function startFieldGeneration(field, target) {
     planning: {
       sectionLabel: meta.value.title,
       targetLabel: target.targetLabel,
+      targetType: target.targetType,
+      targetId: target.targetId,
       fieldKey: field.key,
       fieldLabel: field.label,
       currentValue: target.currentValue,

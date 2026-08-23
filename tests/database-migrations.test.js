@@ -73,6 +73,8 @@ test('fresh database migrates to the latest schema with foreign keys enabled', (
     assert.equal(database.prepare("SELECT current_version FROM prompt_templates WHERE id = 'builtin-chapter-v1'").get().current_version, 2)
     assert.equal(database.prepare("SELECT COUNT(*) AS count FROM prompt_template_versions WHERE template_id = 'builtin-chapter-v1'").get().count, 2)
     assert.ok(database.prepare('PRAGMA table_info(model_profiles)').all().some((column) => column.name === 'settings_json'))
+    assert.ok(database.prepare('PRAGMA table_info(model_profiles)').all().some((column) => column.name === 'capabilities_json'))
+    assert.ok(database.prepare('PRAGMA table_info(generation_records)').all().some((column) => column.name === 'request_json'))
   } finally {
     database.close()
   }

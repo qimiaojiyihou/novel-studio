@@ -197,6 +197,22 @@ export const appService = {
       cancel: () => electronApi.cancelGeneration(taskId),
     }
   },
+  listGenerationRecords(payload) {
+    return electronApi.listGenerationRecords(payload)
+  },
+  retryGeneration(recordId, onEvent = () => {}) {
+    const taskId = globalThis.crypto?.randomUUID?.() || `task-${Date.now()}-${Math.random().toString(16).slice(2)}`
+    const unsubscribe = electronApi.onGenerationEvent((event) => {
+      if (event?.taskId === taskId) onEvent(event)
+    })
+    const promise = electronApi.retryGeneration({ recordId, taskId })
+      .finally(unsubscribe)
+    return {
+      taskId,
+      promise,
+      cancel: () => electronApi.cancelGeneration(taskId),
+    }
+  },
   getRuntimeInfo() {
     return electronApi.getRuntimeInfo()
   },

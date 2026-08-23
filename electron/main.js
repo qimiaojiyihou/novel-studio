@@ -30,7 +30,9 @@ import {
   finishGenerationRecord,
   exportProjectBackup,
   getDatabaseInfo,
+  getGenerationRecord,
   getModelApiKey,
+  listGenerationRecords,
   listProjects,
   listRevisions,
   loadPromptCenter,
@@ -74,6 +76,7 @@ import {
   setPromptAddonBinding,
 } from './database.js'
 import { manuscriptExport, parseManuscript } from './manuscript-formats.js'
+import { probeModelCapabilities } from './model-adapter.js'
 import { createModelGateway } from './model-gateway.js'
 import { compilePrompt } from './prompt-compiler.js'
 
@@ -201,6 +204,128 @@ function generationOutput(result = {}) {
   if (result.stateSnapshot && typeof result.stateSnapshot === 'object') return JSON.stringify(result.stateSnapshot)
   if (result.audit && typeof result.audit === 'object') return JSON.stringify(result.audit)
   return ''
+}
+
+function generationRequestSnapshot(payload = {}) {
+  const planning = payload.planning && typeof payload.planning === 'object'
+    ? JSON.parse(JSON.stringify(payload.planning))
+    : undefined
+  return Object.fromEntries(Object.entries({
+    task: String(payload.task || ''),
+    projectId: String(payload.projectId || ''),
+    chapterId: String(payload.chapterId || ''),
+    instruction: String(payload.instruction || ''),
+    modelProfileId: String(payload.modelProfileId || ''),
+    selectedText: String(payload.selectedText || ''),
+    rewriteMode: String(payload.rewriteMode || ''),
+    planning,
+  }).filter(([, value]) => value !== undefined && value !== ''))
+}
+
+function compactGenerationEvent(event = {}) {
+  return Object.fromEntries(Object.entries({
+    type: event.type,
+    attempt: event.attempt,
+    nextAttempt: event.nextAttempt,
+    maxAttempts: event.maxAttempts,
+    delayMs: event.delayMs,
+    gateway: event.gateway,
+    error: event.error,
+    createdAt: event.createdAt,
+  }).filter(([, value]) => value !== undefined && value !== ''))
+}
+
+async function runGenerationTask(event, payload = {}, { retryOfId = '' } = {}) {
+  const taskId = String(payload.taskId || '')
+  if (!taskId) throw new Error('生成任务缺少 taskId')
+  const workspace = loadWorkspace(payload.projectId)
+  const chapter = workspace.chapters.find((item) => item.id === payload.chapterId) || workspace.chapters[0]
+  const planningCenter = workspace.project ? loadPlanningCenter(workspace.project.id) : null
+  const knowledgeCenter = workspace.project ? loadKnowledgeCenter(workspace.project.id) : null
+  const chapterScopedTasks = new Set(['chapter', 'chapter_card', 'scene_plan', 'rewrite', 'chapter_state_extract', 'continuity_audit'])
+  const promptChapterId = payload.chapterId || (chapterScopedTasks.has(payload.task) ? chapter?.id : '')
+  const promptVolumeId = payload.planning?.scopeType === 'volume' ? payload.planning.scopeId : ''
+  const promptContext = workspace.project ? resolvePromptContext({
+    projectId: workspace.project.id,
+    chapterId: promptChapterId,
+    volumeId: promptVolumeId,
+    task: payload.task,
+  }) : null
+  const longContext = workspace.project ? buildGenerationContext({
+    projectId: workspace.project.id,
+    chapterId: chapter?.id,
+    instruction: payload.instruction,
+    styleText: promptContext?.style?.mergedText,
+    task: payload.task,
+  }) : null
+  const modelSettings = loadModelSettings()
+  const routedModelProfileId = modelSettings.routes[payload.task] || 'local-default'
+  const requestedProfile = modelSettings.profiles.find((profile) => profile.id === payload.modelProfileId)
+  const modelProfileId = requestedProfile?.id || routedModelProfileId
+  const modelProfile = requestedProfile || modelSettings.profiles.find((profile) => profile.id === routedModelProfileId)
+  const apiKey = getModelApiKey(modelProfileId)
+  const generationInput = {
+    ...payload,
+    project: workspace.project,
+    chapter,
+    planningCenter,
+    knowledgeCenter,
+    longContext,
+    promptContext,
+    modelProfile,
+    apiKey,
+  }
+  const compiledPrompt = compilePrompt(generationInput)
+  const generationRecord = startGenerationRecord({
+    taskId,
+    projectId: workspace.project.id,
+    chapterId: promptChapterId,
+    task: payload.task,
+    modelProfileId: modelProfile?.id,
+    model: modelProfile ? { id: modelProfile.id, provider: modelProfile.provider, name: modelProfile.name, model: modelProfile.model } : {},
+    promptSnapshot: compiledPrompt.snapshot,
+    request: generationRequestSnapshot({ ...payload, projectId: workspace.project.id, chapterId: promptChapterId, modelProfileId: modelProfile?.id || '' }),
+    retryOfId,
+  })
+  let generationParameters = {}
+  const recordEvents = []
+  try {
+    const result = await modelGateway.generate(
+      { ...generationInput, compiledPrompt },
+      {
+        taskId,
+        onEvent: (generationEvent) => {
+          if (generationEvent.type !== 'delta' && recordEvents.length < 60) recordEvents.push(compactGenerationEvent(generationEvent))
+          if (!event.sender.isDestroyed()) event.sender.send('generation:event', generationEvent)
+        },
+        onPrepared: (prepared) => { generationParameters = prepared.parameters },
+      },
+    )
+    finishGenerationRecord({
+      id: generationRecord.id,
+      status: 'completed',
+      parameters: generationParameters,
+      output: generationOutput(result),
+      attemptCount: result.attemptCount || 1,
+      events: recordEvents,
+    })
+    return result
+  } catch (error) {
+    const attemptCount = Math.max(1, ...recordEvents.map((entry) => Number(entry.attempt || 1)))
+    if (error?.name === 'GenerationCancelledError') {
+      finishGenerationRecord({ id: generationRecord.id, status: 'cancelled', parameters: generationParameters, attemptCount, events: recordEvents })
+      return { cancelled: true, taskId }
+    }
+    finishGenerationRecord({
+      id: generationRecord.id,
+      status: 'failed',
+      parameters: generationParameters,
+      error: error?.message || String(error),
+      attemptCount,
+      events: recordEvents,
+    })
+    throw error
+  }
 }
 
 function compilePromptPreview(payload = {}) {
@@ -365,94 +490,26 @@ function registerIpc() {
   ipcMain.handle('models:test', async (_event, payload = {}) => {
     const profile = { ...payload, settings: payload.settings || {} }
     const apiKey = String(payload.apiKey || '') || (profile.id ? getModelApiKey(profile.id) : '')
-    const startedAt = Date.now()
-    const result = await modelGateway.generate(
-      { task: 'connection_test', modelProfile: profile, apiKey },
-      { taskId: `connection-test-${randomBytes(8).toString('hex')}` },
-    )
+    const capabilities = await probeModelCapabilities(profile, apiKey)
     return {
-      ok: result.execution === 'remote',
-      latencyMs: Date.now() - startedAt,
-      gateway: result.gateway,
-      model: result.model,
-      response: result.text,
+      ok: capabilities.text.supported,
+      latencyMs: capabilities.text.latencyMs,
+      gateway: 'embedded',
+      model: { id: profile.id, provider: profile.provider, name: profile.name, model: profile.model },
+      response: capabilities.text.response || '',
+      capabilities,
+      testedAt: capabilities.checkedAt,
     }
   })
-  ipcMain.handle('generation:start', async (event, payload) => {
-    const taskId = String(payload?.taskId || '')
-    if (!taskId) throw new Error('生成任务缺少 taskId')
-    const workspace = loadWorkspace(payload?.projectId)
-    const chapter = workspace.chapters.find((item) => item.id === payload?.chapterId) || workspace.chapters[0]
-    const planningCenter = workspace.project ? loadPlanningCenter(workspace.project.id) : null
-    const knowledgeCenter = workspace.project ? loadKnowledgeCenter(workspace.project.id) : null
-    const chapterScopedTasks = new Set(['chapter', 'chapter_card', 'scene_plan', 'rewrite', 'chapter_state_extract', 'continuity_audit'])
-    const promptChapterId = payload?.chapterId || (chapterScopedTasks.has(payload?.task) ? chapter?.id : '')
-    const promptVolumeId = payload?.planning?.scopeType === 'volume' ? payload.planning.scopeId : ''
-    const promptContext = workspace.project ? resolvePromptContext({
-      projectId: workspace.project.id,
-      chapterId: promptChapterId,
-      volumeId: promptVolumeId,
-      task: payload?.task,
-    }) : null
-    const longContext = workspace.project ? buildGenerationContext({
-      projectId: workspace.project.id,
-      chapterId: chapter?.id,
-      instruction: payload?.instruction,
-      styleText: promptContext?.style?.mergedText,
-      task: payload?.task,
-    }) : null
-    const modelSettings = loadModelSettings()
-    const modelProfileId = payload?.modelProfileId || modelSettings.routes[payload?.task] || 'local-default'
-    const modelProfile = modelSettings.profiles.find((profile) => profile.id === modelProfileId)
-    const apiKey = getModelApiKey(modelProfileId)
-    const generationInput = {
-      ...payload,
-      project: workspace.project,
-      chapter,
-      planningCenter,
-      knowledgeCenter,
-      longContext,
-      promptContext,
-      modelProfile,
-      apiKey,
-    }
-    const compiledPrompt = compilePrompt(generationInput)
-    const generationRecord = startGenerationRecord({
-      taskId,
-      projectId: workspace.project.id,
-      chapterId: promptChapterId,
-      task: payload?.task,
-      modelProfileId: modelProfile?.id,
-      model: modelProfile ? { id: modelProfile.id, provider: modelProfile.provider, name: modelProfile.name, model: modelProfile.model } : {},
-      promptSnapshot: compiledPrompt.snapshot,
-    })
-    let generationParameters = {}
-    try {
-      const result = await modelGateway.generate(
-        { ...generationInput, compiledPrompt },
-        {
-          taskId,
-          onEvent: (generationEvent) => {
-            if (!event.sender.isDestroyed()) event.sender.send('generation:event', generationEvent)
-          },
-          onPrepared: (prepared) => { generationParameters = prepared.parameters },
-        },
-      )
-      finishGenerationRecord({
-        id: generationRecord.id,
-        status: 'completed',
-        parameters: generationParameters,
-        output: generationOutput(result),
-      })
-      return result
-    } catch (error) {
-      if (error?.name === 'GenerationCancelledError') {
-        finishGenerationRecord({ id: generationRecord.id, status: 'cancelled' })
-        return { cancelled: true, taskId }
-      }
-      finishGenerationRecord({ id: generationRecord.id, status: 'failed', error: error?.message || String(error) })
-      throw error
-    }
+  ipcMain.handle('generation:start', (event, payload) => runGenerationTask(event, payload))
+  ipcMain.handle('generation:list', (_event, payload) => listGenerationRecords(payload))
+  ipcMain.handle('generation:retry', (event, payload = {}) => {
+    const source = getGenerationRecord(payload.recordId)
+    if (!source) throw new Error('生成记录不存在')
+    if (source.status === 'pending') throw new Error('当前生成任务仍在执行')
+    if (source.task === 'rewrite') throw new Error('局部重写需要重新选择原文范围')
+    if (!source.request?.task || !source.request?.projectId) throw new Error('旧生成记录缺少可重试任务快照')
+    return runGenerationTask(event, { ...source.request, taskId: payload.taskId }, { retryOfId: source.id })
   })
   ipcMain.handle('generation:cancel', (_event, taskId) => modelGateway.cancel(String(taskId || '')))
   ipcMain.handle('runtime:info', runtimeInfo)

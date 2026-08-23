@@ -60,6 +60,10 @@ function mapGenerationRecord(row) {
     parameters: parseJson(row.parameters_json),
     output: row.output_text,
     error: row.error,
+    request: parseJson(row.request_json),
+    retryOfId: row.retry_of_id || '',
+    attemptCount: Number(row.attempt_count || 1),
+    events: parseJson(row.events_json, []),
     createdAt: row.created_at,
     completedAt: row.completed_at,
   } : null
@@ -421,8 +425,8 @@ export function createPromptRepository(database, {
       INSERT INTO generation_records (
         id, task_id, project_id, chapter_id, task, status, model_profile_id, model_json,
         prompt_template_id, prompt_template_version, prompt_snapshot_json, parameters_json,
-        output_text, error, created_at, completed_at
-      ) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, '{}', '', '', ?, '')
+        output_text, error, created_at, completed_at, request_json, retry_of_id, attempt_count, events_json
+      ) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, '{}', '', '', ?, '', ?, ?, 1, '[]')
     `).run(
       id,
       cleanText(input.taskId) || id,
@@ -435,24 +439,35 @@ export function createPromptRepository(database, {
       Number(snapshot.template?.version || 1),
       JSON.stringify(snapshot),
       createdAt,
+      JSON.stringify(input.request || {}),
+      input.retryOfId || null,
     )
     return mapGenerationRecord(database.prepare('SELECT * FROM generation_records WHERE id = ?').get(id))
   }
 
-  function finishGenerationRecord({ id, status, parameters = {}, output = '', error = '' }) {
+  function finishGenerationRecord({ id, status, parameters = {}, output = '', error = '', attemptCount = 1, events = [] }) {
     if (!['completed', 'cancelled', 'failed'].includes(status)) throw new Error('生成记录状态不受支持')
     const current = database.prepare('SELECT * FROM generation_records WHERE id = ?').get(id)
     if (!current) throw new Error('生成记录不存在')
     database.prepare(`
       UPDATE generation_records
-      SET status = ?, parameters_json = ?, output_text = ?, error = ?, completed_at = ?
+      SET status = ?, parameters_json = ?, output_text = ?, error = ?, attempt_count = ?, events_json = ?, completed_at = ?
       WHERE id = ?
-    `).run(status, JSON.stringify(parameters || {}), String(output || ''), String(error || ''), now(), id)
+    `).run(status, JSON.stringify(parameters || {}), String(output || ''), String(error || ''), Math.max(1, Number(attemptCount || 1)), JSON.stringify(events || []), now(), id)
     return mapGenerationRecord(database.prepare('SELECT * FROM generation_records WHERE id = ?').get(id))
   }
 
   function getGenerationRecord(id) {
     return mapGenerationRecord(database.prepare('SELECT * FROM generation_records WHERE id = ?').get(id))
+  }
+
+  function listGenerationRecords({ projectId, status = '', limit = 100 } = {}) {
+    assertProject(projectId)
+    const boundedLimit = Math.min(300, Math.max(1, Number(limit || 100)))
+    const rows = status
+      ? database.prepare('SELECT * FROM generation_records WHERE project_id = ? AND status = ? ORDER BY created_at DESC, rowid DESC LIMIT ?').all(projectId, status, boundedLimit)
+      : database.prepare('SELECT * FROM generation_records WHERE project_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?').all(projectId, boundedLimit)
+    return rows.map(mapGenerationRecord)
   }
 
   return {
@@ -466,5 +481,6 @@ export function createPromptRepository(database, {
     startGenerationRecord,
     finishGenerationRecord,
     getGenerationRecord,
+    listGenerationRecords,
   }
 }

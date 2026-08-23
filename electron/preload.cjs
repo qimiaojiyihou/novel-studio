@@ -71,6 +71,16 @@ contextBridge.exposeInMainWorld('novelStudio', {
     }
     return result
   },
+  listGenerationRecords: (payload) => ipcRenderer.invoke('generation:list', payload),
+  retryGeneration: async (payload) => {
+    const result = await ipcRenderer.invoke('generation:retry', payload)
+    if (result?.cancelled) {
+      const error = new Error('生成任务已取消')
+      error.name = 'GenerationCancelledError'
+      throw error
+    }
+    return result
+  },
   cancelGeneration: (taskId) => ipcRenderer.invoke('generation:cancel', taskId),
   onGenerationEvent: (callback) => {
     const listener = (_event, payload) => callback(payload)

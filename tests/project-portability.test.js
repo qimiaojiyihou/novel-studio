@@ -52,6 +52,13 @@ function createDatabase() {
     .run('addon-version-1', 'addon-user-1', '以动作结束章节', NOW)
   database.prepare("INSERT INTO prompt_addon_bindings VALUES (?, ?, 'project', ?, '*', ?, 1, 2, ?, ?)")
     .run('addon-binding-1', 'project-1', 'project-1', 'addon-user-1', NOW, NOW)
+  const insertGeneration = database.prepare(`INSERT INTO generation_records (
+    id, task_id, project_id, chapter_id, task, status, model_profile_id, model_json,
+    prompt_template_id, prompt_template_version, prompt_snapshot_json, parameters_json,
+    output_text, error, created_at, completed_at, request_json, retry_of_id, attempt_count, events_json
+  ) VALUES (?, ?, ?, ?, 'chapter', 'completed', NULL, '{}', '', 1, '{}', '{}', ?, '', ?, ?, ?, ?, ?, '[]')`)
+  insertGeneration.run('generation-source', 'task-source', 'project-1', 'chapter-1', '初稿', NOW, NOW, JSON.stringify({ task: 'chapter', projectId: 'project-1', chapterId: 'chapter-1' }), null, 1)
+  insertGeneration.run('generation-retry', 'task-retry', 'project-1', 'chapter-1', '重试稿', NOW, NOW, JSON.stringify({ task: 'chapter', projectId: 'project-1', chapterId: 'chapter-1' }), 'generation-source', 2)
   return database
 }
 
@@ -68,6 +75,8 @@ test('project backup restores a new internally consistent project without creden
     assert.equal(backup.data.tables.chapters.length, 2)
     assert.equal('model_profiles' in backup.data.tables, false)
     assert.equal(JSON.stringify(backup).includes('api_key_cipher'), false)
+    backup.data.tables.generation_records.reverse()
+    backup.integrity.digest = createHash('sha256').update(JSON.stringify(backup.data)).digest('hex')
 
     const restored = restoreProjectBackup(database, backup, { now: () => NOW, createId: deterministicIds() })
     assert.notEqual(restored.projectId, 'project-1')
@@ -89,6 +98,12 @@ test('project backup restores a new internally consistent project without creden
     assert.equal(database.prepare('SELECT kind FROM prompt_templates WHERE id = ?').get(customBinding.template_id).kind, 'user')
     const addonBinding = database.prepare('SELECT * FROM prompt_addon_bindings WHERE project_id = ?').get(restored.projectId)
     assert.notEqual(addonBinding.addon_id, 'addon-user-1')
+    const generations = database.prepare('SELECT id, retry_of_id FROM generation_records WHERE project_id = ? ORDER BY attempt_count').all(restored.projectId)
+    assert.equal(generations.length, 2)
+    assert.equal(generations[1].retry_of_id, generations[0].id)
+    const restoredRequest = JSON.parse(database.prepare('SELECT request_json FROM generation_records WHERE id = ?').get(generations[1].id).request_json)
+    assert.equal(restoredRequest.projectId, restored.projectId)
+    assert.notEqual(restoredRequest.chapterId, 'chapter-1')
     assert.equal(database.prepare('SELECT value FROM app_settings WHERE key = ?').get('active_project_id').value, restored.projectId)
     assert.deepEqual(database.prepare('PRAGMA foreign_key_check').all(), [])
     assert.equal(database.prepare('SELECT COUNT(*) AS count FROM projects').get().count, 2)

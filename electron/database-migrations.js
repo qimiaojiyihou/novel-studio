@@ -4,7 +4,7 @@ import {
   LEGACY_PROMPT_TEMPLATE_VERSIONS,
 } from './prompt-templates.js'
 
-export const LATEST_SCHEMA_VERSION = 14
+export const LATEST_SCHEMA_VERSION = 15
 
 const migrations = [
   {
@@ -682,6 +682,22 @@ const migrations = [
         CREATE UNIQUE INDEX story_arc_beats_arc_position_idx ON story_arc_beats(arc_id, position);
         CREATE INDEX story_arc_beats_volume_idx ON story_arc_beats(volume_id);
         CREATE INDEX story_arc_beats_chapter_idx ON story_arc_beats(chapter_id);
+      `)
+    },
+  },
+  {
+    version: 15,
+    name: 'model-capabilities-and-generation-retries',
+    up(database) {
+      database.exec(`
+        ALTER TABLE model_profiles ADD COLUMN capabilities_json TEXT NOT NULL DEFAULT '{}';
+        ALTER TABLE model_profiles ADD COLUMN tested_at TEXT NOT NULL DEFAULT '';
+        ALTER TABLE generation_records ADD COLUMN request_json TEXT NOT NULL DEFAULT '{}';
+        ALTER TABLE generation_records ADD COLUMN retry_of_id TEXT REFERENCES generation_records(id) ON DELETE SET NULL;
+        ALTER TABLE generation_records ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 1 CHECK(attempt_count > 0);
+        ALTER TABLE generation_records ADD COLUMN events_json TEXT NOT NULL DEFAULT '[]';
+        CREATE INDEX generation_records_retry_of_idx ON generation_records(retry_of_id);
+        CREATE INDEX generation_records_project_status_idx ON generation_records(project_id, status, created_at DESC);
       `)
     },
   },

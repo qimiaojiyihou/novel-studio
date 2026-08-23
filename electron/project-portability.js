@@ -174,6 +174,7 @@ function transformedRow(table, source, idMap, newProjectId, createId) {
     row.chapter_id = source.chapter_id ? idMap.get(source.chapter_id) || null : null
     row.model_profile_id = null
     row.prompt_template_id = idMap.get(source.prompt_template_id) || source.prompt_template_id
+    row.retry_of_id = source.retry_of_id ? idMap.get(source.retry_of_id) || null : null
   }
   return row
 }
@@ -208,6 +209,8 @@ export function restoreProjectBackup(database, input, {
   const restoredAt = now()
   database.exec('BEGIN IMMEDIATE')
   try {
+    // Retry records can reference another record that appears later in a portable bundle.
+    database.exec('PRAGMA defer_foreign_keys = ON')
     insertRow(database, 'projects', {
       ...project,
       id: newProjectId,

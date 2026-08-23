@@ -75,16 +75,22 @@ test('generation records preserve prompt snapshot, request parameters and termin
   const record = repository.startGenerationRecord({
     taskId: 'task-1', projectId: 'project-1', chapterId: 'chapter-1', task: 'chapter',
     modelProfileId: 'model-1', model: { name: '测试模型' },
+    request: { task: 'chapter', projectId: 'project-1', chapterId: 'chapter-1', instruction: '保持克制' },
     promptSnapshot: { template: { id: promptContext.template.id, version: 1 }, promptHash: 'hash' },
   })
   assert.equal(record.status, 'pending')
   const completed = repository.finishGenerationRecord({
-    id: record.id, status: 'completed', parameters: { temperature: 0.7 }, output: '正文候选',
+    id: record.id, status: 'completed', parameters: { temperature: 0.7 }, output: '正文候选', attemptCount: 2,
+    events: [{ type: 'retrying', attempt: 1 }],
   })
   assert.equal(completed.status, 'completed')
   assert.equal(completed.parameters.temperature, 0.7)
   assert.equal(completed.output, '正文候选')
   assert.equal(completed.promptSnapshot.promptHash, 'hash')
+  assert.equal(completed.request.instruction, '保持克制')
+  assert.equal(completed.attemptCount, 2)
+  assert.equal(completed.events[0].type, 'retrying')
+  assert.equal(repository.listGenerationRecords({ projectId: 'project-1' })[0].id, record.id)
 
   database.prepare("DELETE FROM projects WHERE id = 'project-1'").run()
   assert.equal(database.prepare('SELECT COUNT(*) AS count FROM generation_records').get().count, 0)

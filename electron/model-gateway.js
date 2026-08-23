@@ -59,7 +59,7 @@ async function cancelGoTask(runtime, taskId) {
   }
 }
 
-async function startGoTask(prepared, taskId, runtime, control, onEvent) {
+async function startGoTask(prepared, providerTaskId, outwardTaskId, runtime, control, onEvent) {
   const headers = {
     Authorization: 'Bearer ' + runtime.authToken,
     'Content-Type': 'application/json',
@@ -70,7 +70,7 @@ async function startGoTask(prepared, taskId, runtime, control, onEvent) {
       method: 'POST',
       headers,
       body: JSON.stringify({
-        taskId,
+        taskId: providerTaskId,
         task: prepared.task,
         endpoint: prepared.endpoint,
         apiKey: prepared.apiKey,
@@ -93,13 +93,13 @@ async function startGoTask(prepared, taskId, runtime, control, onEvent) {
     if (accepted.status === 401 || accepted.status === 503) throw new GoServiceUnavailableError(detail)
     throw new Error('Go 服务拒绝了生成任务（' + accepted.status + '）：' + detail.slice(0, 180))
   }
-  if (control.cancelRequested) await cancelGoTask(runtime, taskId)
+  if (control.cancelRequested) await cancelGoTask(runtime, providerTaskId)
 
-  const stream = await fetch(runtime.baseUrl + '/api/v1/tasks/' + encodeURIComponent(taskId) + '/events', {
+  const stream = await fetch(runtime.baseUrl + '/api/v1/tasks/' + encodeURIComponent(providerTaskId) + '/events', {
     headers: { Authorization: 'Bearer ' + runtime.authToken },
   })
   if (!stream.ok) throw new Error('读取 Go 生成事件失败（' + stream.status + '）')
-  const terminal = await readGoEvents(stream, taskId, onEvent)
+  const terminal = await readGoEvents(stream, outwardTaskId, onEvent)
   if (terminal.type === 'cancelled') throw new GenerationCancelledError()
   if (terminal.type === 'failed') throw new Error(terminal.error || 'Go 模型任务执行失败')
   return shapeModelResult(prepared, terminal.content || '', 'go-service')
@@ -108,13 +108,28 @@ async function startGoTask(prepared, taskId, runtime, control, onEvent) {
 export function createModelGateway({ getGoRuntime, onGoUnavailable = () => {} }) {
   const activeTasks = new Map()
 
-  async function runEmbedded(prepared, taskId, onEvent) {
-    const controller = new AbortController()
-    activeTasks.set(taskId, {
-      mode: 'embedded',
-      cancel: () => controller.abort(),
+  function shouldRetry(error, receivedDelta) {
+    if (receivedDelta || error instanceof GenerationCancelledError) return false
+    if (error?.retryable) return true
+    return /\b(408|409|425|429|500|502|503|504)\b|timeout|timed out|network|fetch|socket|ECONN|连接重置|请求超时/i.test(error?.message || '')
+  }
+
+  function retryDelay(attempt) {
+    return Math.min(3000, 400 * (2 ** Math.max(0, attempt - 1)))
+  }
+
+  function waitForRetry(milliseconds, signal) {
+    return new Promise((resolve, reject) => {
+      const onAbort = () => {
+        clearTimeout(timer)
+        reject(new GenerationCancelledError())
+      }
+      const timer = setTimeout(() => {
+        signal.removeEventListener('abort', onAbort)
+        resolve()
+      }, milliseconds)
+      signal.addEventListener('abort', onAbort, { once: true })
     })
-    return runEmbeddedModelTask(prepared, { taskId, signal: controller.signal, onEvent })
   }
 
   return {
@@ -122,32 +137,62 @@ export function createModelGateway({ getGoRuntime, onGoUnavailable = () => {} })
       const prepared = prepareModelTask(input)
       onPrepared(prepared)
       const runtime = getGoRuntime()
+      const maxAttempts = prepared.execution === 'remote' ? 3 : 1
+      const controller = new AbortController()
+      const control = { cancelRequested: false, providerTaskId: '', useGo: Boolean(runtime.status === 'ready' && runtime.baseUrl && runtime.authToken) }
+      activeTasks.set(taskId, {
+        mode: control.useGo ? 'go-service' : 'embedded',
+        cancel: async () => {
+          control.cancelRequested = true
+          controller.abort()
+          if (control.providerTaskId) await cancelGoTask(runtime, control.providerTaskId)
+        },
+      })
       try {
-        if (runtime.status === 'ready' && runtime.baseUrl && runtime.authToken) {
-          const control = { cancelRequested: false }
-          activeTasks.set(taskId, {
-            mode: 'go-service',
-            cancel: async () => {
-              control.cancelRequested = true
-              await cancelGoTask(runtime, taskId)
-            },
-          })
+        for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+          if (control.cancelRequested) throw new GenerationCancelledError()
+          let receivedDelta = false
+          const forwardEvent = (event) => {
+            if (event.type === 'delta' && event.delta) receivedDelta = true
+            onEvent({ ...event, attempt, maxAttempts })
+          }
           try {
-            return await startGoTask(prepared, taskId, runtime, control, onEvent)
+            let result
+            if (control.useGo) {
+              control.providerTaskId = `${taskId}-attempt-${attempt}`
+              try {
+                result = await startGoTask(prepared, control.providerTaskId, taskId, runtime, control, forwardEvent)
+              } catch (error) {
+                if (!(error instanceof GoServiceUnavailableError)) throw error
+                onGoUnavailable(error)
+                control.useGo = false
+                activeTasks.get(taskId).mode = 'embedded'
+                forwardEvent({ type: 'gateway-fallback', error: error.message, gateway: 'embedded', createdAt: now(), taskId })
+                if (control.cancelRequested) throw new GenerationCancelledError()
+              }
+            }
+            if (!control.useGo && !result) {
+              result = await runEmbeddedModelTask(prepared, { taskId, signal: controller.signal, onEvent: forwardEvent })
+            }
+            return { ...result, attemptCount: attempt }
           } catch (error) {
-            if (!(error instanceof GoServiceUnavailableError)) throw error
-            onGoUnavailable(error)
+            if (control.cancelRequested || error instanceof GenerationCancelledError) throw new GenerationCancelledError()
+            if (attempt >= maxAttempts || !shouldRetry(error, receivedDelta)) throw error
+            const delayMs = retryDelay(attempt)
             onEvent({
               taskId,
-              type: 'gateway-fallback',
+              type: 'retrying',
               error: error.message,
-              gateway: 'embedded',
+              attempt,
+              nextAttempt: attempt + 1,
+              maxAttempts,
+              delayMs,
+              gateway: control.useGo ? 'go-service' : 'embedded',
               createdAt: now(),
             })
-            if (control.cancelRequested) throw new GenerationCancelledError()
+            await waitForRetry(delayMs, controller.signal)
           }
         }
-        return await runEmbedded(prepared, taskId, onEvent)
       } finally {
         activeTasks.delete(taskId)
       }
