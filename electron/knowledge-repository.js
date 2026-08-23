@@ -72,6 +72,27 @@ function mapCandidate(row) {
   }
 }
 
+function mapItemCandidate(row) {
+  if (!row) return null
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    chapterId: row.chapter_id,
+    chapterNo: Number(row.chapter_no || 0),
+    chapterTitle: row.chapter_title || '',
+    sourceCandidateId: row.source_candidate_id,
+    kind: row.kind,
+    title: row.title,
+    content: parseJson(row.content_json),
+    itemStatus: row.item_status,
+    status: row.status,
+    position: Number(row.position),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    resolvedAt: row.resolved_at,
+  }
+}
+
 function contentText(content, keys = []) {
   return keys.map((key) => cleanText(content?.[key])).filter(Boolean).join('；')
 }
@@ -85,6 +106,7 @@ export function createKnowledgeRepository(database, {
   const itemById = database.prepare('SELECT * FROM knowledge_items WHERE id = ?')
   const checkById = database.prepare('SELECT * FROM continuity_checks WHERE id = ?')
   const candidateById = database.prepare('SELECT * FROM knowledge_candidates WHERE id = ?')
+  const itemCandidateById = database.prepare('SELECT * FROM knowledge_item_candidates WHERE id = ?')
 
   function assertProject(projectId) {
     const project = projectById.get(projectId)
@@ -139,6 +161,18 @@ export function createKnowledgeRepository(database, {
     }).map(mapCandidate)
   }
 
+  function listItemCandidates(projectId) {
+    return database.prepare(`
+      SELECT candidate.*, chapter.chapter_no, chapter.title AS chapter_title
+      FROM knowledge_item_candidates candidate
+      JOIN chapters chapter ON chapter.id = candidate.chapter_id
+      WHERE candidate.project_id = ?
+      ORDER BY CASE candidate.status WHEN 'pending' THEN 0 ELSE 1 END,
+        chapter.chapter_no DESC, candidate.position
+      LIMIT 300
+    `).all(projectId).map(mapItemCandidate)
+  }
+
   function normalizedCandidatePayload(task, payload) {
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error('知识候选必须是 JSON 对象')
     if (task === 'continuity_audit') {
@@ -171,6 +205,100 @@ export function createKnowledgeRepository(database, {
       },
       openThreads: payload.openThreads,
     }
+  }
+
+  function candidateTitle(value, fallback) {
+    const text = cleanText(value, fallback)
+    return text.length > 34 ? `${text.slice(0, 34)}…` : text
+  }
+
+  function stateItemDrafts(chapter, payload) {
+    const scope = `第 ${chapter.chapter_no} 章《${chapter.title}》`
+    const drafts = []
+    for (const fact of payload.facts || []) {
+      const subject = cleanText(fact?.subject)
+      const predicate = cleanText(fact?.predicate)
+      const object = cleanText(fact?.object)
+      const statement = cleanText(typeof fact === 'string' ? fact : [subject, predicate, object].filter(Boolean).join(' '))
+      if (!statement) continue
+      const certainty = fact?.certainty === 'confirmed' ? '已确认' : fact?.certainty === 'reported' ? '暂定' : '待核对'
+      drafts.push({
+        kind: 'fact',
+        title: candidateTitle([subject, predicate].filter(Boolean).join(' · '), '正文新增事实'),
+        content: {
+          category: '剧情', statement, key: subject && predicate ? `${subject}:${predicate}` : '', value: object,
+          scope, certainty, evidence: cleanText(fact?.evidence),
+        },
+        itemStatus: 'open',
+      })
+    }
+    for (const state of payload.characterStates || []) {
+      const character = cleanText(state?.character, '未命名人物')
+      const parts = [
+        cleanText(state?.location) ? `位置：${cleanText(state.location)}` : '',
+        cleanText(state?.physical) ? `身体：${cleanText(state.physical)}` : '',
+        cleanText(state?.emotional) ? `情绪：${cleanText(state.emotional)}` : '',
+        Array.isArray(state?.possessions) && state.possessions.length ? `持有：${state.possessions.map((item) => cleanText(item)).filter(Boolean).join('、')}` : '',
+        Array.isArray(state?.knows) && state.knows.length ? `知情：${state.knows.map((item) => cleanText(item)).filter(Boolean).join('、')}` : '',
+      ].filter(Boolean)
+      if (!parts.length) continue
+      drafts.push({
+        kind: 'fact', title: candidateTitle(`${character} · 章后状态`, '人物章后状态'),
+        content: { category: '人物', statement: `${character}——${parts.join('；')}`, scope, certainty: '已确认' }, itemStatus: 'open',
+      })
+    }
+    for (const relationship of payload.relationshipChanges || []) {
+      const statement = cleanText(relationship)
+      if (!statement) continue
+      drafts.push({ kind: 'fact', title: candidateTitle(statement, '关系变化'), content: { category: '关系', statement, scope, certainty: '已确认' }, itemStatus: 'open' })
+    }
+    for (const event of payload.timelineEvents || []) {
+      const eventText = cleanText(typeof event === 'string' ? event : event?.event)
+      if (!eventText) continue
+      drafts.push({
+        kind: 'timeline', title: candidateTitle(eventText, `${scope}事件`),
+        content: { dateLabel: `第 ${chapter.chapter_no} 章`, chapterNo: chapter.chapter_no, event: eventText, participants: cleanText(event?.participants), consequence: cleanText(event?.consequence) },
+        itemStatus: 'open',
+      })
+    }
+    const openForeshadows = [...(payload.foreshadow?.setups || []), ...(payload.openThreads || [])]
+    const seenForeshadows = new Set()
+    for (const value of openForeshadows) {
+      const seed = cleanText(value)
+      if (!seed || seenForeshadows.has(seed)) continue
+      seenForeshadows.add(seed)
+      drafts.push({
+        kind: 'foreshadow', title: candidateTitle(seed, '正文新增伏笔'),
+        content: { seed, promise: '后文需要回应这项信息、异常或未解决问题', notes: `来自${scope}的章后状态提取` }, itemStatus: 'open',
+      })
+    }
+    for (const value of payload.foreshadow?.payoffs || []) {
+      const payoff = cleanText(value)
+      if (!payoff) continue
+      drafts.push({
+        kind: 'foreshadow', title: candidateTitle(`兑现：${payoff}`, '伏笔兑现'),
+        content: { seed: '待与既有伏笔记录核对', payoff, payoffChapterNo: chapter.chapter_no, notes: `来自${scope}；接受后建立一条已回收记录，可再与原伏笔合并。` }, itemStatus: 'resolved',
+      })
+    }
+    return drafts
+  }
+
+  function seedStateItemCandidates(sourceCandidate, payload, timestamp) {
+    const chapter = chapterById.get(sourceCandidate.chapter_id)
+    if (!chapter) return
+    const insert = database.prepare(`
+      INSERT INTO knowledge_item_candidates (
+        id, project_id, chapter_id, source_candidate_id, kind, title, content_json,
+        item_status, status, position, created_at, updated_at, resolved_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, '')
+    `)
+    stateItemDrafts(chapter, payload).forEach((draft, index) => {
+      insert.run(
+        createId('knowledge-item-candidate'), sourceCandidate.project_id, sourceCandidate.chapter_id,
+        sourceCandidate.id, draft.kind, draft.title, JSON.stringify(draft.content), draft.itemStatus,
+        index + 1, timestamp, timestamp,
+      )
+    })
   }
 
   function derivedRecords(projectId) {
@@ -424,6 +552,7 @@ export function createKnowledgeRepository(database, {
     const checks = listChecks(projectId)
     const candidates = listCandidates(projectId)
     const stateSnapshots = listStateSnapshots(projectId)
+    const itemCandidates = listItemCandidates(projectId)
     return {
       items,
       facts: items.filter((item) => item.kind === 'fact'),
@@ -432,12 +561,14 @@ export function createKnowledgeRepository(database, {
       checks,
       candidates,
       stateSnapshots,
+      itemCandidates,
       counts: {
         facts: items.filter((item) => item.kind === 'fact' && item.status !== 'archived').length,
         timeline: items.filter((item) => item.kind === 'timeline' && item.status !== 'archived').length,
         foreshadows: items.filter((item) => item.kind === 'foreshadow' && item.status !== 'archived').length,
         openChecks: checks.filter((check) => check.status === 'open').length,
         pendingCandidates: candidates.filter((candidate) => candidate.status === 'pending').length,
+        pendingItemCandidates: itemCandidates.filter((candidate) => candidate.status === 'pending').length,
       },
     }
   }
@@ -468,7 +599,9 @@ export function createKnowledgeRepository(database, {
     database.exec('BEGIN IMMEDIATE')
     try {
       database.prepare('UPDATE knowledge_candidates SET status = ?, resolved_at = ? WHERE id = ?').run(status, timestamp, id)
-      if (status === 'accepted' && current.task === 'continuity_audit') {
+      if (status === 'accepted' && current.task === 'chapter_state_extract') {
+        seedStateItemCandidates(current, payload, timestamp)
+      } else if (status === 'accepted' && current.task === 'continuity_audit') {
         const insert = database.prepare(`
           INSERT INTO continuity_checks (id, project_id, chapter_id, kind, severity, title, detail, source_json, origin, status, created_at, updated_at, resolved_at)
           VALUES (?, ?, ?, 'ai-continuity', ?, ?, ?, ?, 'ai', 'open', ?, ?, '')
@@ -503,6 +636,58 @@ export function createKnowledgeRepository(database, {
     return loadKnowledgeCenter(current.project_id)
   }
 
+  function updateItemCandidate({ id, title, content, itemStatus }) {
+    const current = itemCandidateById.get(id)
+    if (!current) throw new Error('知识条目候选不存在')
+    assertProject(current.project_id)
+    if (current.status !== 'pending') throw new Error('已处理的知识条目候选不能再编辑')
+    if (itemStatus && !['open', 'resolved'].includes(itemStatus)) throw new Error('知识条目候选状态不受支持')
+    const timestamp = now()
+    database.prepare(`
+      UPDATE knowledge_item_candidates
+      SET title = ?, content_json = ?, item_status = ?, updated_at = ?
+      WHERE id = ?
+    `).run(
+      cleanText(title, current.title),
+      JSON.stringify(content && typeof content === 'object' ? content : parseJson(current.content_json)),
+      itemStatus || current.item_status,
+      timestamp,
+      id,
+    )
+    const chapter = chapterById.get(current.chapter_id)
+    return mapItemCandidate({ ...itemCandidateById.get(id), chapter_no: chapter?.chapter_no, chapter_title: chapter?.title })
+  }
+
+  function resolveItemCandidate({ id, status }) {
+    const current = itemCandidateById.get(id)
+    if (!current) throw new Error('知识条目候选不存在')
+    assertProject(current.project_id)
+    if (!CANDIDATE_STATUSES.has(status)) throw new Error('知识条目候选处理方式不受支持')
+    if (current.status !== 'pending') return loadKnowledgeCenter(current.project_id)
+    const timestamp = now()
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      database.prepare('UPDATE knowledge_item_candidates SET status = ?, updated_at = ?, resolved_at = ? WHERE id = ?')
+        .run(status, timestamp, timestamp, id)
+      if (status === 'accepted') {
+        const position = Number(database.prepare('SELECT COALESCE(MAX(position), 0) + 1 AS position FROM knowledge_items WHERE project_id = ? AND kind = ?').get(current.project_id, current.kind).position)
+        database.prepare(`
+          INSERT INTO knowledge_items (id, project_id, kind, title, content_json, source_type, source_id, status, position, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, 'ai', ?, ?, ?, ?, ?)
+        `).run(
+          createId('knowledge'), current.project_id, current.kind, current.title, current.content_json,
+          current.id, current.item_status, position, timestamp, timestamp,
+        )
+      }
+      database.prepare('UPDATE projects SET updated_at = ? WHERE id = ?').run(timestamp, current.project_id)
+      database.exec('COMMIT')
+    } catch (error) {
+      database.exec('ROLLBACK')
+      throw error
+    }
+    return loadKnowledgeCenter(current.project_id)
+  }
+
   function createItem({ projectId, kind, title = '', content = {}, status = 'open' }) {
     assertProject(projectId)
     if (!KNOWLEDGE_KINDS.has(kind)) throw new Error('知识条目类型不受支持')
@@ -527,7 +712,7 @@ export function createKnowledgeRepository(database, {
     const nextContent = content && typeof content === 'object' ? content : parseJson(current.content_json)
     database.prepare(`
       UPDATE knowledge_items
-      SET title = ?, content_json = ?, source_type = 'manual', status = ?, updated_at = ?
+      SET title = ?, content_json = ?, source_type = CASE WHEN source_type = 'ai' THEN 'ai' ELSE 'manual' END, status = ?, updated_at = ?
       WHERE id = ?
     `).run(cleanText(title, current.title), JSON.stringify(nextContent), status || current.status, timestamp, id)
     database.prepare('UPDATE projects SET updated_at = ? WHERE id = ?').run(timestamp, current.project_id)
@@ -600,5 +785,7 @@ export function createKnowledgeRepository(database, {
     resolveCheck,
     createCandidate,
     resolveCandidate,
+    updateItemCandidate,
+    resolveItemCandidate,
   }
 }

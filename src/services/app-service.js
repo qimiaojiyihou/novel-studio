@@ -100,6 +100,12 @@ export const appService = {
   resolveKnowledgeCandidate(payload) {
     return electronApi.resolveKnowledgeCandidate(payload)
   },
+  updateKnowledgeItemCandidate(payload) {
+    return electronApi.updateKnowledgeItemCandidate(payload)
+  },
+  resolveKnowledgeItemCandidate(payload) {
+    return electronApi.resolveKnowledgeItemCandidate(payload)
+  },
   loadContextManager(projectId) {
     return electronApi.loadContextManager(projectId)
   },

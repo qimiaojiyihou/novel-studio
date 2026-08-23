@@ -50,6 +50,8 @@ test('fresh database migrates to the latest schema with foreign keys enabled', (
     assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'knowledge_items'").get())
     assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'continuity_checks'").get())
     assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'knowledge_candidates'").get())
+    assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'knowledge_item_candidates'").get())
+    assert.match(database.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'knowledge_items'").get().sql, /'ai'/)
     assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'context_profiles'").get())
     assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'chapter_memories'").get())
     assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'prompt_templates'").get())
@@ -79,6 +81,46 @@ test('migrations are idempotent', () => {
     runMigrations(database)
     runMigrations(database)
     assert.equal(database.prepare('SELECT COUNT(*) AS count FROM schema_migrations').get().count, LATEST_SCHEMA_VERSION)
+  } finally {
+    database.close()
+  }
+})
+
+test('v12 preserves existing knowledge items and enables reviewable item candidates', () => {
+  const database = createDatabase()
+  try {
+    runMigrations(database, { now: () => '2026-08-24T00:00:00.000Z' })
+    const now = '2026-08-24T00:00:00.000Z'
+    database.prepare('INSERT INTO projects (id, title, genre, idea, style, created_at, updated_at, archived_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .run('project-v12', '迁移测试', '悬疑', '旧知识需要保留', '', now, now, '')
+    database.prepare(`
+      INSERT INTO knowledge_items (id, project_id, kind, title, content_json, source_type, source_id, status, position, created_at, updated_at)
+      VALUES (?, ?, 'fact', ?, '{}', 'manual', ?, 'open', 1, ?, ?)
+    `).run('knowledge-before-v12', 'project-v12', '迁移前事实', 'manual:before-v12', now, now)
+
+    database.exec(`
+      DROP TABLE knowledge_item_candidates;
+      CREATE TABLE knowledge_items_v11 (
+        id TEXT PRIMARY KEY, project_id TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK(kind IN ('fact', 'timeline', 'foreshadow')),
+        title TEXT NOT NULL, content_json TEXT NOT NULL DEFAULT '{}',
+        source_type TEXT NOT NULL DEFAULT 'manual' CHECK(source_type IN ('manual', 'planning', 'chapter')),
+        source_id TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open', 'resolved', 'archived')),
+        position INTEGER NOT NULL CHECK(position > 0), created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+        FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+      );
+      INSERT INTO knowledge_items_v11 SELECT * FROM knowledge_items;
+      DROP TABLE knowledge_items;
+      ALTER TABLE knowledge_items_v11 RENAME TO knowledge_items;
+      DELETE FROM schema_migrations WHERE version = 12;
+    `)
+
+    runMigrations(database, { now: () => '2026-08-24T01:00:00.000Z' })
+    assert.equal(database.prepare('SELECT title FROM knowledge_items WHERE id = ?').get('knowledge-before-v12').title, '迁移前事实')
+    assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'knowledge_item_candidates'").get())
+    assert.match(database.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'knowledge_items'").get().sql, /'ai'/)
+    assert.deepEqual(database.prepare('PRAGMA foreign_key_check').all(), [])
   } finally {
     database.close()
   }

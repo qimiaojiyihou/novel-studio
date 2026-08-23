@@ -4,7 +4,7 @@ import {
   LEGACY_PROMPT_TEMPLATE_VERSIONS,
 } from './prompt-templates.js'
 
-export const LATEST_SCHEMA_VERSION = 11
+export const LATEST_SCHEMA_VERSION = 12
 
 const migrations = [
   {
@@ -556,6 +556,60 @@ const migrations = [
         insertVersion.run(`${template.id}-version-${template.version}`, template.id, template.version, JSON.stringify(template.content), createdAt)
         insertBinding.run(`binding-global-${template.task}`, template.task, template.id, createdAt, createdAt)
       }
+    },
+  },
+  {
+    version: 12,
+    name: 'state-to-knowledge-item-candidates',
+    up(database) {
+      database.exec(`
+        CREATE TABLE knowledge_items_v12 (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          kind TEXT NOT NULL CHECK(kind IN ('fact', 'timeline', 'foreshadow')),
+          title TEXT NOT NULL,
+          content_json TEXT NOT NULL DEFAULT '{}',
+          source_type TEXT NOT NULL DEFAULT 'manual' CHECK(source_type IN ('manual', 'planning', 'chapter', 'ai')),
+          source_id TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open', 'resolved', 'archived')),
+          position INTEGER NOT NULL CHECK(position > 0),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+        );
+        INSERT INTO knowledge_items_v12
+        SELECT * FROM knowledge_items;
+        DROP TABLE knowledge_items;
+        ALTER TABLE knowledge_items_v12 RENAME TO knowledge_items;
+        CREATE INDEX knowledge_items_project_kind_idx ON knowledge_items(project_id, kind, status, position);
+        CREATE INDEX knowledge_items_source_idx ON knowledge_items(project_id, source_type, source_id);
+        CREATE UNIQUE INDEX knowledge_items_derived_source_idx
+          ON knowledge_items(project_id, kind, source_type, source_id)
+          WHERE source_type != 'manual' AND source_id != '';
+
+        CREATE TABLE knowledge_item_candidates (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          chapter_id TEXT NOT NULL,
+          source_candidate_id TEXT NOT NULL,
+          kind TEXT NOT NULL CHECK(kind IN ('fact', 'timeline', 'foreshadow')),
+          title TEXT NOT NULL,
+          content_json TEXT NOT NULL DEFAULT '{}',
+          item_status TEXT NOT NULL DEFAULT 'open' CHECK(item_status IN ('open', 'resolved')),
+          status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'accepted', 'discarded')),
+          position INTEGER NOT NULL CHECK(position > 0),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          resolved_at TEXT NOT NULL DEFAULT '',
+          FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
+          FOREIGN KEY(chapter_id) REFERENCES chapters(id) ON DELETE CASCADE,
+          FOREIGN KEY(source_candidate_id) REFERENCES knowledge_candidates(id) ON DELETE CASCADE
+        );
+        CREATE INDEX knowledge_item_candidates_project_status_idx
+          ON knowledge_item_candidates(project_id, status, kind, created_at);
+        CREATE INDEX knowledge_item_candidates_source_idx
+          ON knowledge_item_candidates(source_candidate_id, position);
+      `)
     },
   },
 ]

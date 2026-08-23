@@ -43,6 +43,7 @@ import {
   resolvePlanningCandidate,
   resolveContinuityCheck,
   resolveKnowledgeCandidate,
+  resolveKnowledgeItemCandidate,
   savePlanningDocument,
   savePromptAddon,
   savePromptTemplate,
@@ -51,6 +52,7 @@ import {
   startGenerationRecord,
   updateChapter,
   updateKnowledgeItem,
+  updateKnowledgeItemCandidate,
   updateProject,
   updatePlanningEntity,
   updateTaskRoute,
@@ -251,6 +253,8 @@ function registerIpc() {
   ipcMain.handle('knowledge:check-resolve', (_event, payload) => resolveContinuityCheck(payload))
   ipcMain.handle('knowledge:candidate-create', (_event, payload) => createKnowledgeCandidate(payload))
   ipcMain.handle('knowledge:candidate-resolve', (_event, payload) => resolveKnowledgeCandidate(payload))
+  ipcMain.handle('knowledge:item-candidate-update', (_event, payload) => updateKnowledgeItemCandidate(payload))
+  ipcMain.handle('knowledge:item-candidate-resolve', (_event, payload) => resolveKnowledgeItemCandidate(payload))
   ipcMain.handle('context:load', (_event, projectId) => loadContextManager(projectId))
   ipcMain.handle('context:update', (_event, payload) => updateContextProfile(payload))
   ipcMain.handle('context:rebuild', (_event, projectId) => rebuildContextMemories(projectId))

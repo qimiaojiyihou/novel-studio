@@ -312,6 +312,14 @@ export function resolveKnowledgeCandidate(input) {
   return knowledgeStore().resolveCandidate(input)
 }
 
+export function updateKnowledgeItemCandidate(input) {
+  return knowledgeStore().updateItemCandidate(input)
+}
+
+export function resolveKnowledgeItemCandidate(input) {
+  return knowledgeStore().resolveItemCandidate(input)
+}
+
 export function loadContextManager(projectId) {
   return contextStore().loadContextManager(projectId)
 }

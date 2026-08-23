@@ -25,6 +25,9 @@
         <button class="knowledge-mode foreshadow-mode" :class="{ active: mode === 'foreshadow' }" @click="selectMode('foreshadow')">
           <span><b>伏笔账本</b><small>种下、承诺与回收</small></span><strong>{{ center.counts.foreshadows }}</strong>
         </button>
+        <button class="knowledge-mode candidate-mode" :class="{ active: mode === 'itemCandidates' }" @click="selectMode('itemCandidates')">
+          <span><b>知识候选</b><small>逐条确认 AI 提取结果</small></span><strong>{{ center.counts.pendingItemCandidates || 0 }}</strong>
+        </button>
         <button class="knowledge-mode check-mode" :class="{ active: mode === 'checks' }" @click="selectMode('checks')">
           <span><b>连续性检查</b><small>需要作者判断的提醒</small></span><strong>{{ center.counts.openChecks }}</strong>
         </button>
@@ -100,6 +103,69 @@
           </div>
         </template>
 
+        <template v-else-if="mode === 'itemCandidates'">
+          <div class="knowledge-sheet-heading candidate-heading">
+            <div>
+              <span class="eyebrow copper">REVIEW BEFORE MEMORY</span>
+              <h2>知识候选</h2>
+              <p>接受章后状态只会拆出候选，不会把模型判断直接写成故事事实。修改并逐条确认后，它们才会进入正式知识库。</p>
+            </div>
+            <div class="candidate-summary"><strong>{{ pendingItemCandidates.length }}</strong><span>待确认条目</span></div>
+          </div>
+
+          <div class="knowledge-item-layout">
+            <div class="knowledge-list candidate-list">
+              <div v-if="!pendingItemCandidates.length" class="knowledge-empty">
+                <span>✓</span><strong>候选已经处理完毕</strong><p>在长篇上下文中提取并接受章后状态后，新的候选会出现在这里。</p>
+              </div>
+              <button
+                v-for="candidate in pendingItemCandidates"
+                :key="candidate.id"
+                class="knowledge-list-item item-candidate"
+                :class="[{ active: selectedItemCandidateId === candidate.id }, candidate.kind]"
+                @click="selectedItemCandidateId = candidate.id"
+              >
+                <span class="knowledge-list-mark">{{ candidateKindMark(candidate.kind) }}</span>
+                <span class="knowledge-list-copy"><strong>{{ candidate.title }}</strong><small>第 {{ candidate.chapterNo }} 章 · {{ candidateKindLabel(candidate.kind) }}</small></span>
+                <i>?</i>
+              </button>
+            </div>
+
+            <article v-if="selectedItemCandidate" class="knowledge-editor candidate-editor" :class="`kind-${selectedItemCandidate.kind}`">
+              <div class="knowledge-editor-topline">
+                <span>AI 提取 · 第 {{ selectedItemCandidate.chapterNo }} 章 · {{ candidateKindLabel(selectedItemCandidate.kind) }}</span>
+                <span class="candidate-pending-tag">尚未纳入上下文</span>
+              </div>
+              <div class="knowledge-title-row">
+                <input v-model="selectedItemCandidate.title" aria-label="候选名称" />
+                <select v-model="selectedItemCandidate.itemStatus" class="candidate-status-select" aria-label="知识状态">
+                  <option value="open">开放</option>
+                  <option value="resolved">已回收</option>
+                </select>
+              </div>
+              <p class="knowledge-editor-note">请核对正文证据和表达边界。接受后会以“AI 提取 · 作者已确认”的来源进入对应知识库，之后仍可继续编辑。</p>
+              <div class="knowledge-fields">
+                <label v-for="field in itemCandidateFields" :key="field.key" :class="{ wide: field.wide }">
+                  <span><strong>{{ field.label }}</strong><small>{{ field.hint }}</small></span>
+                  <select v-if="field.type === 'select'" v-model="selectedItemCandidate.content[field.key]" :aria-label="field.label">
+                    <option value="">请选择</option>
+                    <option v-for="option in field.options" :key="option" :value="option">{{ option }}</option>
+                  </select>
+                  <input v-else-if="field.type === 'number'" v-model="selectedItemCandidate.content[field.key]" type="number" min="0" :aria-label="field.label" :placeholder="field.placeholder" />
+                  <input v-else-if="field.type === 'input'" v-model="selectedItemCandidate.content[field.key]" :aria-label="field.label" :placeholder="field.placeholder" />
+                  <textarea v-else v-model="selectedItemCandidate.content[field.key]" :aria-label="field.label" :placeholder="field.placeholder"></textarea>
+                </label>
+              </div>
+              <div class="candidate-editor-actions">
+                <button class="discard" @click="resolveItemCandidate(selectedItemCandidate, 'discarded')">丢弃候选</button>
+                <button @click="saveItemCandidate(selectedItemCandidate)">保存修改</button>
+                <button class="accept" @click="resolveItemCandidate(selectedItemCandidate, 'accepted')">接受为正式知识</button>
+              </div>
+            </article>
+            <div v-else class="knowledge-no-selection">选择一条候选，核对它是否真的能从正文中成立。</div>
+          </div>
+        </template>
+
         <template v-else-if="mode === 'context'">
           <div class="knowledge-sheet-heading context-heading">
             <div><span class="eyebrow copper">LONG-FORM CONTEXT</span><h2>长篇上下文</h2><p>模型不会吞下整本小说，而是优先携带当前章、最近章节，再按本次任务召回相关旧章和知识记录。</p></div>
@@ -163,7 +229,7 @@
       </main>
 
       <aside class="knowledge-source-rail">
-        <div class="source-rail-heading"><span class="eyebrow">SOURCE LENS</span><h2>{{ mode === 'checks' ? '检查说明' : mode === 'context' ? '召回顺序' : '来源镜片' }}</h2></div>
+        <div class="source-rail-heading"><span class="eyebrow">SOURCE LENS</span><h2>{{ mode === 'checks' ? '检查说明' : mode === 'context' ? '召回顺序' : mode === 'itemCandidates' ? '候选来源' : '来源镜片' }}</h2></div>
         <template v-if="['facts', 'timeline', 'foreshadow'].includes(mode) && selectedItem">
           <div class="source-badge" :class="selectedItem.sourceType"><i></i>{{ itemOriginLabel(selectedItem) }}</div>
           <div class="source-copy"><strong>{{ selectedItem.title }}</strong><p>{{ sourceDescription(selectedItem) }}</p></div>
@@ -171,6 +237,14 @@
           <div class="source-meta"><span>生成上下文</span><strong class="included">● 已纳入</strong></div>
           <div class="source-rule"></div>
           <p class="source-help">这条记录会随当前项目进入模型上下文。若它与新内容冲突，系统会在连续性检查中提示，不会静默替换。</p>
+        </template>
+        <template v-else-if="mode === 'itemCandidates' && selectedItemCandidate">
+          <div class="source-badge ai"><i></i>AI 提取候选</div>
+          <div class="source-copy"><strong>{{ selectedItemCandidate.title }}</strong><p>这条候选来自第 {{ selectedItemCandidate.chapterNo }} 章《{{ selectedItemCandidate.chapterTitle }}》的已接受状态快照。</p></div>
+          <div class="source-meta"><span>候选类型</span><strong>{{ candidateKindLabel(selectedItemCandidate.kind) }}</strong></div>
+          <div class="source-meta"><span>生成上下文</span><strong>○ 尚未纳入</strong></div>
+          <div class="source-rule"></div>
+          <p class="source-help">只有点击“接受为正式知识”后，这条内容才会参与后续生成、召回和连续性检查。丢弃候选不会修改正文或状态快照。</p>
         </template>
         <template v-else-if="mode === 'checks'">
           <div class="check-rule-card"><span>01</span><strong>章节合同</strong><p>正文开始后是否仍有明确的章节目标和可回看的变化。</p></div>
@@ -194,7 +268,7 @@
       <section class="knowledge-confirm candidate-review">
         <span class="eyebrow copper">AI CANDIDATE REVIEW</span>
         <h2>{{ candidateTitle(selectedCandidate) }}</h2>
-        <p>{{ selectedCandidate.task === 'chapter_state_extract' ? '接受后，这份状态快照会进入后续章节的生成上下文；原正文和手工知识不会被改动。' : '接受后，明确冲突会进入连续性检查列表；正文不会被自动修改。' }}</p>
+        <p>{{ selectedCandidate.task === 'chapter_state_extract' ? '接受后，这份状态快照会进入后续章节上下文，并拆出待逐条确认的知识候选；原正文和正式知识不会被自动修改。' : '接受后，明确冲突会进入连续性检查列表；正文不会被自动修改。' }}</p>
         <pre>{{ formatCandidate(selectedCandidate) }}</pre>
         <div><button @click="resolveCandidate(selectedCandidate, 'discarded')">丢弃候选</button><button class="accept-candidate" @click="resolveCandidate(selectedCandidate, 'accepted')">接受并应用</button></div>
       </section>
@@ -222,6 +296,7 @@ const contextManager = ref(null)
 const loadError = ref('')
 const mode = ref('facts')
 const selectedItemId = ref('')
+const selectedItemCandidateId = ref('')
 const saveState = ref('saved')
 const syncing = ref(false)
 const contextSaving = ref(false)
@@ -245,6 +320,7 @@ const fieldSets = {
     { key: 'value', label: '事实值', hint: '用于发现前后冲突', type: 'input', placeholder: '例如：午夜' },
     { key: 'scope', label: '作用范围', hint: '这条事实影响哪里', type: 'textarea', placeholder: '全书、某一卷、某个人物或某个地点' },
     { key: 'certainty', label: '确认程度', hint: '作者对它的承诺强度', type: 'select', options: ['已确认', '暂定', '待核对'] },
+    { key: 'evidence', label: '正文证据', hint: '支持这条判断的原文或章内依据', type: 'textarea', wide: true, placeholder: '保留可回看、可核对的正文证据' },
   ],
   timeline: [
     { key: 'dateLabel', label: '时间标记', hint: '日期、时代或章节位置', type: 'input', placeholder: '例如：第一章当夜 / 2026 年冬' },
@@ -275,9 +351,17 @@ const aiRunning = computed(() => Boolean(aiTask.value))
 const pendingCandidates = computed(() => center.value?.candidates.filter((candidate) => candidate.status === 'pending') || [])
 const pendingStateCandidates = computed(() => pendingCandidates.value.filter((candidate) => candidate.task === 'chapter_state_extract'))
 const pendingAuditCandidates = computed(() => pendingCandidates.value.filter((candidate) => candidate.task === 'continuity_audit'))
+const pendingItemCandidates = computed(() => center.value?.itemCandidates?.filter((candidate) => candidate.status === 'pending') || [])
+const selectedItemCandidate = computed(() => pendingItemCandidates.value.find((candidate) => candidate.id === selectedItemCandidateId.value) || pendingItemCandidates.value[0] || null)
+const itemCandidateMode = computed(() => ({ fact: 'facts', timeline: 'timeline', foreshadow: 'foreshadow' }[selectedItemCandidate.value?.kind] || 'facts'))
+const itemCandidateFields = computed(() => fieldSets[itemCandidateMode.value] || [])
 const itemMark = computed(() => mode.value === 'facts' ? 'F' : mode.value === 'timeline' ? 'T' : 'P')
 const saveStateLabel = computed(() => ({ dirty: '等待自动保存', saving: '正在保存', saved: '已保存', error: '保存失败' }[saveState.value]))
-const editorNote = computed(() => selectedItem.value?.sourceType === 'manual' ? '这是作者手工维护的记忆。同步规划时会保留它。' : '这是从已确认规划或章节生成的来源事实。编辑后会转为手工记录。')
+const editorNote = computed(() => selectedItem.value?.sourceType === 'manual'
+  ? '这是作者手工维护的记忆。同步规划时会保留它。'
+  : selectedItem.value?.sourceType === 'ai'
+    ? '这是从正文状态中提取、并经作者逐条确认的知识。继续编辑不会丢失它的 AI 来源标记。'
+    : '这是从已确认规划或章节生成的来源事实。编辑后会转为手工记录。')
 
 onMounted(loadCenter)
 watch(() => props.project.id, async () => { await flushSaves(); await loadCenter() })
@@ -293,6 +377,7 @@ async function loadCenter() {
     center.value = knowledge
     contextManager.value = context
     selectedItemId.value = keepSelected(selectedItemId.value)
+    selectedItemCandidateId.value = keepSelectedItemCandidate(selectedItemCandidateId.value)
     saveState.value = 'saved'
   } catch (error) {
     loadError.value = error.message
@@ -301,7 +386,12 @@ async function loadCenter() {
 }
 
 function keepSelected(id = '') { return modeItems.value.some((item) => item.id === id) ? id : modeItems.value[0]?.id || '' }
-function selectMode(nextMode) { mode.value = nextMode; selectedItemId.value = keepSelected('') }
+function keepSelectedItemCandidate(id = '') { return pendingItemCandidates.value.some((item) => item.id === id) ? id : pendingItemCandidates.value[0]?.id || '' }
+function selectMode(nextMode) {
+  mode.value = nextMode
+  selectedItemId.value = keepSelected('')
+  if (nextMode === 'itemCandidates') selectedItemCandidateId.value = keepSelectedItemCandidate(selectedItemCandidateId.value)
+}
 async function selectItem(id) { await flushSaves(); selectedItemId.value = id }
 function cloneForIpc(value) { return JSON.parse(JSON.stringify(value ?? {})) }
 function formatTime(value) { return value ? new Date(value).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '' }
@@ -367,11 +457,42 @@ async function resolveCandidate(candidate, status) {
     selectedCandidate.value = null
     if (candidate.task === 'chapter_state_extract' && status === 'accepted') {
       contextManager.value = await appService.loadContextManager(props.project.id)
+      selectedItemCandidateId.value = keepSelectedItemCandidate('')
     }
     const action = status === 'accepted' ? '已接受' : '已丢弃'
     emit('toast', `${action}${candidate.task === 'chapter_state_extract' ? '章后状态候选' : '连续性审计候选'}`)
   } catch (error) {
     emit('toast', `处理 AI 候选失败：${error.message}`)
+  }
+}
+
+async function saveItemCandidate(candidate, { quiet = false } = {}) {
+  if (!candidate) return null
+  try {
+    const saved = await appService.updateKnowledgeItemCandidate({
+      id: candidate.id,
+      title: candidate.title,
+      content: cloneForIpc(candidate.content),
+      itemStatus: candidate.itemStatus,
+    })
+    center.value.itemCandidates = center.value.itemCandidates.map((item) => item.id === saved.id ? saved : item)
+    if (!quiet) emit('toast', '知识候选修改已保存')
+    return saved
+  } catch (error) {
+    emit('toast', `保存知识候选失败：${error.message}`)
+    return null
+  }
+}
+
+async function resolveItemCandidate(candidate, status) {
+  if (!candidate) return
+  if (status === 'accepted' && !await saveItemCandidate(candidate, { quiet: true })) return
+  try {
+    center.value = await appService.resolveKnowledgeItemCandidate({ id: candidate.id, status })
+    selectedItemCandidateId.value = keepSelectedItemCandidate('')
+    emit('toast', status === 'accepted' ? '候选已进入正式知识库' : '知识候选已丢弃')
+  } catch (error) {
+    emit('toast', `处理知识候选失败：${error.message}`)
   }
 }
 
@@ -461,8 +582,10 @@ async function resolveCheck(check, status) {
 }
 function reopenCheck(check) { resolveCheck(check, 'open') }
 function itemSummary(item) { return item.kind === 'fact' ? item.content.statement || item.content.value || '等待填写事实陈述' : item.kind === 'timeline' ? item.content.event || item.content.consequence || '等待填写事件' : item.content.seed || item.content.promise || '等待填写伏笔种子' }
-function itemOriginLabel(item) { return item.sourceType === 'planning' ? '规划来源' : item.sourceType === 'chapter' ? '章节来源' : '手工记录' }
-function sourceDescription(item) { return item.sourceType === 'planning' ? '这条记录来自故事基础、人物、世界观或结构规划。' : item.sourceType === 'chapter' ? '这条记录来自章节合同或章节事件。' : '这条记录由作者直接维护，不会被规划同步覆盖。' }
+function itemOriginLabel(item) { return item.sourceType === 'planning' ? '规划来源' : item.sourceType === 'chapter' ? '章节来源' : item.sourceType === 'ai' ? 'AI 提取 · 作者已确认' : '手工记录' }
+function sourceDescription(item) { return item.sourceType === 'planning' ? '这条记录来自故事基础、人物、世界观或结构规划。' : item.sourceType === 'chapter' ? '这条记录来自章节合同或章节事件。' : item.sourceType === 'ai' ? '这条记录由模型从正文状态中提取，并经过作者逐条确认。' : '这条记录由作者直接维护，不会被规划同步覆盖。' }
+function candidateKindLabel(kind) { return ({ fact: '事实', timeline: '时间线', foreshadow: '伏笔' }[kind] || '知识') }
+function candidateKindMark(kind) { return ({ fact: 'F', timeline: 'T', foreshadow: 'P' }[kind] || '?') }
 function checkKindLabel(kind) { return ({ 'missing-contract': '章节合同', 'missing-scene-plan': '场景计划', 'overdue-foreshadow': '伏笔回收', 'conflicting-fact': '事实冲突', 'ai-continuity': 'AI 审计' }[kind] || '连续性') }
 function checkStatusLabel(status) { return status === 'resolved' ? '已处理' : status === 'dismissed' ? '已忽略' : '待处理' }
 
@@ -473,14 +596,15 @@ defineExpose({ flushSaves })
 .knowledge-center { grid-column: 2 / 4; min-width: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); color: var(--ink); background: #eee7da; }
 .knowledge-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 28px; padding: 24px 28px 20px; color: #f5f1e8; border-bottom: 1px solid #3f464b; background: #262c31; }.knowledge-header h1 { margin: 8px 0 4px; font: 28px/1.15 var(--font-display); }.knowledge-header p { margin: 0; color: #9ca4a8; font-size: 10px; }.knowledge-header-actions { display: flex; align-items: center; gap: 8px; }.knowledge-header-actions button { padding: 7px 9px; color: #d7c5b6; border: 1px solid #545d62; background: transparent; font-size: 9px; }.knowledge-header-actions button:hover { color: #fff8ef; border-color: var(--copper); }.knowledge-save-state { display: inline-flex; align-items: center; gap: 6px; margin-right: 6px; color: #9eb9ac; font-size: 9px; }.knowledge-save-state i { width: 5px; height: 5px; border-radius: 50%; background: #72a089; }.knowledge-save-state.dirty { color: #d8b878; }.knowledge-save-state.dirty i { background: #c8964a; }.knowledge-save-state.saving i { animation: knowledge-pulse .8s infinite; }.knowledge-save-state.error { color: #df8c78; }.knowledge-save-state.error i { background: #c75e48; }
 .knowledge-layout { min-height: 0; display: grid; grid-template-columns: 205px minmax(520px, 1fr) 285px; }.knowledge-index { min-height: 0; overflow: auto; padding: 17px 10px 28px; color: #c8ccce; border-right: 1px solid #434b50; background: #2b3238; }.index-heading { display: flex; align-items: center; justify-content: space-between; padding: 7px 8px 14px; color: #899299; font-size: 8px; letter-spacing: .1em; }.index-heading small { color: #657078; font-size: 7px; letter-spacing: 0; }.knowledge-mode { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; padding: 12px 9px; color: #a7aeb1; border: 0; border-left: 2px solid transparent; background: transparent; text-align: left; }.knowledge-mode:hover, .knowledge-mode.active { color: #fff8ef; background: #353e44; border-left-color: var(--copper); }.knowledge-mode > span { display: grid; gap: 4px; }.knowledge-mode b { font: 13px var(--font-display); }.knowledge-mode small { color: #747f85; font-size: 7px; }.knowledge-mode strong { display: grid; place-items: center; min-width: 20px; height: 20px; color: #d7c2b0; border: 1px solid #566168; border-radius: 50%; font: 9px var(--font-ui); }.knowledge-mode.active strong { color: #fff8ef; border-color: var(--copper); background: rgba(182,85,62,.35); }.knowledge-index-note { margin: 30px 8px 0; padding-top: 16px; border-top: 1px solid #444f55; }.knowledge-index-note p { margin: 8px 0 0; color: #79858a; font: 10px/1.65 var(--font-body); }
-.knowledge-canvas { min-width: 0; min-height: 0; overflow: auto; padding: 25px 28px 60px; background: #eee7da; }.knowledge-sheet-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; width: min(980px, 100%); margin: 0 auto 20px; padding: 0 2px 20px; border-bottom: 1px solid #d4c9bb; }.knowledge-sheet-heading h2 { margin: 7px 0 4px; font: 25px var(--font-display); }.knowledge-sheet-heading p { max-width: 510px; margin: 0; color: #928679; font: 10px/1.6 var(--font-body); }.knowledge-add { padding: 8px 10px; color: #fff8ef; border: 1px solid var(--copper); background: var(--copper); font-size: 9px; }.knowledge-item-layout { display: grid; grid-template-columns: minmax(180px, .34fr) minmax(360px, 1fr); gap: 18px; width: min(980px, 100%); margin: 0 auto; }.knowledge-list { display: grid; align-content: start; gap: 5px; }.knowledge-list-item { display: grid; grid-template-columns: 22px minmax(0, 1fr) 15px; align-items: start; gap: 8px; width: 100%; padding: 11px 9px; color: #70655a; border: 1px solid transparent; border-left: 2px solid #c8b8a6; background: rgba(255,255,255,.32); text-align: left; }.knowledge-list-item:hover, .knowledge-list-item.active { color: #403932; border-color: #c7b7a5; border-left-color: var(--copper); background: #fffaf2; }.knowledge-list-item.chapter { border-left-color: #a98c73; }.knowledge-list-item.manual { border-left-color: #729481; }.knowledge-list-mark { color: var(--copper); font: 9px var(--font-ui); }.knowledge-list-copy { min-width: 0; display: grid; gap: 4px; }.knowledge-list-copy strong { overflow: hidden; font: 12px var(--font-display); text-overflow: ellipsis; white-space: nowrap; }.knowledge-list-copy small { overflow: hidden; color: #94887b; font: 9px/1.45 var(--font-body); text-overflow: ellipsis; white-space: nowrap; }.knowledge-list-item i { color: var(--pine); font-style: normal; }.knowledge-empty, .knowledge-no-selection { display: grid; justify-items: center; align-content: center; min-height: 270px; padding: 25px; color: #8d8073; border: 1px dashed #c3b5a5; text-align: center; }.knowledge-empty > span { color: var(--copper); font-size: 26px; }.knowledge-empty strong { margin-top: 8px; color: #5d544c; font: 15px var(--font-display); }.knowledge-empty p { max-width: 220px; margin: 8px 0 14px; font: 10px/1.6 var(--font-body); }.knowledge-empty button { padding: 8px 10px; color: #fff8ef; border: 1px solid var(--copper); background: var(--copper); font-size: 9px; }.knowledge-editor { min-width: 0; padding: 22px 24px 30px; background: var(--paper-soft); box-shadow: 0 8px 28px rgba(62,49,39,.08); }.knowledge-editor-topline { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--copper); font: 600 8px var(--font-ui); letter-spacing: .13em; }.knowledge-editor-actions { display: flex; gap: 4px; }.knowledge-editor-actions button { width: 26px; height: 25px; color: #82766b; border: 1px solid #d6cabc; background: transparent; font-size: 9px; }.knowledge-editor-actions button:disabled { opacity: .4; }.knowledge-editor-actions .danger-link { width: auto; padding: 0 7px; color: #a14d3b; }.knowledge-title-row { display: flex; align-items: center; gap: 12px; margin-top: 9px; }.knowledge-title-row input { min-width: 0; flex: 1; padding: 2px 0; color: #352f2a; border: 0; border-bottom: 1px solid transparent; outline: 0; background: transparent; font: 25px var(--font-display); }.knowledge-title-row input:focus { border-bottom-color: var(--copper-light); }.knowledge-status { flex: 0 0 auto; padding: 5px 7px; color: #82766b; border: 1px solid #d5c4b4; font-size: 8px; }.knowledge-status.resolved { color: var(--pine); border-color: #a2b9aa; }.knowledge-status.archived { color: #9d8d7e; }.knowledge-editor-note { margin: 8px 0 22px; color: #93877b; font: 9px/1.55 var(--font-body); }.knowledge-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 19px 16px; }.knowledge-fields label { display: grid; align-content: start; gap: 7px; min-width: 0; }.knowledge-fields label.wide { grid-column: 1 / -1; }.knowledge-fields label > span { display: grid; gap: 3px; }.knowledge-fields label strong { color: #49423b; font: 13px var(--font-display); }.knowledge-fields label small { color: #9a8d7e; font-size: 8px; line-height: 1.35; }.knowledge-fields input, .knowledge-fields textarea, .knowledge-fields select { width: 100%; min-height: 36px; padding: 8px 9px; color: #49423b; border: 1px solid #d8cdbf; outline: 0; background: rgba(255,255,255,.46); font: 11px/1.65 var(--font-body); }.knowledge-fields textarea { min-height: 84px; resize: vertical; }.knowledge-fields input:focus, .knowledge-fields textarea:focus, .knowledge-fields select:focus { border-color: var(--copper-light); background: #fffdf8; box-shadow: 0 0 0 2px rgba(182,85,62,.06); }.knowledge-fields select { height: 36px; }
-.knowledge-source-rail { min-height: 0; overflow: auto; color: #514a43; border-left: 1px solid #cec2b3; background: #e5dccd; }.source-rail-heading { padding: 22px 20px 17px; border-bottom: 1px solid #cfc3b4; }.source-rail-heading h2 { margin: 8px 0 0; font: 19px var(--font-display); }.source-badge { display: inline-flex; align-items: center; gap: 6px; margin: 19px 20px 0; padding: 5px 7px; color: #8b7769; border: 1px solid #cdb7a5; font-size: 8px; }.source-badge i { width: 5px; height: 5px; border-radius: 50%; background: #a88a70; }.source-badge.manual { color: var(--pine); border-color: #a7b8aa; }.source-badge.manual i { background: var(--pine); }.source-badge.chapter { color: #80654f; }.source-copy { padding: 14px 20px 18px; }.source-copy strong { font: 15px var(--font-display); }.source-copy p { margin: 8px 0 0; color: #8d8073; font: 10px/1.6 var(--font-body); }.source-meta { display: flex; justify-content: space-between; gap: 10px; padding: 10px 20px; border-top: 1px solid #d0c4b5; color: #978a7c; font-size: 8px; }.source-meta strong { color: #6e6258; font-size: 8px; }.source-meta .included { color: var(--pine); }.source-rule { margin: 18px 20px; border-top: 1px solid #cdbfaf; }.source-help { margin: 0 20px; color: #887b6f; font: 10px/1.7 var(--font-body); }.source-empty { display: grid; justify-items: center; padding: 50px 25px; color: #8d8073; text-align: center; }.source-empty span { color: var(--copper); font-size: 27px; }.source-empty p { font: 10px/1.6 var(--font-body); }.check-rule-card { margin: 14px 20px 0; padding: 12px 0 14px 29px; border-bottom: 1px solid #cfc3b4; position: relative; }.check-rule-card span { position: absolute; left: 0; top: 12px; color: var(--copper); font: 9px var(--font-ui); }.check-rule-card strong { font: 14px var(--font-display); }.check-rule-card p { margin: 6px 0 0; color: #8d8073; font: 10px/1.6 var(--font-body); }
+.knowledge-canvas { min-width: 0; min-height: 0; overflow: auto; padding: 25px 28px 60px; background: #eee7da; }.knowledge-sheet-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; width: min(980px, 100%); margin: 0 auto 20px; padding: 0 2px 20px; border-bottom: 1px solid #d4c9bb; }.knowledge-sheet-heading h2 { margin: 7px 0 4px; font: 25px var(--font-display); }.knowledge-sheet-heading p { max-width: 510px; margin: 0; color: #928679; font: 10px/1.6 var(--font-body); }.knowledge-add { padding: 8px 10px; color: #fff8ef; border: 1px solid var(--copper); background: var(--copper); font-size: 9px; }.knowledge-item-layout { display: grid; grid-template-columns: minmax(180px, .34fr) minmax(360px, 1fr); gap: 18px; width: min(980px, 100%); margin: 0 auto; }.knowledge-list { display: grid; align-content: start; gap: 5px; }.knowledge-list-item { display: grid; grid-template-columns: 22px minmax(0, 1fr) 15px; align-items: start; gap: 8px; width: 100%; padding: 11px 9px; color: #70655a; border: 1px solid transparent; border-left: 2px solid #c8b8a6; background: rgba(255,255,255,.32); text-align: left; }.knowledge-list-item:hover, .knowledge-list-item.active { color: #403932; border-color: #c7b7a5; border-left-color: var(--copper); background: #fffaf2; }.knowledge-list-item.chapter { border-left-color: #a98c73; }.knowledge-list-item.manual { border-left-color: #729481; }.knowledge-list-item.ai { border-left-color: #8b6ba5; }.knowledge-list-mark { color: var(--copper); font: 9px var(--font-ui); }.knowledge-list-copy { min-width: 0; display: grid; gap: 4px; }.knowledge-list-copy strong { overflow: hidden; font: 12px var(--font-display); text-overflow: ellipsis; white-space: nowrap; }.knowledge-list-copy small { overflow: hidden; color: #94887b; font: 9px/1.45 var(--font-body); text-overflow: ellipsis; white-space: nowrap; }.knowledge-list-item i { color: var(--pine); font-style: normal; }.knowledge-empty, .knowledge-no-selection { display: grid; justify-items: center; align-content: center; min-height: 270px; padding: 25px; color: #8d8073; border: 1px dashed #c3b5a5; text-align: center; }.knowledge-empty > span { color: var(--copper); font-size: 26px; }.knowledge-empty strong { margin-top: 8px; color: #5d544c; font: 15px var(--font-display); }.knowledge-empty p { max-width: 220px; margin: 8px 0 14px; font: 10px/1.6 var(--font-body); }.knowledge-empty button { padding: 8px 10px; color: #fff8ef; border: 1px solid var(--copper); background: var(--copper); font-size: 9px; }.knowledge-editor { min-width: 0; padding: 22px 24px 30px; background: var(--paper-soft); box-shadow: 0 8px 28px rgba(62,49,39,.08); }.knowledge-editor-topline { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--copper); font: 600 8px var(--font-ui); letter-spacing: .13em; }.knowledge-editor-actions { display: flex; gap: 4px; }.knowledge-editor-actions button { width: 26px; height: 25px; color: #82766b; border: 1px solid #d6cabc; background: transparent; font-size: 9px; }.knowledge-editor-actions button:disabled { opacity: .4; }.knowledge-editor-actions .danger-link { width: auto; padding: 0 7px; color: #a14d3b; }.knowledge-title-row { display: flex; align-items: center; gap: 12px; margin-top: 9px; }.knowledge-title-row input { min-width: 0; flex: 1; padding: 2px 0; color: #352f2a; border: 0; border-bottom: 1px solid transparent; outline: 0; background: transparent; font: 25px var(--font-display); }.knowledge-title-row input:focus { border-bottom-color: var(--copper-light); }.knowledge-status { flex: 0 0 auto; padding: 5px 7px; color: #82766b; border: 1px solid #d5c4b4; font-size: 8px; }.knowledge-status.resolved { color: var(--pine); border-color: #a2b9aa; }.knowledge-status.archived { color: #9d8d7e; }.knowledge-editor-note { margin: 8px 0 22px; color: #93877b; font: 9px/1.55 var(--font-body); }.knowledge-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 19px 16px; }.knowledge-fields label { display: grid; align-content: start; gap: 7px; min-width: 0; }.knowledge-fields label.wide { grid-column: 1 / -1; }.knowledge-fields label > span { display: grid; gap: 3px; }.knowledge-fields label strong { color: #49423b; font: 13px var(--font-display); }.knowledge-fields label small { color: #9a8d7e; font-size: 8px; line-height: 1.35; }.knowledge-fields input, .knowledge-fields textarea, .knowledge-fields select { width: 100%; min-height: 36px; padding: 8px 9px; color: #49423b; border: 1px solid #d8cdbf; outline: 0; background: rgba(255,255,255,.46); font: 11px/1.65 var(--font-body); }.knowledge-fields textarea { min-height: 84px; resize: vertical; }.knowledge-fields input:focus, .knowledge-fields textarea:focus, .knowledge-fields select:focus { border-color: var(--copper-light); background: #fffdf8; box-shadow: 0 0 0 2px rgba(182,85,62,.06); }.knowledge-fields select { height: 36px; }
+.knowledge-source-rail { min-height: 0; overflow: auto; color: #514a43; border-left: 1px solid #cec2b3; background: #e5dccd; }.source-rail-heading { padding: 22px 20px 17px; border-bottom: 1px solid #cfc3b4; }.source-rail-heading h2 { margin: 8px 0 0; font: 19px var(--font-display); }.source-badge { display: inline-flex; align-items: center; gap: 6px; margin: 19px 20px 0; padding: 5px 7px; color: #8b7769; border: 1px solid #cdb7a5; font-size: 8px; }.source-badge i { width: 5px; height: 5px; border-radius: 50%; background: #a88a70; }.source-badge.manual { color: var(--pine); border-color: #a7b8aa; }.source-badge.manual i { background: var(--pine); }.source-badge.chapter { color: #80654f; }.source-badge.ai { color: #76558d; border-color: #b9a3c7; }.source-badge.ai i { background: #8b6ba5; }.source-copy { padding: 14px 20px 18px; }.source-copy strong { font: 15px var(--font-display); }.source-copy p { margin: 8px 0 0; color: #8d8073; font: 10px/1.6 var(--font-body); }.source-meta { display: flex; justify-content: space-between; gap: 10px; padding: 10px 20px; border-top: 1px solid #d0c4b5; color: #978a7c; font-size: 8px; }.source-meta strong { color: #6e6258; font-size: 8px; }.source-meta .included { color: var(--pine); }.source-rule { margin: 18px 20px; border-top: 1px solid #cdbfaf; }.source-help { margin: 0 20px; color: #887b6f; font: 10px/1.7 var(--font-body); }.source-empty { display: grid; justify-items: center; padding: 50px 25px; color: #8d8073; text-align: center; }.source-empty span { color: var(--copper); font-size: 27px; }.source-empty p { font: 10px/1.6 var(--font-body); }.check-rule-card { margin: 14px 20px 0; padding: 12px 0 14px 29px; border-bottom: 1px solid #cfc3b4; position: relative; }.check-rule-card span { position: absolute; left: 0; top: 12px; color: var(--copper); font: 9px var(--font-ui); }.check-rule-card strong { font: 14px var(--font-display); }.check-rule-card p { margin: 6px 0 0; color: #8d8073; font: 10px/1.6 var(--font-body); }
 .checks-heading { align-items: center; }.check-summary { display: grid; justify-items: end; color: #927c69; }.check-summary strong { color: var(--copper); font: 29px var(--font-display); }.check-summary span { font-size: 8px; }.check-list { display: grid; gap: 9px; width: min(980px, 100%); margin: 0 auto; }.check-card { display: grid; grid-template-columns: 32px minmax(0, 1fr) auto; align-items: start; gap: 13px; padding: 17px 18px; border: 1px solid #d1c1b1; border-left: 3px solid #c89b82; background: var(--paper-soft); }.check-card.severity-warning { border-left-color: #bd8a48; }.check-card.severity-critical { border-left-color: #a34e3c; }.check-card.resolved { opacity: .62; border-left-color: #799786; }.check-card-mark { display: grid; place-items: center; width: 27px; height: 27px; color: #a9795d; border: 1px solid #d6b6a2; border-radius: 50%; font: 14px var(--font-display); }.severity-warning .check-card-mark { color: #a5793e; border-color: #d5b680; }.severity-critical .check-card-mark { color: #a34e3c; border-color: #d29b8c; }.resolved .check-card-mark { color: var(--pine); border-color: #9bb2a2; }.check-card-copy > div { display: flex; gap: 8px; }.check-kind { color: var(--copper); font-size: 8px; letter-spacing: .08em; }.check-status { color: #a09385; font-size: 8px; }.check-card h3 { margin: 7px 0 4px; color: #4c433c; font: 15px var(--font-display); }.check-card p { margin: 0; color: #897c6e; font: 10px/1.6 var(--font-body); }.check-card-actions { display: flex; gap: 6px; align-self: center; }.check-card-actions button { padding: 7px 8px; color: #776b60; border: 1px solid #c8baaa; background: transparent; font-size: 8px; white-space: nowrap; }.check-card-actions button.resolve { color: #fff8ef; border-color: var(--copper); background: var(--copper); }.checks-empty { width: min(980px, 100%); margin: 0 auto; }.checks-empty > span { color: var(--pine); font-size: 27px; }.knowledge-confirm-backdrop { position: fixed; inset: 0; z-index: 90; display: grid; place-items: center; background: rgba(20,23,26,.7); backdrop-filter: blur(4px); }.knowledge-confirm { width: min(430px, 90vw); padding: 29px 31px; background: var(--paper-soft); box-shadow: 0 24px 65px rgba(10,12,14,.38); }.knowledge-confirm h2 { margin: 10px 0 8px; font: 23px var(--font-display); }.knowledge-confirm p { color: #8c7f72; font: 10px/1.65 var(--font-body); }.knowledge-confirm > div { display: flex; justify-content: flex-end; gap: 7px; margin-top: 20px; }.knowledge-confirm button { padding: 8px 11px; color: #766b61; border: 1px solid var(--line); background: transparent; font-size: 8px; }.knowledge-confirm button.danger { color: white; border-color: #9b4332; background: #9b4332; }.knowledge-loading { grid-column: 2 / 4; display: grid; place-items: center; color: #9b8d7e; background: var(--paper); font: 16px var(--font-display); }
 .context-workbench { display: grid; gap: 18px; width: min(980px, 100%); margin: 0 auto; }.context-profile-card, .memory-ledger { padding: 20px 22px; border: 1px solid #d2c4b4; background: var(--paper-soft); box-shadow: 0 8px 28px rgba(62,49,39,.06); }.context-card-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-bottom: 13px; color: #9b6f58; border-bottom: 1px solid #ddd1c3; font: 600 8px var(--font-ui); letter-spacing: .12em; }.context-card-heading strong { color: #544a41; font: 15px var(--font-display); letter-spacing: 0; }.context-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; padding: 18px 0; }.context-fields label { display: grid; gap: 8px; }.context-fields label > span { display: grid; gap: 4px; }.context-fields strong { color: #4f473f; font: 12px var(--font-display); }.context-fields small { color: #9a8d80; font: 8px/1.45 var(--font-body); }.context-fields input { min-width: 0; height: 37px; padding: 7px 9px; color: #51483f; border: 1px solid #d5c8b9; outline: 0; background: rgba(255,255,255,.5); font: 11px var(--font-ui); }.context-fields input:focus { border-color: var(--copper-light); }.context-profile-actions { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-top: 13px; border-top: 1px solid #ddd1c3; }.context-profile-actions p { margin: 0; color: #938678; font: 9px var(--font-body); }.context-profile-actions button { padding: 8px 10px; color: #fff8ef; border: 1px solid var(--pine); background: var(--pine); font-size: 9px; }.memory-ledger { display: grid; gap: 0; }.memory-entry { display: grid; grid-template-columns: 42px minmax(0, 1fr); gap: 13px; padding: 16px 0; border-bottom: 1px solid #ded3c6; }.memory-entry:last-child { border-bottom: 0; }.memory-number { color: var(--copper); font: 17px var(--font-display); }.memory-title { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }.memory-title strong { color: #4c443c; font: 14px var(--font-display); }.memory-title small { color: #a09385; font-size: 8px; }.memory-entry p { margin: 7px 0 9px; color: #817568; font: 10px/1.65 var(--font-body); white-space: pre-line; }.memory-keywords { display: flex; flex-wrap: wrap; gap: 5px; }.memory-keywords span { padding: 3px 5px; color: #7b6b5e; border: 1px solid #d5c4b4; font-size: 7px; }.context-stat { display: flex; align-items: flex-end; justify-content: space-between; margin: 18px 20px 8px; padding: 0 0 14px; border-bottom: 1px solid #cfc3b4; color: #938577; font-size: 8px; }.context-stat strong { color: var(--copper); font: 25px var(--font-display); }.context-help { margin-top: 20px; }.context-heading button:disabled, .context-profile-actions button:disabled { opacity: .55; }
 .candidate-inbox { width: 100%; margin-top: 12px; padding: 8px; color: #e8c9b8; border: 1px solid #765546; background: rgba(182,85,62,.12); font-size: 8px; text-align: left; }.candidate-inbox:hover { color: #fff8ef; border-color: var(--copper); }
 .knowledge-heading-actions, .checks-heading-actions { display: flex; align-items: center; gap: 8px; }.knowledge-heading-actions > button, .checks-heading-actions > button { padding: 8px 10px; color: #76685d; border: 1px solid #c8b8a7; background: transparent; font-size: 9px; white-space: nowrap; }.knowledge-heading-actions > button:hover, .checks-heading-actions > button:hover { color: var(--copper); border-color: var(--copper); }.knowledge-heading-actions > button:disabled, .checks-heading-actions > button:disabled { opacity: .48; }.knowledge-heading-actions .knowledge-add, .checks-heading-actions .knowledge-add { color: #fff8ef; border-color: var(--copper); background: var(--copper); }.checks-heading-actions { align-items: flex-end; }.checks-heading-actions .check-summary { min-width: 74px; }
 .candidate-strip { display: grid; gap: 7px; width: min(980px, 100%); margin: 0 auto 16px; }.candidate-strip button { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 10px 12px; color: #6e6258; border: 1px solid #d1b8a6; border-left: 3px solid var(--copper); background: #fff8ef; text-align: left; }.candidate-strip button:hover { border-color: var(--copper); }.candidate-strip span { color: var(--copper); font-size: 8px; }.candidate-strip strong { font: 12px var(--font-display); }.candidate-strip small { color: #9a8b7e; font-size: 8px; }.state-ledger { border-left: 3px solid #769180; }.state-entry .memory-number { color: var(--pine); }
 .candidate-review { width: min(760px, 92vw); max-height: 84vh; display: grid; grid-template-rows: auto auto auto minmax(180px, 1fr) auto; }.candidate-review pre { min-width: 0; max-height: 48vh; overflow: auto; margin: 10px 0 0; padding: 16px; color: #51483f; border: 1px solid #d4c5b5; background: #f4ecdf; font: 10px/1.65 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; word-break: break-word; }.knowledge-confirm button.accept-candidate { color: #fff; border-color: var(--pine); background: var(--pine); }
+.candidate-heading { align-items: center; }.candidate-summary { display: grid; justify-items: end; color: #927c69; }.candidate-summary strong { color: #8b6ba5; font: 29px var(--font-display); }.candidate-summary span { font-size: 8px; }.knowledge-list-item.item-candidate { border-left-color: #9b7caf; }.knowledge-list-item.item-candidate.timeline { border-left-color: #a98c73; }.knowledge-list-item.item-candidate.foreshadow { border-left-color: var(--copper); }.candidate-pending-tag { padding: 4px 6px; color: #8b6ba5; border: 1px solid #baa5c8; letter-spacing: 0; }.candidate-status-select { flex: 0 0 88px; height: 31px; padding: 5px 7px; color: #756a60; border: 1px solid #d5c4b4; background: transparent; font-size: 8px; }.candidate-editor-actions { display: flex; justify-content: flex-end; gap: 7px; margin-top: 24px; padding-top: 16px; border-top: 1px solid #ddd1c3; }.candidate-editor-actions button { padding: 8px 10px; color: #76685d; border: 1px solid #c8b8a7; background: transparent; font-size: 9px; }.candidate-editor-actions button.discard { margin-right: auto; color: #9b4c3b; border-color: #cda99e; }.candidate-editor-actions button.accept { color: #fff8ef; border-color: var(--pine); background: var(--pine); }
 @keyframes knowledge-pulse { 50% { opacity: .35; transform: scale(.75); } }
 @media (max-width: 1240px) { .knowledge-layout { grid-template-columns: 180px minmax(430px, 1fr) 250px; }.knowledge-canvas { padding-right: 18px; padding-left: 18px; }.knowledge-item-layout { grid-template-columns: minmax(155px, .34fr) minmax(300px, 1fr); }.context-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 </style>

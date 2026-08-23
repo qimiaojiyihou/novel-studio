@@ -90,10 +90,16 @@ test('foreshadow checks and fact conflicts can be resolved', () => {
 test('project deletion cascades knowledge and continuity data', () => {
   const { database, repository } = testRepository()
   repository.createItem({ projectId: 'project-1', kind: 'timeline', title: '事件', content: { event: '发生' } })
+  const state = repository.createCandidate({
+    projectId: 'project-1', chapterId: 'chapter-1', task: 'chapter_state_extract',
+    payload: { summary: '', facts: ['新事实'], characterStates: [], relationshipChanges: [], timelineEvents: [], foreshadow: { setups: [], payoffs: [] }, openThreads: [] },
+  })
+  repository.resolveCandidate({ id: state.id, status: 'accepted' })
   repository.loadKnowledgeCenter('project-1')
   database.prepare('DELETE FROM projects WHERE id = ?').run('project-1')
   assert.equal(database.prepare('SELECT COUNT(*) AS count FROM knowledge_items').get().count, 0)
   assert.equal(database.prepare('SELECT COUNT(*) AS count FROM continuity_checks').get().count, 0)
+  assert.equal(database.prepare('SELECT COUNT(*) AS count FROM knowledge_item_candidates').get().count, 0)
   database.close()
 })
 
@@ -118,6 +124,38 @@ test('AI state and audit outputs stay pending until the author accepts them', ()
   let center = repository.resolveCandidate({ id: state.id, status: 'accepted' })
   assert.equal(center.stateSnapshots.length, 1)
   assert.equal(center.stateSnapshots[0].payload.openThreads[0], '原作者身份')
+  assert.equal(center.counts.pendingItemCandidates, 5)
+  assert.deepEqual(new Set(center.itemCandidates.map((candidate) => candidate.kind)), new Set(['fact', 'timeline', 'foreshadow']))
+  assert.equal(center.items.filter((item) => item.sourceType === 'ai').length, 0)
+
+  const factCandidate = center.itemCandidates.find((candidate) => candidate.kind === 'fact')
+  const savedCandidate = repository.updateItemCandidate({
+    id: factCandidate.id,
+    title: '作者确认的旧稿规则',
+    content: { ...factCandidate.content, statement: '旧稿只能由原作者修改。', evidence: '他终于确认了规则。' },
+    itemStatus: 'open',
+  })
+  assert.equal(savedCandidate.title, '作者确认的旧稿规则')
+  center = repository.resolveItemCandidate({ id: savedCandidate.id, status: 'accepted' })
+  const acceptedFact = center.items.find((item) => item.sourceType === 'ai')
+  assert.ok(acceptedFact)
+  assert.equal(acceptedFact.title, '作者确认的旧稿规则')
+  assert.equal(acceptedFact.content.evidence, '他终于确认了规则。')
+  assert.equal(center.counts.pendingItemCandidates, 4)
+
+  const editedAcceptedFact = repository.updateItem({
+    id: acceptedFact.id,
+    title: '作者复核后的旧稿规则',
+    content: acceptedFact.content,
+  })
+  assert.equal(editedAcceptedFact.sourceType, 'ai')
+  assert.ok(repository.loadKnowledgeCenter('project-1').items.some((item) => item.id === acceptedFact.id && item.status === 'open'))
+
+  const timelineCandidate = center.itemCandidates.find((candidate) => candidate.status === 'pending' && candidate.kind === 'timeline')
+  center = repository.resolveItemCandidate({ id: timelineCandidate.id, status: 'discarded' })
+  assert.equal(center.itemCandidates.find((candidate) => candidate.id === timelineCandidate.id).status, 'discarded')
+  assert.equal(center.items.filter((item) => item.sourceType === 'ai').length, 1)
+  assert.equal(center.counts.pendingItemCandidates, 3)
 
   const audit = repository.createCandidate({
     projectId: 'project-1',
