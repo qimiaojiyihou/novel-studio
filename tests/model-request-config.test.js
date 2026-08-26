@@ -48,3 +48,8 @@ test('JSON request config accepts per-task overrides for knowledge workflows', (
   assert.equal(requestParametersFor('chapter_state_extract', {}, config).temperature, 0.1)
   assert.equal(requestParametersFor('continuity_audit', {}, config).max_tokens, 6000)
 })
+
+test('JSON request config accepts quality review task overrides', () => {
+  const config = parseRequestConfigJson(JSON.stringify({ taskBody: { quality_review: { response_format: { type: 'json_object' }, seed: 7 } } }))
+  assert.equal(requestParametersFor('quality_review', {}, config).seed, 7)
+})

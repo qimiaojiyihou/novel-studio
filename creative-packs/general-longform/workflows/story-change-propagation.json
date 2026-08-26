@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "id": "story-change-propagation",
+  "name": "设定联动修改",
+  "steps": [
+    { "id": "analyze-change", "action": "generate", "task": "story_change", "candidateType": "story_change_set" },
+    { "id": "confirm-change-set", "action": "checkpoint", "dependsOn": ["analyze-change"] }
+  ]
+}

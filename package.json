@@ -8,13 +8,18 @@
   "scripts": {
     "dev": "concurrently -k \"vite --host 127.0.0.1 --port 5173 --strictPort\" \"wait-on http://127.0.0.1:5173 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .\"",
     "build": "vite build",
+    "build:creative-packs": "node scripts/build-creative-packs.mjs",
+    "build:codex": "node scripts/build-codex-runtime.mjs",
+    "verify:codex": "node scripts/verify-codex-runtime.mjs",
     "build:go": "node scripts/build-go-service.mjs",
-    "build:app": "npm run build:go && npm run build && electron-builder",
+    "build:app": "npm run build:creative-packs && npm run build:codex && npm run build:go && npm run build && electron-builder",
     "preview": "vite preview",
-    "check": "node --check electron/main.js && node --check electron/preload.cjs && node --check electron/model-adapter.js && node --check electron/model-gateway.js && node --check electron/model-request-config.js && node --check electron/prompt-templates.js && node --check electron/prompt-compiler.js && node --check electron/prompt-repository.js && node --check electron/database-migrations.js && node --check electron/workspace-repository.js && node --check electron/planning-repository.js && node --check electron/knowledge-repository.js && node --check electron/context-repository.js && node --check electron/manuscript-formats.js && node --check electron/project-portability.js && node --check scripts/build-go-service.mjs",
+    "check": "node --check electron/main.js && node --check electron/preload.cjs && node --check electron/model-adapter.js && node --check electron/model-gateway.js && node --check electron/model-request-config.js && node --check electron/prompt-templates.js && node --check electron/prompt-compiler.js && node --check electron/prompt-repository.js && node --check electron/database-migrations.js && node --check electron/workspace-repository.js && node --check electron/planning-repository.js && node --check electron/planning-bundle.js && node --check electron/knowledge-repository.js && node --check electron/context-repository.js && node --check electron/creative-pack.js && node --check electron/creative-quality.js && node --check electron/generated-text.js && node --check electron/prompt-evaluator.js && node --check electron/quality-repository.js && node --check electron/story-change-repository.js && node --check electron/structured-output-retry.js && node --check electron/manuscript-formats.js && node --check electron/project-portability.js && node --check electron/inline-creative.js && node --check electron/codex-repository.js && node --check electron/codex-project-mirror.js && node --check electron/codex-task-label.js && node --check electron/codex-agent-gateway.js && node --check electron/agent-runtime.js && node --check scripts/build-go-service.mjs && node --check scripts/build-creative-packs.mjs && node --check scripts/build-codex-runtime.mjs",
     "test": "node --test tests/*.test.js"
   },
   "dependencies": {
+    "@agentclientprotocol/codex-acp": "1.6.2",
+    "@agentclientprotocol/sdk": "1.4.0",
     "@codemirror/commands": "^6.10.1",
     "@codemirror/lang-markdown": "^6.5.0",
     "@codemirror/search": "^6.5.10",
@@ -42,24 +47,46 @@
     "files": [
       "dist/**/*",
       "electron/**/*",
+      "creative-packs/dist/**/*",
+      "skills/**/*",
+      "docs/**/*",
+      "THIRD_PARTY_NOTICES.md",
+      "research/prompt-eval-cases.json",
       "package.json"
     ],
     "extraResources": [
       {
         "from": "resources/novel-studio-service",
         "to": "novel-studio-service",
-        "filter": ["**/*"]
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "resources/codex-runtime",
+        "to": "codex-runtime",
+        "filter": [
+          "**/*"
+        ]
       }
     ],
     "mac": {
-      "target": ["dmg", "zip"],
+      "target": [
+        "dmg",
+        "zip"
+      ],
       "category": "public.app-category.productivity"
     },
     "win": {
-      "target": ["nsis"]
+      "target": [
+        "nsis"
+      ]
     },
     "linux": {
-      "target": ["AppImage"]
-    }
+      "target": [
+        "AppImage"
+      ]
+    },
+    "afterSign": "scripts/verify-signed-runtime.cjs"
   }
 }

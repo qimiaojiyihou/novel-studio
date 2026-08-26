@@ -1,0 +1,6 @@
+{
+  "id": "urban-suspense-three-chapter",
+  "name": "都市悬疑三章基准",
+  "fixture": "research/prompt-eval-cases.json",
+  "criticalRules": ["doctor-is-only-suspect", "persistent-injury", "midnight-key-once", "door-voice-final-boundary"]
+}

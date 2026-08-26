@@ -83,12 +83,14 @@
               </div>
               <div class="knowledge-title-row">
                 <input :value="selectedItem.title" :aria-label="`${modeMeta.title}名称`" @input="updateTitle(selectedItem, $event.target.value)" />
+                <button class="knowledge-cascade" type="button" @click="requestKnowledgeChange('title', `${modeMeta.title}名称`)">联动修改</button>
+                <CreativeExecutionControl compact :default-mode="defaultExecutionMode" :app-model-label="knowledgeModelName" action-label="标题候选" @execute="requestKnowledgeDraft('title', `${modeMeta.title}名称`, $event)" />
                 <span class="knowledge-status" :class="selectedItem.status">{{ selectedItem.status === 'resolved' ? '已回收' : selectedItem.status === 'archived' ? '已归档' : '开放' }}</span>
               </div>
               <p class="knowledge-editor-note">{{ editorNote }}</p>
               <div class="knowledge-fields">
                 <label v-for="field in fieldsForMode" :key="field.key" :class="{ wide: field.wide }">
-                  <span><strong>{{ field.label }}</strong><small>{{ field.hint }}</small></span>
+                  <span class="knowledge-field-heading"><span><strong>{{ field.label }}</strong><small>{{ field.hint }}</small></span><span class="knowledge-field-actions"><button class="knowledge-cascade" type="button" @click="requestKnowledgeChange(field.key, field.label)">联动修改</button><CreativeExecutionControl v-if="field.type !== 'select' && field.type !== 'number'" compact :default-mode="defaultExecutionMode" :app-model-label="knowledgeModelName" action-label="候选" @execute="requestKnowledgeDraft(field.key, field.label, $event)" /></span></span>
                   <select v-if="field.type === 'select'" :value="selectedItem.content[field.key] || ''" :aria-label="field.label" @change="updateField(selectedItem, field.key, $event.target.value)">
                     <option value="">请选择</option>
                     <option v-for="option in field.options" :key="option" :value="option">{{ option }}</option>
@@ -170,7 +172,7 @@
           <div class="knowledge-sheet-heading context-heading">
             <div><span class="eyebrow copper">LONG-FORM CONTEXT</span><h2>长篇上下文</h2><p>模型不会吞下整本小说，而是优先携带当前章、最近章节，再按本次任务召回相关旧章和知识记录。</p></div>
             <div class="knowledge-heading-actions">
-              <button @click="runKnowledgeAi('chapter_state_extract')" :disabled="aiRunning || !chapterHasManuscript">{{ aiTask?.task === 'chapter_state_extract' ? '正在提取…' : 'AI 提取当前章状态' }}</button>
+              <CreativeExecutionControl :default-mode="defaultExecutionMode" :app-model-label="knowledgeModelName" action-label="提取当前章状态" :busy="aiTask?.task === 'chapter_state_extract'" :disabled="aiRunning || !chapterHasManuscript" @execute="runKnowledgeAi('chapter_state_extract', $event)" />
               <button class="knowledge-add" @click="rebuildMemories" :disabled="contextSaving">{{ contextSaving ? '正在重建…' : '重建章节记忆' }}</button>
             </div>
           </div>
@@ -211,7 +213,7 @@
         <template v-else>
           <div class="knowledge-sheet-heading checks-heading">
             <div><span class="eyebrow copper">CONTINUITY AUDIT</span><h2>连续性检查</h2><p>这里的提醒来自章节合同、时间节点、伏笔账本和事实键冲突。每一条都留给作者做最后判断。</p></div>
-            <div class="checks-heading-actions"><button class="knowledge-add" @click="runKnowledgeAi('continuity_audit')" :disabled="aiRunning || !chapterHasManuscript">{{ aiTask?.task === 'continuity_audit' ? '正在审计…' : 'AI 审计当前章' }}</button><div class="check-summary"><strong>{{ openChecks.length }}</strong><span>待处理提醒</span></div></div>
+            <div class="checks-heading-actions"><CreativeExecutionControl :default-mode="defaultExecutionMode" :app-model-label="knowledgeModelName" action-label="审计当前章" :busy="aiTask?.task === 'continuity_audit'" :disabled="aiRunning || !chapterHasManuscript" @execute="runKnowledgeAi('continuity_audit', $event)" /><div class="check-summary"><strong>{{ openChecks.length }}</strong><span>待处理提醒</span></div></div>
           </div>
           <div v-if="pendingAuditCandidates.length" class="candidate-strip">
             <button v-for="candidate in pendingAuditCandidates" :key="candidate.id" @click="openCandidate(candidate)"><span>待确认</span><strong>第 {{ candidate.chapterNo }} 章审计候选</strong><small>{{ candidate.payload.issues?.length || 0 }} 项问题</small></button>
@@ -284,13 +286,16 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { appService } from '../services/app-service.js'
+import CreativeExecutionControl from './CreativeExecutionControl.vue'
+import { draftDigest } from '../utils/inline-creative.js'
 
 const props = defineProps({
   project: { type: Object, required: true },
   chapters: { type: Array, default: () => [] },
   activeChapterId: { type: String, default: '' },
+  modelSettings: { type: Object, default: () => ({ profiles: [], routes: {} }) },
 })
-const emit = defineEmits(['toast'])
+const emit = defineEmits(['toast', 'codex-action', 'story-change'])
 const center = ref(null)
 const contextManager = ref(null)
 const loadError = ref('')
@@ -348,6 +353,11 @@ const openChecks = computed(() => center.value?.checks.filter((check) => check.s
 const activeChapter = computed(() => props.chapters.find((chapter) => chapter.id === props.activeChapterId) || props.chapters[0] || null)
 const chapterHasManuscript = computed(() => Boolean(String(activeChapter.value?.manuscript || '').trim()))
 const aiRunning = computed(() => Boolean(aiTask.value))
+const defaultExecutionMode = computed(() => props.project.default_execution_mode === 'codex' ? 'codex' : 'app_model')
+const knowledgeModelName = computed(() => {
+  const profileId = props.modelSettings.routes?.planning_field
+  return props.modelSettings.profiles?.find((profile) => profile.id === profileId)?.name || '任务模型'
+})
 const pendingCandidates = computed(() => center.value?.candidates.filter((candidate) => candidate.status === 'pending') || [])
 const pendingStateCandidates = computed(() => pendingCandidates.value.filter((candidate) => candidate.task === 'chapter_state_extract'))
 const pendingAuditCandidates = computed(() => pendingCandidates.value.filter((candidate) => candidate.task === 'continuity_audit'))
@@ -414,13 +424,30 @@ async function rebuildMemories() {
   finally { contextSaving.value = false }
 }
 
-async function runKnowledgeAi(task) {
+async function runKnowledgeAi(task, executionMode = defaultExecutionMode.value) {
   if (aiTask.value || !activeChapter.value) return
   if (!chapterHasManuscript.value) {
     emit('toast', '当前章节还没有正文，先写入或生成正文再执行分析')
     return
   }
   await flushSaves()
+  if (executionMode === 'codex') {
+    emit('codex-action', {
+      request: {
+        projectId: props.project.id,
+        chapterId: activeChapter.value.id,
+        task,
+        intent: 'analysis',
+        target: {
+          kind: task === 'chapter_state_extract' ? 'chapter_state' : 'continuity_audit',
+          targetId: activeChapter.value.id,
+          fieldLabel: task === 'chapter_state_extract' ? '章后状态' : '连续性审计',
+        },
+      },
+      onAccepted: () => loadCenter(),
+    })
+    return
+  }
   const handle = appService.startGeneration({
     task,
     projectId: props.project.id,
@@ -498,6 +525,67 @@ async function resolveItemCandidate(candidate, status) {
 
 function updateTitle(item, value) { item.title = value; markDirty(item) }
 function updateField(item, key, value) { item.content[key] = value; markDirty(item) }
+
+async function requestKnowledgeChange(fieldKey, fieldLabel) {
+  const item = selectedItem.value
+  if (!item) return
+  try {
+    await flushSaves()
+    const refreshed = center.value.items.find((entry) => entry.id === item.id) || item
+    emit('story-change', {
+      target: {
+        kind: 'knowledge_item',
+        targetId: refreshed.id,
+        fieldKey,
+        fieldLabel: `${refreshed.title} · ${fieldLabel}`,
+        currentValue: String(fieldKey === 'title' ? refreshed.title : refreshed.content?.[fieldKey] || ''),
+      },
+    })
+  } catch (error) {
+    emit('toast', `保存知识条目后才能联动修改：${error.message}`)
+  }
+}
+
+async function requestKnowledgeDraft(fieldKey, fieldLabel, executionMode = defaultExecutionMode.value) {
+  const item = selectedItem.value
+  if (!item) return
+  const snapshot = () => draftDigest({ title: item.title, content: item.content, status: item.status })
+  const instruction = [
+    `请为知识条目的“${fieldLabel}”生成可直接填入的候选文本。`,
+    `当前未保存条目（仅作为编辑草稿）：${JSON.stringify({ title: item.title, content: item.content, status: item.status })}`,
+  ].join('\n')
+  const assign = (text) => {
+    if (fieldKey === 'title') item.title = text
+    else item.content[fieldKey] = text
+    markDirty(item)
+  }
+  if (executionMode !== 'codex') {
+    const generation = appService.startGeneration({
+      task: 'planning_field', projectId: props.project.id, instruction,
+      modelProfileId: props.modelSettings.routes?.planning_field,
+      planning: {
+        sectionLabel: '知识与连续性', targetLabel: item.title, targetType: 'renderer_draft', targetId: item.id,
+        fieldKey, fieldLabel, currentValue: fieldKey === 'title' ? item.title : item.content[fieldKey] || '',
+        nearbyContext: JSON.stringify(item.content), scopeType: 'project', scopeId: props.project.id,
+      },
+    })
+    try { const result = await generation.promise; assign(result.text || ''); emit('toast', `${fieldLabel}候选已填入，等待自动保存`) }
+    catch (error) { emit('toast', `生成失败：${error.message}`) }
+    return
+  }
+  const initialDigest = snapshot()
+  emit('codex-action', {
+    request: {
+      projectId: props.project.id,
+      task: 'planning_field',
+      target: { kind: 'knowledge_item_draft', targetId: item.id, fieldKey, fieldLabel, draftDigest: initialDigest },
+      instruction,
+    },
+    getDraftDigest: snapshot,
+    getDraftValue: () => String(fieldKey === 'title' ? item.title : item.content[fieldKey] || ''),
+    applyDraft: assign,
+  })
+}
 function markDirty(item) {
   dirtyItems.add(item.id)
   saveState.value = 'dirty'
@@ -593,10 +681,10 @@ defineExpose({ flushSaves })
 </script>
 
 <style scoped>
-.knowledge-center { grid-column: 2 / 4; min-width: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); color: var(--ink); background: #eee7da; }
+.knowledge-center { grid-column: 2 / 4; min-width: 0; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; color: var(--ink); background: #eee7da; }
 .knowledge-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 28px; padding: 24px 28px 20px; color: #f5f1e8; border-bottom: 1px solid #3f464b; background: #262c31; }.knowledge-header h1 { margin: 8px 0 4px; font: 28px/1.15 var(--font-display); }.knowledge-header p { margin: 0; color: #9ca4a8; font-size: 10px; }.knowledge-header-actions { display: flex; align-items: center; gap: 8px; }.knowledge-header-actions button { padding: 7px 9px; color: #d7c5b6; border: 1px solid #545d62; background: transparent; font-size: 9px; }.knowledge-header-actions button:hover { color: #fff8ef; border-color: var(--copper); }.knowledge-save-state { display: inline-flex; align-items: center; gap: 6px; margin-right: 6px; color: #9eb9ac; font-size: 9px; }.knowledge-save-state i { width: 5px; height: 5px; border-radius: 50%; background: #72a089; }.knowledge-save-state.dirty { color: #d8b878; }.knowledge-save-state.dirty i { background: #c8964a; }.knowledge-save-state.saving i { animation: knowledge-pulse .8s infinite; }.knowledge-save-state.error { color: #df8c78; }.knowledge-save-state.error i { background: #c75e48; }
-.knowledge-layout { min-height: 0; display: grid; grid-template-columns: 205px minmax(520px, 1fr) 285px; }.knowledge-index { min-height: 0; overflow: auto; padding: 17px 10px 28px; color: #c8ccce; border-right: 1px solid #434b50; background: #2b3238; }.index-heading { display: flex; align-items: center; justify-content: space-between; padding: 7px 8px 14px; color: #899299; font-size: 8px; letter-spacing: .1em; }.index-heading small { color: #657078; font-size: 7px; letter-spacing: 0; }.knowledge-mode { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; padding: 12px 9px; color: #a7aeb1; border: 0; border-left: 2px solid transparent; background: transparent; text-align: left; }.knowledge-mode:hover, .knowledge-mode.active { color: #fff8ef; background: #353e44; border-left-color: var(--copper); }.knowledge-mode > span { display: grid; gap: 4px; }.knowledge-mode b { font: 13px var(--font-display); }.knowledge-mode small { color: #747f85; font-size: 7px; }.knowledge-mode strong { display: grid; place-items: center; min-width: 20px; height: 20px; color: #d7c2b0; border: 1px solid #566168; border-radius: 50%; font: 9px var(--font-ui); }.knowledge-mode.active strong { color: #fff8ef; border-color: var(--copper); background: rgba(182,85,62,.35); }.knowledge-index-note { margin: 30px 8px 0; padding-top: 16px; border-top: 1px solid #444f55; }.knowledge-index-note p { margin: 8px 0 0; color: #79858a; font: 10px/1.65 var(--font-body); }
-.knowledge-canvas { min-width: 0; min-height: 0; overflow: auto; padding: 25px 28px 60px; background: #eee7da; }.knowledge-sheet-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; width: min(980px, 100%); margin: 0 auto 20px; padding: 0 2px 20px; border-bottom: 1px solid #d4c9bb; }.knowledge-sheet-heading h2 { margin: 7px 0 4px; font: 25px var(--font-display); }.knowledge-sheet-heading p { max-width: 510px; margin: 0; color: #928679; font: 10px/1.6 var(--font-body); }.knowledge-add { padding: 8px 10px; color: #fff8ef; border: 1px solid var(--copper); background: var(--copper); font-size: 9px; }.knowledge-item-layout { display: grid; grid-template-columns: minmax(180px, .34fr) minmax(360px, 1fr); gap: 18px; width: min(980px, 100%); margin: 0 auto; }.knowledge-list { display: grid; align-content: start; gap: 5px; }.knowledge-list-item { display: grid; grid-template-columns: 22px minmax(0, 1fr) 15px; align-items: start; gap: 8px; width: 100%; padding: 11px 9px; color: #70655a; border: 1px solid transparent; border-left: 2px solid #c8b8a6; background: rgba(255,255,255,.32); text-align: left; }.knowledge-list-item:hover, .knowledge-list-item.active { color: #403932; border-color: #c7b7a5; border-left-color: var(--copper); background: #fffaf2; }.knowledge-list-item.chapter { border-left-color: #a98c73; }.knowledge-list-item.manual { border-left-color: #729481; }.knowledge-list-item.ai { border-left-color: #8b6ba5; }.knowledge-list-mark { color: var(--copper); font: 9px var(--font-ui); }.knowledge-list-copy { min-width: 0; display: grid; gap: 4px; }.knowledge-list-copy strong { overflow: hidden; font: 12px var(--font-display); text-overflow: ellipsis; white-space: nowrap; }.knowledge-list-copy small { overflow: hidden; color: #94887b; font: 9px/1.45 var(--font-body); text-overflow: ellipsis; white-space: nowrap; }.knowledge-list-item i { color: var(--pine); font-style: normal; }.knowledge-empty, .knowledge-no-selection { display: grid; justify-items: center; align-content: center; min-height: 270px; padding: 25px; color: #8d8073; border: 1px dashed #c3b5a5; text-align: center; }.knowledge-empty > span { color: var(--copper); font-size: 26px; }.knowledge-empty strong { margin-top: 8px; color: #5d544c; font: 15px var(--font-display); }.knowledge-empty p { max-width: 220px; margin: 8px 0 14px; font: 10px/1.6 var(--font-body); }.knowledge-empty button { padding: 8px 10px; color: #fff8ef; border: 1px solid var(--copper); background: var(--copper); font-size: 9px; }.knowledge-editor { min-width: 0; padding: 22px 24px 30px; background: var(--paper-soft); box-shadow: 0 8px 28px rgba(62,49,39,.08); }.knowledge-editor-topline { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--copper); font: 600 8px var(--font-ui); letter-spacing: .13em; }.knowledge-editor-actions { display: flex; gap: 4px; }.knowledge-editor-actions button { width: 26px; height: 25px; color: #82766b; border: 1px solid #d6cabc; background: transparent; font-size: 9px; }.knowledge-editor-actions button:disabled { opacity: .4; }.knowledge-editor-actions .danger-link { width: auto; padding: 0 7px; color: #a14d3b; }.knowledge-title-row { display: flex; align-items: center; gap: 12px; margin-top: 9px; }.knowledge-title-row input { min-width: 0; flex: 1; padding: 2px 0; color: #352f2a; border: 0; border-bottom: 1px solid transparent; outline: 0; background: transparent; font: 25px var(--font-display); }.knowledge-title-row input:focus { border-bottom-color: var(--copper-light); }.knowledge-status { flex: 0 0 auto; padding: 5px 7px; color: #82766b; border: 1px solid #d5c4b4; font-size: 8px; }.knowledge-status.resolved { color: var(--pine); border-color: #a2b9aa; }.knowledge-status.archived { color: #9d8d7e; }.knowledge-editor-note { margin: 8px 0 22px; color: #93877b; font: 9px/1.55 var(--font-body); }.knowledge-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 19px 16px; }.knowledge-fields label { display: grid; align-content: start; gap: 7px; min-width: 0; }.knowledge-fields label.wide { grid-column: 1 / -1; }.knowledge-fields label > span { display: grid; gap: 3px; }.knowledge-fields label strong { color: #49423b; font: 13px var(--font-display); }.knowledge-fields label small { color: #9a8d7e; font-size: 8px; line-height: 1.35; }.knowledge-fields input, .knowledge-fields textarea, .knowledge-fields select { width: 100%; min-height: 36px; padding: 8px 9px; color: #49423b; border: 1px solid #d8cdbf; outline: 0; background: rgba(255,255,255,.46); font: 11px/1.65 var(--font-body); }.knowledge-fields textarea { min-height: 84px; resize: vertical; }.knowledge-fields input:focus, .knowledge-fields textarea:focus, .knowledge-fields select:focus { border-color: var(--copper-light); background: #fffdf8; box-shadow: 0 0 0 2px rgba(182,85,62,.06); }.knowledge-fields select { height: 36px; }
+.knowledge-layout { min-height: 0; display: grid; grid-template-columns: 205px minmax(520px, 1fr) 285px; }.knowledge-index { min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 17px 10px 28px; color: #c8ccce; border-right: 1px solid #434b50; background: #2b3238; }.index-heading { display: flex; align-items: center; justify-content: space-between; padding: 7px 8px 14px; color: #899299; font-size: 8px; letter-spacing: .1em; }.index-heading small { color: #657078; font-size: 7px; letter-spacing: 0; }.knowledge-mode { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; padding: 12px 9px; color: #a7aeb1; border: 0; border-left: 2px solid transparent; background: transparent; text-align: left; }.knowledge-mode:hover, .knowledge-mode.active { color: #fff8ef; background: #353e44; border-left-color: var(--copper); }.knowledge-mode > span { display: grid; gap: 4px; }.knowledge-mode b { font: 13px var(--font-display); }.knowledge-mode small { color: #747f85; font-size: 7px; }.knowledge-mode strong { display: grid; place-items: center; min-width: 20px; height: 20px; color: #d7c2b0; border: 1px solid #566168; border-radius: 50%; font: 9px var(--font-ui); }.knowledge-mode.active strong { color: #fff8ef; border-color: var(--copper); background: rgba(182,85,62,.35); }.knowledge-index-note { margin: 30px 8px 0; padding-top: 16px; border-top: 1px solid #444f55; }.knowledge-index-note p { margin: 8px 0 0; color: #79858a; font: 10px/1.65 var(--font-body); }
+.knowledge-canvas { min-width: 0; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 25px 28px 60px; background: #eee7da; }.knowledge-sheet-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; width: min(980px, 100%); margin: 0 auto 20px; padding: 0 2px 20px; border-bottom: 1px solid #d4c9bb; }.knowledge-sheet-heading h2 { margin: 7px 0 4px; font: 25px var(--font-display); }.knowledge-sheet-heading p { max-width: 510px; margin: 0; color: #928679; font: 10px/1.6 var(--font-body); }.knowledge-add { padding: 8px 10px; color: #fff8ef; border: 1px solid var(--copper); background: var(--copper); font-size: 9px; }.knowledge-item-layout { display: grid; grid-template-columns: minmax(180px, .34fr) minmax(360px, 1fr); gap: 18px; width: min(980px, 100%); margin: 0 auto; }.knowledge-list { display: grid; align-content: start; gap: 5px; }.knowledge-list-item { display: grid; grid-template-columns: 22px minmax(0, 1fr) 15px; align-items: start; gap: 8px; width: 100%; padding: 11px 9px; color: #70655a; border: 1px solid transparent; border-left: 2px solid #c8b8a6; background: rgba(255,255,255,.32); text-align: left; }.knowledge-list-item:hover, .knowledge-list-item.active { color: #403932; border-color: #c7b7a5; border-left-color: var(--copper); background: #fffaf2; }.knowledge-list-item.chapter { border-left-color: #a98c73; }.knowledge-list-item.manual { border-left-color: #729481; }.knowledge-list-item.ai { border-left-color: #8b6ba5; }.knowledge-list-mark { color: var(--copper); font: 9px var(--font-ui); }.knowledge-list-copy { min-width: 0; display: grid; gap: 4px; }.knowledge-list-copy strong { overflow: hidden; font: 12px var(--font-display); text-overflow: ellipsis; white-space: nowrap; }.knowledge-list-copy small { overflow: hidden; color: #94887b; font: 9px/1.45 var(--font-body); text-overflow: ellipsis; white-space: nowrap; }.knowledge-list-item i { color: var(--pine); font-style: normal; }.knowledge-empty, .knowledge-no-selection { display: grid; justify-items: center; align-content: center; min-height: 270px; padding: 25px; color: #8d8073; border: 1px dashed #c3b5a5; text-align: center; }.knowledge-empty > span { color: var(--copper); font-size: 26px; }.knowledge-empty strong { margin-top: 8px; color: #5d544c; font: 15px var(--font-display); }.knowledge-empty p { max-width: 220px; margin: 8px 0 14px; font: 10px/1.6 var(--font-body); }.knowledge-empty button { padding: 8px 10px; color: #fff8ef; border: 1px solid var(--copper); background: var(--copper); font-size: 9px; }.knowledge-editor { min-width: 0; padding: 22px 24px 30px; background: var(--paper-soft); box-shadow: 0 8px 28px rgba(62,49,39,.08); }.knowledge-editor-topline { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--copper); font: 600 8px var(--font-ui); letter-spacing: .13em; }.knowledge-editor-actions { display: flex; gap: 4px; }.knowledge-editor-actions button { width: 26px; height: 25px; color: #82766b; border: 1px solid #d6cabc; background: transparent; font-size: 9px; }.knowledge-editor-actions button:disabled { opacity: .4; }.knowledge-editor-actions .danger-link { width: auto; padding: 0 7px; color: #a14d3b; }.knowledge-title-row { display: flex; align-items: center; gap: 12px; margin-top: 9px; }.knowledge-title-row input { min-width: 0; flex: 1; padding: 2px 0; color: #352f2a; border: 0; border-bottom: 1px solid transparent; outline: 0; background: transparent; font: 25px var(--font-display); }.knowledge-title-row input:focus { border-bottom-color: var(--copper-light); }.knowledge-status { flex: 0 0 auto; padding: 5px 7px; color: #82766b; border: 1px solid #d5c4b4; font-size: 8px; }.knowledge-status.resolved { color: var(--pine); border-color: #a2b9aa; }.knowledge-status.archived { color: #9d8d7e; }.knowledge-editor-note { margin: 8px 0 22px; color: #93877b; font: 9px/1.55 var(--font-body); }.knowledge-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 19px 16px; }.knowledge-fields label { display: grid; align-content: start; gap: 7px; min-width: 0; }.knowledge-fields label.wide { grid-column: 1 / -1; }.knowledge-fields label > span { display: grid; gap: 3px; }.knowledge-fields label strong { color: #49423b; font: 13px var(--font-display); }.knowledge-fields label small { color: #9a8d7e; font-size: 8px; line-height: 1.35; }.knowledge-fields input, .knowledge-fields textarea, .knowledge-fields select { width: 100%; min-height: 36px; padding: 8px 9px; color: #49423b; border: 1px solid #d8cdbf; outline: 0; background: rgba(255,255,255,.46); font: 11px/1.65 var(--font-body); }.knowledge-fields textarea { min-height: 84px; resize: vertical; }.knowledge-fields input:focus, .knowledge-fields textarea:focus, .knowledge-fields select:focus { border-color: var(--copper-light); background: #fffdf8; box-shadow: 0 0 0 2px rgba(182,85,62,.06); }.knowledge-fields select { height: 36px; }
 .knowledge-source-rail { min-height: 0; overflow: auto; color: #514a43; border-left: 1px solid #cec2b3; background: #e5dccd; }.source-rail-heading { padding: 22px 20px 17px; border-bottom: 1px solid #cfc3b4; }.source-rail-heading h2 { margin: 8px 0 0; font: 19px var(--font-display); }.source-badge { display: inline-flex; align-items: center; gap: 6px; margin: 19px 20px 0; padding: 5px 7px; color: #8b7769; border: 1px solid #cdb7a5; font-size: 8px; }.source-badge i { width: 5px; height: 5px; border-radius: 50%; background: #a88a70; }.source-badge.manual { color: var(--pine); border-color: #a7b8aa; }.source-badge.manual i { background: var(--pine); }.source-badge.chapter { color: #80654f; }.source-badge.ai { color: #76558d; border-color: #b9a3c7; }.source-badge.ai i { background: #8b6ba5; }.source-copy { padding: 14px 20px 18px; }.source-copy strong { font: 15px var(--font-display); }.source-copy p { margin: 8px 0 0; color: #8d8073; font: 10px/1.6 var(--font-body); }.source-meta { display: flex; justify-content: space-between; gap: 10px; padding: 10px 20px; border-top: 1px solid #d0c4b5; color: #978a7c; font-size: 8px; }.source-meta strong { color: #6e6258; font-size: 8px; }.source-meta .included { color: var(--pine); }.source-rule { margin: 18px 20px; border-top: 1px solid #cdbfaf; }.source-help { margin: 0 20px; color: #887b6f; font: 10px/1.7 var(--font-body); }.source-empty { display: grid; justify-items: center; padding: 50px 25px; color: #8d8073; text-align: center; }.source-empty span { color: var(--copper); font-size: 27px; }.source-empty p { font: 10px/1.6 var(--font-body); }.check-rule-card { margin: 14px 20px 0; padding: 12px 0 14px 29px; border-bottom: 1px solid #cfc3b4; position: relative; }.check-rule-card span { position: absolute; left: 0; top: 12px; color: var(--copper); font: 9px var(--font-ui); }.check-rule-card strong { font: 14px var(--font-display); }.check-rule-card p { margin: 6px 0 0; color: #8d8073; font: 10px/1.6 var(--font-body); }
 .checks-heading { align-items: center; }.check-summary { display: grid; justify-items: end; color: #927c69; }.check-summary strong { color: var(--copper); font: 29px var(--font-display); }.check-summary span { font-size: 8px; }.check-list { display: grid; gap: 9px; width: min(980px, 100%); margin: 0 auto; }.check-card { display: grid; grid-template-columns: 32px minmax(0, 1fr) auto; align-items: start; gap: 13px; padding: 17px 18px; border: 1px solid #d1c1b1; border-left: 3px solid #c89b82; background: var(--paper-soft); }.check-card.severity-warning { border-left-color: #bd8a48; }.check-card.severity-critical { border-left-color: #a34e3c; }.check-card.resolved { opacity: .62; border-left-color: #799786; }.check-card-mark { display: grid; place-items: center; width: 27px; height: 27px; color: #a9795d; border: 1px solid #d6b6a2; border-radius: 50%; font: 14px var(--font-display); }.severity-warning .check-card-mark { color: #a5793e; border-color: #d5b680; }.severity-critical .check-card-mark { color: #a34e3c; border-color: #d29b8c; }.resolved .check-card-mark { color: var(--pine); border-color: #9bb2a2; }.check-card-copy > div { display: flex; gap: 8px; }.check-kind { color: var(--copper); font-size: 8px; letter-spacing: .08em; }.check-status { color: #a09385; font-size: 8px; }.check-card h3 { margin: 7px 0 4px; color: #4c433c; font: 15px var(--font-display); }.check-card p { margin: 0; color: #897c6e; font: 10px/1.6 var(--font-body); }.check-card-actions { display: flex; gap: 6px; align-self: center; }.check-card-actions button { padding: 7px 8px; color: #776b60; border: 1px solid #c8baaa; background: transparent; font-size: 8px; white-space: nowrap; }.check-card-actions button.resolve { color: #fff8ef; border-color: var(--copper); background: var(--copper); }.checks-empty { width: min(980px, 100%); margin: 0 auto; }.checks-empty > span { color: var(--pine); font-size: 27px; }.knowledge-confirm-backdrop { position: fixed; inset: 0; z-index: 90; display: grid; place-items: center; background: rgba(20,23,26,.7); backdrop-filter: blur(4px); }.knowledge-confirm { width: min(430px, 90vw); padding: 29px 31px; background: var(--paper-soft); box-shadow: 0 24px 65px rgba(10,12,14,.38); }.knowledge-confirm h2 { margin: 10px 0 8px; font: 23px var(--font-display); }.knowledge-confirm p { color: #8c7f72; font: 10px/1.65 var(--font-body); }.knowledge-confirm > div { display: flex; justify-content: flex-end; gap: 7px; margin-top: 20px; }.knowledge-confirm button { padding: 8px 11px; color: #766b61; border: 1px solid var(--line); background: transparent; font-size: 8px; }.knowledge-confirm button.danger { color: white; border-color: #9b4332; background: #9b4332; }.knowledge-loading { grid-column: 2 / 4; display: grid; place-items: center; color: #9b8d7e; background: var(--paper); font: 16px var(--font-display); }
 .context-workbench { display: grid; gap: 18px; width: min(980px, 100%); margin: 0 auto; }.context-profile-card, .memory-ledger { padding: 20px 22px; border: 1px solid #d2c4b4; background: var(--paper-soft); box-shadow: 0 8px 28px rgba(62,49,39,.06); }.context-card-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-bottom: 13px; color: #9b6f58; border-bottom: 1px solid #ddd1c3; font: 600 8px var(--font-ui); letter-spacing: .12em; }.context-card-heading strong { color: #544a41; font: 15px var(--font-display); letter-spacing: 0; }.context-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; padding: 18px 0; }.context-fields label { display: grid; gap: 8px; }.context-fields label > span { display: grid; gap: 4px; }.context-fields strong { color: #4f473f; font: 12px var(--font-display); }.context-fields small { color: #9a8d80; font: 8px/1.45 var(--font-body); }.context-fields input { min-width: 0; height: 37px; padding: 7px 9px; color: #51483f; border: 1px solid #d5c8b9; outline: 0; background: rgba(255,255,255,.5); font: 11px var(--font-ui); }.context-fields input:focus { border-color: var(--copper-light); }.context-profile-actions { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-top: 13px; border-top: 1px solid #ddd1c3; }.context-profile-actions p { margin: 0; color: #938678; font: 9px var(--font-body); }.context-profile-actions button { padding: 8px 10px; color: #fff8ef; border: 1px solid var(--pine); background: var(--pine); font-size: 9px; }.memory-ledger { display: grid; gap: 0; }.memory-entry { display: grid; grid-template-columns: 42px minmax(0, 1fr); gap: 13px; padding: 16px 0; border-bottom: 1px solid #ded3c6; }.memory-entry:last-child { border-bottom: 0; }.memory-number { color: var(--copper); font: 17px var(--font-display); }.memory-title { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }.memory-title strong { color: #4c443c; font: 14px var(--font-display); }.memory-title small { color: #a09385; font-size: 8px; }.memory-entry p { margin: 7px 0 9px; color: #817568; font: 10px/1.65 var(--font-body); white-space: pre-line; }.memory-keywords { display: flex; flex-wrap: wrap; gap: 5px; }.memory-keywords span { padding: 3px 5px; color: #7b6b5e; border: 1px solid #d5c4b4; font-size: 7px; }.context-stat { display: flex; align-items: flex-end; justify-content: space-between; margin: 18px 20px 8px; padding: 0 0 14px; border-bottom: 1px solid #cfc3b4; color: #938577; font-size: 8px; }.context-stat strong { color: var(--copper); font: 25px var(--font-display); }.context-help { margin-top: 20px; }.context-heading button:disabled, .context-profile-actions button:disabled { opacity: .55; }
@@ -605,6 +693,11 @@ defineExpose({ flushSaves })
 .candidate-strip { display: grid; gap: 7px; width: min(980px, 100%); margin: 0 auto 16px; }.candidate-strip button { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 10px 12px; color: #6e6258; border: 1px solid #d1b8a6; border-left: 3px solid var(--copper); background: #fff8ef; text-align: left; }.candidate-strip button:hover { border-color: var(--copper); }.candidate-strip span { color: var(--copper); font-size: 8px; }.candidate-strip strong { font: 12px var(--font-display); }.candidate-strip small { color: #9a8b7e; font-size: 8px; }.state-ledger { border-left: 3px solid #769180; }.state-entry .memory-number { color: var(--pine); }
 .candidate-review { width: min(760px, 92vw); max-height: 84vh; display: grid; grid-template-rows: auto auto auto minmax(180px, 1fr) auto; }.candidate-review pre { min-width: 0; max-height: 48vh; overflow: auto; margin: 10px 0 0; padding: 16px; color: #51483f; border: 1px solid #d4c5b5; background: #f4ecdf; font: 10px/1.65 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; word-break: break-word; }.knowledge-confirm button.accept-candidate { color: #fff; border-color: var(--pine); background: var(--pine); }
 .candidate-heading { align-items: center; }.candidate-summary { display: grid; justify-items: end; color: #927c69; }.candidate-summary strong { color: #8b6ba5; font: 29px var(--font-display); }.candidate-summary span { font-size: 8px; }.knowledge-list-item.item-candidate { border-left-color: #9b7caf; }.knowledge-list-item.item-candidate.timeline { border-left-color: #a98c73; }.knowledge-list-item.item-candidate.foreshadow { border-left-color: var(--copper); }.candidate-pending-tag { padding: 4px 6px; color: #8b6ba5; border: 1px solid #baa5c8; letter-spacing: 0; }.candidate-status-select { flex: 0 0 88px; height: 31px; padding: 5px 7px; color: #756a60; border: 1px solid #d5c4b4; background: transparent; font-size: 8px; }.candidate-editor-actions { display: flex; justify-content: flex-end; gap: 7px; margin-top: 24px; padding-top: 16px; border-top: 1px solid #ddd1c3; }.candidate-editor-actions button { padding: 8px 10px; color: #76685d; border: 1px solid #c8b8a7; background: transparent; font-size: 9px; }.candidate-editor-actions button.discard { margin-right: auto; color: #9b4c3b; border-color: #cda99e; }.candidate-editor-actions button.accept { color: #fff8ef; border-color: var(--pine); background: var(--pine); }
+.knowledge-fields .knowledge-field-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 8px; }
+.knowledge-field-heading > span { display: grid; gap: 3px; }
+.knowledge-field-actions { display: flex !important; align-items: center; gap: 6px !important; }
+.knowledge-cascade { flex: 0 0 auto; padding: 5px 7px; color: #786b60; border: 1px solid #d5c8b8; background: transparent; font: 8px var(--font-ui); }
+.knowledge-cascade:hover { color: var(--copper); border-color: #d9b7a6; }
 @keyframes knowledge-pulse { 50% { opacity: .35; transform: scale(.75); } }
 @media (max-width: 1240px) { .knowledge-layout { grid-template-columns: 180px minmax(430px, 1fr) 250px; }.knowledge-canvas { padding-right: 18px; padding-left: 18px; }.knowledge-item-layout { grid-template-columns: minmax(155px, .34fr) minmax(300px, 1fr); }.context-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 </style>

@@ -35,6 +35,13 @@ contextBridge.exposeInMainWorld('novelStudio', {
   deleteStoryArcBeat: (id) => ipcRenderer.invoke('planning:arc-beat-delete', id),
   createPlanningCandidate: (payload) => ipcRenderer.invoke('planning:candidate-create', payload),
   resolvePlanningCandidate: (payload) => ipcRenderer.invoke('planning:candidate-resolve', payload),
+  createStoryChangeSet: (payload) => ipcRenderer.invoke('story-change:create', payload),
+  getStoryChangeSet: (id) => ipcRenderer.invoke('story-change:get', id),
+  listStoryChangeSets: (payload) => ipcRenderer.invoke('story-change:list', payload),
+  updateStoryChangeSelection: (payload) => ipcRenderer.invoke('story-change:selection', payload),
+  applyStoryChangeSet: (payload) => ipcRenderer.invoke('story-change:apply', payload),
+  revertStoryChangeSet: (id) => ipcRenderer.invoke('story-change:revert', id),
+  cancelStoryChangeSet: (id) => ipcRenderer.invoke('story-change:cancel', id),
   loadKnowledgeCenter: (projectId) => ipcRenderer.invoke('knowledge:load', projectId),
   syncKnowledgeSources: (projectId) => ipcRenderer.invoke('knowledge:sync', projectId),
   refreshContinuityChecks: (projectId) => ipcRenderer.invoke('knowledge:checks-refresh', projectId),
@@ -62,6 +69,31 @@ contextBridge.exposeInMainWorld('novelStudio', {
   testModelProfile: (profile) => ipcRenderer.invoke('models:test', profile),
   deleteModelProfile: (id) => ipcRenderer.invoke('models:delete', id),
   updateTaskRoute: (payload) => ipcRenderer.invoke('models:route', payload),
+  getCodexStatus: () => ipcRenderer.invoke('codex:status'),
+  saveCodexSettings: (payload) => ipcRenderer.invoke('codex:settings-save', payload),
+  startCodexAuth: (methodId) => ipcRenderer.invoke('codex:start-auth', methodId),
+  cancelCodexAuth: () => ipcRenderer.invoke('codex:cancel-auth'),
+  testCodex: () => ipcRenderer.invoke('codex:test'),
+  restartCodexAdapter: () => ipcRenderer.invoke('codex:restart-adapter'),
+  openCodexProject: (projectId) => ipcRenderer.invoke('codex:open-project', projectId),
+  getSessionModelApproval: (projectId) => ipcRenderer.invoke('approvals:session-model-policy', { projectId }),
+  setSessionModelApproval: (payload) => ipcRenderer.invoke('approvals:session-model-policy', payload),
+  startAgent: (payload) => ipcRenderer.invoke('agent:start', payload),
+  startInlineAgent: (payload) => ipcRenderer.invoke('agent:start-inline', payload),
+  continueInlineAgent: (payload) => ipcRenderer.invoke('agent:continue-inline', payload),
+  finishInlineAgent: (runId) => ipcRenderer.invoke('agent:finish-inline', runId),
+  listAgentRuns: (payload) => ipcRenderer.invoke('agent:list', payload),
+  getAgentRun: (runId) => ipcRenderer.invoke('agent:get', runId),
+  pauseAgentRun: (runId) => ipcRenderer.invoke('agent:pause', runId),
+  resumeAgentRun: (runId) => ipcRenderer.invoke('agent:resume', runId),
+  cancelAgentRun: (runId) => ipcRenderer.invoke('agent:cancel', runId),
+  confirmAgentCandidate: (payload) => ipcRenderer.invoke('agent:confirm-candidate', payload),
+  rejectAgentCandidate: (payload) => ipcRenderer.invoke('agent:reject-candidate', payload),
+  retryAgentStep: (payload) => ipcRenderer.invoke('agent:retry-step', payload),
+  listAgentEvents: (payload) => ipcRenderer.invoke('agent:events', payload),
+  listApprovals: (payload) => ipcRenderer.invoke('approvals:list', payload),
+  getApproval: (id) => ipcRenderer.invoke('approvals:get', id),
+  resolveApproval: (payload) => ipcRenderer.invoke('approvals:resolve', payload),
   startGeneration: async (payload) => {
     const result = await ipcRenderer.invoke('generation:start', payload)
     if (result?.cancelled) {
@@ -82,10 +114,43 @@ contextBridge.exposeInMainWorld('novelStudio', {
     return result
   },
   cancelGeneration: (taskId) => ipcRenderer.invoke('generation:cancel', taskId),
+  qualityPreflight: (payload) => ipcRenderer.invoke('quality:preflight', payload),
+  listQualityReports: (payload) => ipcRenderer.invoke('quality:list', payload),
+  getQualityReport: (reportId) => ipcRenderer.invoke('quality:get', reportId),
+  getBlindQualityReviewPacket: (reportId) => ipcRenderer.invoke('quality:blind-packet', reportId),
+  reviewQuality: (payload) => ipcRenderer.invoke('quality:review', payload),
+  repairQuality: (payload) => ipcRenderer.invoke('quality:repair', payload),
+  saveHumanReview: (payload) => ipcRenderer.invoke('quality:human-review', payload),
+  startBenchmark: (payload) => ipcRenderer.invoke('benchmark:start', payload),
+  listBenchmarkRuns: (payload) => ipcRenderer.invoke('benchmark:list', payload),
+  getBenchmarkRun: (runId) => ipcRenderer.invoke('benchmark:get', runId),
+  pauseBenchmark: (runId) => ipcRenderer.invoke('benchmark:pause', runId),
+  resumeBenchmark: (runId) => ipcRenderer.invoke('benchmark:resume', runId),
+  cancelBenchmark: (runId) => ipcRenderer.invoke('benchmark:cancel', runId),
+  onBenchmarkEvent: (callback) => {
+    const listener = (_event, payload) => callback(payload)
+    ipcRenderer.on('benchmark:event', listener)
+    return () => ipcRenderer.removeListener('benchmark:event', listener)
+  },
   onGenerationEvent: (callback) => {
     const listener = (_event, payload) => callback(payload)
     ipcRenderer.on('generation:event', listener)
     return () => ipcRenderer.removeListener('generation:event', listener)
+  },
+  onAgentEvent: (callback) => {
+    const listener = (_event, payload) => callback(payload)
+    ipcRenderer.on('agent:event', listener)
+    return () => ipcRenderer.removeListener('agent:event', listener)
+  },
+  onCodexEvent: (callback) => {
+    const listener = (_event, payload) => callback(payload)
+    ipcRenderer.on('codex:event', listener)
+    return () => ipcRenderer.removeListener('codex:event', listener)
+  },
+  onApprovalEvent: (callback) => {
+    const listener = (_event, payload) => callback(payload)
+    ipcRenderer.on('approvals:event', listener)
+    return () => ipcRenderer.removeListener('approvals:event', listener)
   },
   getRuntimeInfo: () => ipcRenderer.invoke('runtime:info'),
   onRuntimeInfo: (callback) => {

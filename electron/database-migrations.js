@@ -3,14 +3,24 @@ import {
   BUILTIN_PROMPT_TEMPLATES,
   LEGACY_PROMPT_TEMPLATE_VERSIONS,
 } from './prompt-templates.js'
+import fs from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { validateCreativePack } from './creative-pack.js'
 
-export const LATEST_SCHEMA_VERSION = 15
+export const LATEST_SCHEMA_VERSION = 20
+
+function bundledOfficialPack() {
+  const filePath = fileURLToPath(new URL('../creative-packs/dist/general-longform-1.1.0.nspack.json', import.meta.url))
+  const pack = JSON.parse(fs.readFileSync(filePath, 'utf8'))
+  validateCreativePack(pack, { appVersion: '0.1.0' })
+  return pack
+}
 
 const migrations = [
   {
     version: 1,
     name: 'initial-workspace-schema',
-    up(database) {
+    up(database, now) {
       database.exec(`
         CREATE TABLE IF NOT EXISTS projects (
           id TEXT PRIMARY KEY,
@@ -380,6 +390,10 @@ const migrations = [
         insertTemplate.run(template.id, template.task, template.name, template.version, createdAt, createdAt)
         insertVersion.run(`${template.id}-version-${template.version}`, template.id, template.version, JSON.stringify(template.content), createdAt)
         insertBinding.run(`binding-global-${template.task}`, template.task, template.id, createdAt, createdAt)
+        database.prepare(`
+          UPDATE prompt_templates SET name = ?, current_version = ?, updated_at = ?
+          WHERE id = ? AND kind = 'built_in'
+        `).run(template.name, template.version, createdAt, template.id)
       }
     },
   },
@@ -489,6 +503,7 @@ const migrations = [
         insertAddon.run(addon.id, addon.name, addon.category, createdAt, createdAt)
         insertAddonVersion.run(`${addon.id}-version-1`, addon.id, addon.content, createdAt)
       }
+
     },
   },
   {
@@ -701,6 +716,653 @@ const migrations = [
       `)
     },
   },
+  {
+    version: 16,
+    name: 'creative-quality-and-structured-scenes',
+    up(database, now) {
+      database.exec(`
+        ALTER TABLE projects ADD COLUMN project_type TEXT NOT NULL DEFAULT 'user'
+          CHECK(project_type IN ('user', 'benchmark'));
+        ALTER TABLE chapters ADD COLUMN scene_plan_json TEXT NOT NULL
+          DEFAULT '{"schemaVersion":1,"summary":"","scenes":[],"legacyNotes":""}';
+        UPDATE chapters
+        SET scene_plan_json = json_object(
+          'schemaVersion', 1,
+          'summary', '',
+          'scenes', json('[]'),
+          'legacyNotes', scene_plan
+        )
+        WHERE TRIM(scene_plan) != '';
+
+        ALTER TABLE generation_records ADD COLUMN generation_intent TEXT NOT NULL DEFAULT 'draft'
+          CHECK(generation_intent IN ('draft', 'continue', 'rewrite', 'repair', 'analysis'));
+        ALTER TABLE generation_records ADD COLUMN parent_generation_id TEXT
+          REFERENCES generation_records(id) ON DELETE SET NULL;
+        CREATE INDEX generation_records_parent_idx ON generation_records(parent_generation_id);
+
+        CREATE TABLE quality_reports (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          chapter_id TEXT,
+          generation_record_id TEXT NOT NULL UNIQUE,
+          reviewer_profile_id TEXT,
+          rubric_version INTEGER NOT NULL DEFAULT 1 CHECK(rubric_version > 0),
+          deterministic_json TEXT NOT NULL DEFAULT '[]',
+          model_review_json TEXT NOT NULL DEFAULT '{}',
+          aggregate_json TEXT NOT NULL DEFAULT '{}',
+          execution TEXT NOT NULL DEFAULT 'mock' CHECK(execution IN ('remote', 'mock')),
+          repaired INTEGER NOT NULL DEFAULT 0 CHECK(repaired IN (0, 1)),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
+          FOREIGN KEY(chapter_id) REFERENCES chapters(id) ON DELETE SET NULL,
+          FOREIGN KEY(generation_record_id) REFERENCES generation_records(id) ON DELETE CASCADE,
+          FOREIGN KEY(reviewer_profile_id) REFERENCES model_profiles(id) ON DELETE SET NULL
+        );
+        CREATE INDEX quality_reports_project_created_idx ON quality_reports(project_id, created_at DESC);
+        CREATE INDEX quality_reports_chapter_created_idx ON quality_reports(chapter_id, created_at DESC);
+
+        CREATE TABLE quality_human_reviews (
+          id TEXT PRIMARY KEY,
+          report_id TEXT NOT NULL,
+          reviewer_label TEXT NOT NULL DEFAULT '人工评审',
+          scores_json TEXT NOT NULL DEFAULT '{}',
+          notes TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY(report_id) REFERENCES quality_reports(id) ON DELETE CASCADE
+        );
+        CREATE INDEX quality_human_reviews_report_idx ON quality_human_reviews(report_id, created_at);
+
+        CREATE TABLE benchmark_runs (
+          id TEXT PRIMARY KEY,
+          fixture_id TEXT NOT NULL,
+          project_id TEXT NOT NULL,
+          generator_profile_id TEXT,
+          reviewer_profile_id TEXT,
+          status TEXT NOT NULL DEFAULT 'pending'
+            CHECK(status IN ('pending', 'running', 'completed', 'cancelled', 'failed')),
+          summary_json TEXT NOT NULL DEFAULT '{}',
+          error TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL,
+          completed_at TEXT NOT NULL DEFAULT '',
+          FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
+          FOREIGN KEY(generator_profile_id) REFERENCES model_profiles(id) ON DELETE SET NULL,
+          FOREIGN KEY(reviewer_profile_id) REFERENCES model_profiles(id) ON DELETE SET NULL
+        );
+        CREATE INDEX benchmark_runs_created_idx ON benchmark_runs(created_at DESC);
+
+        CREATE TABLE benchmark_steps (
+          id TEXT PRIMARY KEY,
+          run_id TEXT NOT NULL,
+          position INTEGER NOT NULL CHECK(position > 0),
+          step_key TEXT NOT NULL,
+          task TEXT NOT NULL,
+          generation_record_id TEXT,
+          quality_report_id TEXT,
+          status TEXT NOT NULL DEFAULT 'pending'
+            CHECK(status IN ('pending', 'running', 'completed', 'cancelled', 'failed')),
+          input_json TEXT NOT NULL DEFAULT '{}',
+          output_json TEXT NOT NULL DEFAULT '{}',
+          error TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL,
+          completed_at TEXT NOT NULL DEFAULT '',
+          UNIQUE(run_id, position),
+          FOREIGN KEY(run_id) REFERENCES benchmark_runs(id) ON DELETE CASCADE,
+          FOREIGN KEY(generation_record_id) REFERENCES generation_records(id) ON DELETE SET NULL,
+          FOREIGN KEY(quality_report_id) REFERENCES quality_reports(id) ON DELETE SET NULL
+        );
+        CREATE INDEX benchmark_steps_run_position_idx ON benchmark_steps(run_id, position);
+      `)
+
+      const createdAt = now()
+      const insertTemplate = database.prepare(`
+        INSERT OR IGNORE INTO prompt_templates (id, task, name, kind, enabled, current_version, created_at, updated_at)
+        VALUES (?, ?, ?, 'built_in', 1, ?, ?, ?)
+      `)
+      const insertVersion = database.prepare(`
+        INSERT OR IGNORE INTO prompt_template_versions (id, template_id, version, content_json, created_at)
+        VALUES (?, ?, ?, ?, ?)
+      `)
+      const insertBinding = database.prepare(`
+        INSERT OR IGNORE INTO prompt_bindings (id, project_id, scope_type, scope_id, task, template_id, enabled, priority, created_at, updated_at)
+        VALUES (?, NULL, 'global', '', ?, ?, 1, 0, ?, ?)
+      `)
+      for (const template of BUILTIN_PROMPT_TEMPLATES) {
+        insertTemplate.run(template.id, template.task, template.name, template.version, createdAt, createdAt)
+        insertVersion.run(`${template.id}-version-${template.version}`, template.id, template.version, JSON.stringify(template.content), createdAt)
+        insertBinding.run(`binding-global-${template.task}`, template.task, template.id, createdAt, createdAt)
+        database.prepare('UPDATE prompt_templates SET name = ?, current_version = ?, updated_at = ? WHERE id = ? AND kind = \'built_in\'')
+          .run(template.name, template.version, createdAt, template.id)
+      }
+
+      const insertAddon = database.prepare(`
+        INSERT OR IGNORE INTO prompt_addons (id, name, category, kind, enabled, current_version, created_at, updated_at)
+        VALUES (?, ?, ?, 'built_in', 1, 1, ?, ?)
+      `)
+      const insertAddonVersion = database.prepare(`
+        INSERT OR IGNORE INTO prompt_addon_versions (id, addon_id, version, content, created_at)
+        VALUES (?, ?, 1, ?, ?)
+      `)
+      for (const addon of BUILTIN_PROMPT_ADDONS) {
+        insertAddon.run(addon.id, addon.name, addon.category, createdAt, createdAt)
+        insertAddonVersion.run(`${addon.id}-version-1`, addon.id, addon.content, createdAt)
+      }
+
+      // Earlier schemas shipped ten broad add-ons that now have more precise
+      // equivalents. Move existing selections to the canonical 32-item library.
+      const addonAliases = {
+        'addon-dialogue': 'addon-dialogue-subtext',
+        'addon-less-exposition': 'addon-no-author-explanation',
+        'addon-conflict': 'addon-goal-obstacle-change',
+        'addon-fast-pace': 'addon-faster-pacing',
+        'addon-suspense': 'addon-fair-suspense',
+        'addon-sensory': 'addon-sensory-selective',
+        'addon-ending-hook': 'addon-ending-action',
+        'addon-continuity': 'addon-preserve-canon',
+        'addon-no-summary-ending': 'addon-ending-action',
+        'addon-natural-language': 'addon-rhythm-variety',
+      }
+      const aliasBindings = database.prepare('SELECT * FROM prompt_addon_bindings WHERE addon_id = ? ORDER BY created_at, rowid')
+      const matchingBinding = database.prepare(`
+        SELECT id FROM prompt_addon_bindings
+        WHERE project_id = ? AND scope_type = ? AND scope_id = ? AND task = ? AND addon_id = ?
+      `)
+      const updateBindingAddon = database.prepare('UPDATE prompt_addon_bindings SET addon_id = ?, updated_at = ? WHERE id = ?')
+      const deleteBinding = database.prepare('DELETE FROM prompt_addon_bindings WHERE id = ?')
+      const deleteAddonVersions = database.prepare('DELETE FROM prompt_addon_versions WHERE addon_id = ?')
+      const deleteAddon = database.prepare("DELETE FROM prompt_addons WHERE id = ? AND kind = 'built_in'")
+      for (const [aliasId, canonicalId] of Object.entries(addonAliases)) {
+        for (const binding of aliasBindings.all(aliasId)) {
+          const duplicate = matchingBinding.get(
+            binding.project_id,
+            binding.scope_type,
+            binding.scope_id,
+            binding.task,
+            canonicalId,
+          )
+          if (duplicate) deleteBinding.run(binding.id)
+          else updateBindingAddon.run(canonicalId, createdAt, binding.id)
+        }
+        deleteAddonVersions.run(aliasId)
+        deleteAddon.run(aliasId)
+      }
+    },
+  },
+  {
+    version: 17,
+    name: 'creative-packs-agents-and-local-bridge',
+    up(database, now) {
+      database.exec(`
+        CREATE TABLE creative_packs (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          language TEXT NOT NULL,
+          license TEXT NOT NULL,
+          source TEXT NOT NULL CHECK(source IN ('official', 'user')),
+          current_version TEXT NOT NULL,
+          enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0, 1)),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE creative_pack_versions (
+          id TEXT PRIMARY KEY,
+          pack_id TEXT NOT NULL,
+          version TEXT NOT NULL,
+          min_app_version TEXT NOT NULL,
+          digest TEXT NOT NULL,
+          manifest_json TEXT NOT NULL,
+          content_json TEXT NOT NULL,
+          installed_at TEXT NOT NULL,
+          UNIQUE(pack_id, version),
+          FOREIGN KEY(pack_id) REFERENCES creative_packs(id) ON DELETE CASCADE
+        );
+        CREATE INDEX creative_pack_versions_pack_idx ON creative_pack_versions(pack_id, installed_at DESC);
+
+        CREATE TABLE project_pack_bindings (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL UNIQUE,
+          pack_id TEXT NOT NULL,
+          pack_version TEXT NOT NULL,
+          bound_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
+          FOREIGN KEY(pack_id, pack_version) REFERENCES creative_pack_versions(pack_id, version) ON DELETE RESTRICT
+        );
+
+        CREATE TABLE agent_runs (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          chapter_id TEXT,
+          workflow_id TEXT NOT NULL,
+          creative_pack_id TEXT NOT NULL,
+          creative_pack_version TEXT NOT NULL,
+          creative_pack_digest TEXT NOT NULL,
+          model_routes_json TEXT NOT NULL DEFAULT '{}',
+          status TEXT NOT NULL DEFAULT 'pending'
+            CHECK(status IN ('pending', 'running', 'waiting_confirmation', 'paused', 'completed', 'cancelled', 'failed')),
+          current_step_id TEXT NOT NULL DEFAULT '',
+          error TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          completed_at TEXT NOT NULL DEFAULT '',
+          FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
+          FOREIGN KEY(chapter_id) REFERENCES chapters(id) ON DELETE SET NULL,
+          FOREIGN KEY(creative_pack_id, creative_pack_version) REFERENCES creative_pack_versions(pack_id, version) ON DELETE RESTRICT
+        );
+        CREATE INDEX agent_runs_project_updated_idx ON agent_runs(project_id, updated_at DESC);
+
+        CREATE TABLE agent_steps (
+          id TEXT PRIMARY KEY,
+          run_id TEXT NOT NULL,
+          step_key TEXT NOT NULL,
+          position INTEGER NOT NULL CHECK(position > 0),
+          action TEXT NOT NULL,
+          task TEXT NOT NULL DEFAULT '',
+          candidate_type TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL DEFAULT 'pending'
+            CHECK(status IN ('pending', 'running', 'waiting_confirmation', 'completed', 'confirmed', 'rejected', 'failed', 'cancelled', 'stale')),
+          attempt_count INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count BETWEEN 0 AND 3),
+          depends_on_json TEXT NOT NULL DEFAULT '[]',
+          input_json TEXT NOT NULL DEFAULT '{}',
+          output_json TEXT NOT NULL DEFAULT '{}',
+          generation_record_id TEXT,
+          quality_report_id TEXT,
+          error TEXT NOT NULL DEFAULT '',
+          started_at TEXT NOT NULL DEFAULT '',
+          completed_at TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE(run_id, step_key),
+          UNIQUE(run_id, position),
+          FOREIGN KEY(run_id) REFERENCES agent_runs(id) ON DELETE CASCADE,
+          FOREIGN KEY(generation_record_id) REFERENCES generation_records(id) ON DELETE SET NULL,
+          FOREIGN KEY(quality_report_id) REFERENCES quality_reports(id) ON DELETE SET NULL
+        );
+        CREATE INDEX agent_steps_run_position_idx ON agent_steps(run_id, position);
+
+        CREATE TABLE agent_candidates (
+          id TEXT PRIMARY KEY,
+          run_id TEXT NOT NULL,
+          step_id TEXT NOT NULL,
+          project_id TEXT NOT NULL,
+          chapter_id TEXT,
+          artifact_type TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'accepted', 'rejected', 'stale')),
+          source_digest TEXT NOT NULL,
+          payload_json TEXT NOT NULL DEFAULT '{}',
+          evidence_json TEXT NOT NULL DEFAULT '{}',
+          override_reason TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL,
+          resolved_at TEXT NOT NULL DEFAULT '',
+          FOREIGN KEY(run_id) REFERENCES agent_runs(id) ON DELETE CASCADE,
+          FOREIGN KEY(step_id) REFERENCES agent_steps(id) ON DELETE CASCADE,
+          FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
+          FOREIGN KEY(chapter_id) REFERENCES chapters(id) ON DELETE SET NULL
+        );
+        CREATE INDEX agent_candidates_run_status_idx ON agent_candidates(run_id, status, created_at);
+
+        CREATE TABLE bridge_action_requests (
+          id TEXT PRIMARY KEY,
+          session_id TEXT NOT NULL,
+          project_id TEXT NOT NULL,
+          action_type TEXT NOT NULL CHECK(action_type IN ('model_call', 'project_write', 'agent_start')),
+          status TEXT NOT NULL DEFAULT 'pending'
+            CHECK(status IN ('pending', 'approved', 'rejected', 'expired', 'completed', 'failed')),
+          permission TEXT NOT NULL,
+          payload_json TEXT NOT NULL DEFAULT '{}',
+          result_json TEXT NOT NULL DEFAULT '{}',
+          error TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL,
+          resolved_at TEXT NOT NULL DEFAULT '',
+          expires_at TEXT NOT NULL,
+          FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+        );
+        CREATE INDEX bridge_action_requests_project_status_idx ON bridge_action_requests(project_id, status, created_at DESC);
+      `)
+
+      const installedAt = now()
+      const pack = bundledOfficialPack()
+      const manifest = pack.manifest
+      database.prepare(`
+        INSERT INTO creative_packs (id, name, language, license, source, current_version, enabled, created_at, updated_at)
+        VALUES (?, ?, ?, ?, 'official', ?, 1, ?, ?)
+      `).run(manifest.id, manifest.name, manifest.language, manifest.license, manifest.version, installedAt, installedAt)
+      database.prepare(`
+        INSERT INTO creative_pack_versions (id, pack_id, version, min_app_version, digest, manifest_json, content_json, installed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(`${manifest.id}@${manifest.version}`, manifest.id, manifest.version, manifest.minAppVersion,
+        manifest.integrity.sha256, JSON.stringify(manifest), JSON.stringify(pack), installedAt)
+      database.prepare(`
+        INSERT INTO project_pack_bindings (id, project_id, pack_id, pack_version, bound_at, updated_at)
+        SELECT 'pack-binding-' || id, id, ?, ?, ?, ? FROM projects WHERE project_type = 'user'
+      `).run(manifest.id, manifest.version, installedAt, installedAt)
+    },
+  },
+  {
+    version: 18,
+    name: 'codex-acp-sessions-events-and-approvals',
+    up(database, now) {
+      database.exec(`
+        CREATE TABLE agent_runs_v18 (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          chapter_id TEXT,
+          workflow_id TEXT NOT NULL,
+          creative_pack_id TEXT NOT NULL,
+          creative_pack_version TEXT NOT NULL,
+          creative_pack_digest TEXT NOT NULL,
+          model_routes_json TEXT NOT NULL DEFAULT '{}',
+          execution_mode TEXT NOT NULL DEFAULT 'app_model'
+            CHECK(execution_mode IN ('app_model', 'codex')),
+          actual_backend TEXT NOT NULL DEFAULT '',
+          fallback_reason TEXT NOT NULL DEFAULT '',
+          session_recreated INTEGER NOT NULL DEFAULT 0 CHECK(session_recreated IN (0, 1)),
+          status TEXT NOT NULL DEFAULT 'pending'
+            CHECK(status IN ('pending', 'waiting_approval', 'running', 'waiting_confirmation', 'paused', 'completed', 'cancelled', 'failed')),
+          current_step_id TEXT NOT NULL DEFAULT '',
+          error TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          completed_at TEXT NOT NULL DEFAULT '',
+          FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
+          FOREIGN KEY(chapter_id) REFERENCES chapters(id) ON DELETE SET NULL,
+          FOREIGN KEY(creative_pack_id, creative_pack_version) REFERENCES creative_pack_versions(pack_id, version) ON DELETE RESTRICT
+        );
+        INSERT INTO agent_runs_v18 (
+          id, project_id, chapter_id, workflow_id, creative_pack_id, creative_pack_version,
+          creative_pack_digest, model_routes_json, execution_mode, actual_backend,
+          fallback_reason, session_recreated, status, current_step_id, error,
+          created_at, updated_at, completed_at
+        )
+        SELECT id, project_id, chapter_id, workflow_id, creative_pack_id, creative_pack_version,
+          creative_pack_digest, model_routes_json, 'app_model', '', '', 0, status,
+          current_step_id, error, created_at, updated_at, completed_at
+        FROM agent_runs;
+
+        CREATE TABLE agent_steps_v18 (
+          id TEXT PRIMARY KEY,
+          run_id TEXT NOT NULL,
+          step_key TEXT NOT NULL,
+          position INTEGER NOT NULL CHECK(position > 0),
+          action TEXT NOT NULL,
+          task TEXT NOT NULL DEFAULT '',
+          candidate_type TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL DEFAULT 'pending'
+            CHECK(status IN ('pending', 'waiting_approval', 'running', 'interrupted', 'waiting_confirmation', 'confirmed', 'rejected', 'completed', 'cancelled', 'stale', 'failed')),
+          attempt_count INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count BETWEEN 0 AND 3),
+          depends_on_json TEXT NOT NULL DEFAULT '[]',
+          input_json TEXT NOT NULL DEFAULT '{}',
+          output_json TEXT NOT NULL DEFAULT '{}',
+          generation_record_id TEXT,
+          quality_report_id TEXT,
+          approval_id TEXT NOT NULL DEFAULT '',
+          output_started INTEGER NOT NULL DEFAULT 0 CHECK(output_started IN (0, 1)),
+          interrupted_at TEXT NOT NULL DEFAULT '',
+          execution_backend TEXT NOT NULL DEFAULT '',
+          error TEXT NOT NULL DEFAULT '',
+          started_at TEXT NOT NULL DEFAULT '',
+          completed_at TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE(run_id, step_key),
+          UNIQUE(run_id, position),
+          FOREIGN KEY(run_id) REFERENCES agent_runs_v18(id) ON DELETE CASCADE,
+          FOREIGN KEY(generation_record_id) REFERENCES generation_records(id) ON DELETE SET NULL,
+          FOREIGN KEY(quality_report_id) REFERENCES quality_reports(id) ON DELETE SET NULL
+        );
+        INSERT INTO agent_steps_v18 (
+          id, run_id, step_key, position, action, task, candidate_type, status,
+          attempt_count, depends_on_json, input_json, output_json, generation_record_id,
+          quality_report_id, approval_id, output_started, interrupted_at,
+          execution_backend, error, started_at, completed_at, created_at, updated_at
+        )
+        SELECT id, run_id, step_key, position, action, task, candidate_type, status,
+          attempt_count, depends_on_json, input_json, output_json, generation_record_id,
+          quality_report_id, '', 0, '', '', error, started_at, completed_at,
+          created_at, updated_at
+        FROM agent_steps;
+
+        CREATE TABLE agent_candidates_v18 (
+          id TEXT PRIMARY KEY,
+          run_id TEXT NOT NULL,
+          step_id TEXT NOT NULL,
+          project_id TEXT NOT NULL,
+          chapter_id TEXT,
+          artifact_type TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'accepted', 'rejected', 'stale', 'cancelled')),
+          source_digest TEXT NOT NULL,
+          payload_json TEXT NOT NULL DEFAULT '{}',
+          evidence_json TEXT NOT NULL DEFAULT '{}',
+          override_reason TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL,
+          resolved_at TEXT NOT NULL DEFAULT '',
+          FOREIGN KEY(run_id) REFERENCES agent_runs_v18(id) ON DELETE CASCADE,
+          FOREIGN KEY(step_id) REFERENCES agent_steps_v18(id) ON DELETE CASCADE,
+          FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
+          FOREIGN KEY(chapter_id) REFERENCES chapters(id) ON DELETE SET NULL
+        );
+        INSERT INTO agent_candidates_v18 SELECT * FROM agent_candidates;
+
+        CREATE TABLE bridge_action_requests_v18 (
+          id TEXT PRIMARY KEY,
+          session_id TEXT NOT NULL DEFAULT '',
+          project_id TEXT NOT NULL,
+          origin TEXT NOT NULL DEFAULT 'bridge' CHECK(origin IN ('bridge', 'codex_acp', 'agent')),
+          agent_run_id TEXT,
+          agent_step_id TEXT,
+          external_request_id TEXT NOT NULL DEFAULT '',
+          action_type TEXT NOT NULL
+            CHECK(action_type IN ('model_call', 'project_write', 'agent_start', 'command', 'file', 'web', 'mcp', 'subagent')),
+          status TEXT NOT NULL DEFAULT 'pending'
+            CHECK(status IN ('pending', 'approved', 'rejected', 'expired', 'completed', 'failed', 'cancelled')),
+          permission TEXT NOT NULL,
+          payload_json TEXT NOT NULL DEFAULT '{}',
+          result_json TEXT NOT NULL DEFAULT '{}',
+          error TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL,
+          resolved_at TEXT NOT NULL DEFAULT '',
+          expires_at TEXT NOT NULL,
+          FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
+          FOREIGN KEY(agent_run_id) REFERENCES agent_runs_v18(id) ON DELETE CASCADE,
+          FOREIGN KEY(agent_step_id) REFERENCES agent_steps_v18(id) ON DELETE CASCADE
+        );
+        INSERT INTO bridge_action_requests_v18 (
+          id, session_id, project_id, origin, action_type, status, permission,
+          payload_json, result_json, error, created_at, resolved_at, expires_at
+        )
+        SELECT id, session_id, project_id, 'bridge', action_type, status, permission,
+          payload_json, result_json, error, created_at, resolved_at, expires_at
+        FROM bridge_action_requests;
+
+        DROP TABLE bridge_action_requests;
+        DROP TABLE agent_candidates;
+        DROP TABLE agent_steps;
+        DROP TABLE agent_runs;
+        ALTER TABLE agent_runs_v18 RENAME TO agent_runs;
+        ALTER TABLE agent_steps_v18 RENAME TO agent_steps;
+        ALTER TABLE agent_candidates_v18 RENAME TO agent_candidates;
+        ALTER TABLE bridge_action_requests_v18 RENAME TO bridge_action_requests;
+
+        CREATE INDEX agent_runs_project_updated_idx ON agent_runs(project_id, updated_at DESC);
+        CREATE INDEX agent_steps_run_position_idx ON agent_steps(run_id, position);
+        CREATE INDEX agent_candidates_run_status_idx ON agent_candidates(run_id, status, created_at);
+        CREATE INDEX bridge_action_requests_project_status_idx ON bridge_action_requests(project_id, status, created_at DESC);
+        CREATE INDEX bridge_action_requests_run_status_idx ON bridge_action_requests(agent_run_id, status, created_at DESC);
+
+        CREATE TABLE agent_provider_settings (
+          id TEXT PRIMARY KEY,
+          enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0, 1)),
+          preferred_backend TEXT NOT NULL DEFAULT 'codex_acp' CHECK(preferred_backend IN ('codex_acp', 'codex_exec')),
+          model TEXT NOT NULL DEFAULT '',
+          reasoning_effort TEXT NOT NULL DEFAULT 'high',
+          fast_mode INTEGER NOT NULL DEFAULT 0 CHECK(fast_mode IN (0, 1)),
+          adapter_version TEXT NOT NULL DEFAULT '1.6.2',
+          auth_method TEXT NOT NULL DEFAULT 'chatgpt' CHECK(auth_method IN ('chatgpt', 'environment')),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE agent_sessions (
+          id TEXT PRIMARY KEY,
+          agent_run_id TEXT NOT NULL UNIQUE,
+          backend TEXT NOT NULL CHECK(backend IN ('codex_acp', 'codex_exec')),
+          session_id TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL DEFAULT 'initializing'
+            CHECK(status IN ('initializing', 'active', 'interrupted', 'closed', 'failed', 'recreated')),
+          protocol_version TEXT NOT NULL DEFAULT '',
+          adapter_version TEXT NOT NULL DEFAULT '',
+          capabilities_json TEXT NOT NULL DEFAULT '{}',
+          auth_method TEXT NOT NULL DEFAULT '',
+          recovery_strategy TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          closed_at TEXT NOT NULL DEFAULT '',
+          FOREIGN KEY(agent_run_id) REFERENCES agent_runs(id) ON DELETE CASCADE
+        );
+        CREATE INDEX agent_sessions_status_idx ON agent_sessions(status, updated_at DESC);
+
+        CREATE TABLE agent_events (
+          id TEXT PRIMARY KEY,
+          agent_run_id TEXT NOT NULL,
+          agent_step_id TEXT,
+          sequence INTEGER NOT NULL CHECK(sequence > 0),
+          event_type TEXT NOT NULL,
+          summary TEXT NOT NULL DEFAULT '',
+          payload_json TEXT NOT NULL DEFAULT '{}',
+          byte_size INTEGER NOT NULL DEFAULT 0 CHECK(byte_size >= 0),
+          created_at TEXT NOT NULL,
+          UNIQUE(agent_run_id, sequence),
+          FOREIGN KEY(agent_run_id) REFERENCES agent_runs(id) ON DELETE CASCADE,
+          FOREIGN KEY(agent_step_id) REFERENCES agent_steps(id) ON DELETE CASCADE
+        );
+        CREATE INDEX agent_events_run_sequence_idx ON agent_events(agent_run_id, sequence);
+
+        ALTER TABLE generation_records ADD COLUMN execution_backend TEXT NOT NULL DEFAULT '';
+        ALTER TABLE generation_records ADD COLUMN agent_run_id TEXT REFERENCES agent_runs(id) ON DELETE SET NULL;
+        ALTER TABLE generation_records ADD COLUMN agent_step_id TEXT REFERENCES agent_steps(id) ON DELETE SET NULL;
+        CREATE INDEX generation_records_agent_run_idx ON generation_records(agent_run_id, created_at DESC);
+      `)
+
+      const createdAt = now()
+      database.prepare(`
+        INSERT INTO agent_provider_settings (
+          id, enabled, preferred_backend, model, reasoning_effort, fast_mode,
+          adapter_version, auth_method, created_at, updated_at
+        ) VALUES ('codex', 1, 'codex_acp', '', 'high', 0, '1.6.2', 'chatgpt', ?, ?)
+      `).run(createdAt, createdAt)
+    },
+  },
+  {
+    version: 19,
+    name: 'project-default-creative-execution-mode',
+    up(database) {
+      database.exec(`
+        ALTER TABLE projects ADD COLUMN default_execution_mode TEXT NOT NULL DEFAULT 'app_model'
+          CHECK(default_execution_mode IN ('app_model', 'codex'));
+        CREATE INDEX projects_execution_mode_idx ON projects(project_type, default_execution_mode, updated_at DESC);
+      `)
+    },
+  },
+  {
+    version: 20,
+    name: 'story-change-sets-and-atomic-rollback',
+    up(database, now) {
+      database.exec(`
+        CREATE TABLE story_change_sets (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          agent_run_id TEXT,
+          root_target_key TEXT NOT NULL,
+          root_label TEXT NOT NULL DEFAULT '',
+          root_before_json TEXT NOT NULL DEFAULT 'null',
+          root_after_json TEXT NOT NULL DEFAULT 'null',
+          instruction TEXT NOT NULL DEFAULT '',
+          scope_json TEXT NOT NULL DEFAULT '{}',
+          source_digest TEXT NOT NULL,
+          summary TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL DEFAULT 'draft'
+            CHECK(status IN ('draft', 'analyzing', 'waiting_confirmation', 'applied', 'reverted', 'cancelled', 'failed', 'stale')),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          applied_at TEXT NOT NULL DEFAULT '',
+          reverted_at TEXT NOT NULL DEFAULT '',
+          FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
+          FOREIGN KEY(agent_run_id) REFERENCES agent_runs(id) ON DELETE SET NULL
+        );
+        CREATE INDEX story_change_sets_project_status_idx
+          ON story_change_sets(project_id, status, updated_at DESC);
+        CREATE INDEX story_change_sets_agent_run_idx ON story_change_sets(agent_run_id);
+
+        CREATE TABLE story_change_items (
+          id TEXT PRIMARY KEY,
+          change_set_id TEXT NOT NULL,
+          target_key TEXT NOT NULL,
+          target_kind TEXT NOT NULL,
+          target_id TEXT NOT NULL DEFAULT '',
+          field_key TEXT NOT NULL DEFAULT '',
+          field_label TEXT NOT NULL DEFAULT '',
+          before_json TEXT NOT NULL DEFAULT 'null',
+          after_json TEXT NOT NULL DEFAULT 'null',
+          impact_level TEXT NOT NULL DEFAULT 'suggested'
+            CHECK(impact_level IN ('required', 'suggested', 'review')),
+          reason TEXT NOT NULL DEFAULT '',
+          evidence_json TEXT NOT NULL DEFAULT '[]',
+          selected INTEGER NOT NULL DEFAULT 1 CHECK(selected IN (0, 1)),
+          apply_order INTEGER NOT NULL DEFAULT 0,
+          status TEXT NOT NULL DEFAULT 'proposed'
+            CHECK(status IN ('proposed', 'applied', 'skipped', 'stale', 'reverted')),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE(change_set_id, target_key),
+          FOREIGN KEY(change_set_id) REFERENCES story_change_sets(id) ON DELETE CASCADE
+        );
+        CREATE INDEX story_change_items_set_order_idx
+          ON story_change_items(change_set_id, selected DESC, apply_order, created_at);
+
+        CREATE TABLE story_change_snapshots (
+          id TEXT PRIMARY KEY,
+          change_set_id TEXT NOT NULL,
+          item_id TEXT NOT NULL,
+          target_key TEXT NOT NULL,
+          value_json TEXT NOT NULL DEFAULT 'null',
+          revision_id TEXT,
+          created_at TEXT NOT NULL,
+          UNIQUE(change_set_id, target_key),
+          FOREIGN KEY(change_set_id) REFERENCES story_change_sets(id) ON DELETE CASCADE,
+          FOREIGN KEY(item_id) REFERENCES story_change_items(id) ON DELETE CASCADE,
+          FOREIGN KEY(revision_id) REFERENCES revisions(id) ON DELETE SET NULL
+        );
+        CREATE INDEX story_change_snapshots_set_idx ON story_change_snapshots(change_set_id, created_at);
+      `)
+      const installedAt = now()
+      const pack = bundledOfficialPack()
+      const manifest = pack.manifest
+      database.prepare(`
+        INSERT INTO creative_packs (id, name, language, license, source, current_version, enabled, created_at, updated_at)
+        VALUES (?, ?, ?, ?, 'official', ?, 1, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET name = excluded.name, language = excluded.language,
+          license = excluded.license, current_version = excluded.current_version, enabled = 1,
+          updated_at = excluded.updated_at
+      `).run(manifest.id, manifest.name, manifest.language, manifest.license, manifest.version, installedAt, installedAt)
+      database.prepare(`
+        INSERT INTO creative_pack_versions (
+          id, pack_id, version, min_app_version, digest, manifest_json, content_json, installed_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(pack_id, version) DO UPDATE SET digest = excluded.digest,
+          manifest_json = excluded.manifest_json, content_json = excluded.content_json
+      `).run(
+        `${manifest.id}@${manifest.version}`, manifest.id, manifest.version, manifest.minAppVersion,
+        manifest.integrity.sha256, JSON.stringify(manifest), JSON.stringify(pack), installedAt,
+      )
+      database.prepare(`
+        UPDATE project_pack_bindings
+        SET pack_version = ?, updated_at = ?
+        WHERE pack_id = ?
+      `).run(manifest.version, installedAt, manifest.id)
+    },
+  },
 ]
 
 function readForeignKeyCheck(database) {
@@ -712,7 +1374,7 @@ export function getSchemaVersion(database) {
   return Number(row?.version || 0)
 }
 
-export function runMigrations(database, { now = () => new Date().toISOString() } = {}) {
+export function runMigrations(database, { now = () => new Date().toISOString(), targetVersion = LATEST_SCHEMA_VERSION } = {}) {
   database.exec(`
     PRAGMA journal_mode = WAL;
     PRAGMA busy_timeout = 5000;
@@ -728,6 +1390,7 @@ export function runMigrations(database, { now = () => new Date().toISOString() }
     const applied = new Set(database.prepare('SELECT version FROM schema_migrations').all().map((row) => Number(row.version)))
     const recordMigration = database.prepare('INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)')
     for (const migration of migrations) {
+      if (migration.version > targetVersion) continue
       if (applied.has(migration.version)) continue
       database.exec('BEGIN IMMEDIATE')
       try {
@@ -743,10 +1406,36 @@ export function runMigrations(database, { now = () => new Date().toISOString() }
     database.exec('PRAGMA foreign_keys = ON')
   }
 
+  if (getSchemaVersion(database) >= LATEST_SCHEMA_VERSION) {
+    syncBuiltInPromptTemplates(database, now)
+  }
+
   const violations = readForeignKeyCheck(database)
   if (violations.length) {
     const sample = violations.slice(0, 5).map((row) => `${row.table}:${row.rowid}`).join(', ')
     throw new Error(`数据库外键检查失败，共 ${violations.length} 项：${sample}`)
   }
   return getSchemaVersion(database)
+}
+
+export function syncBuiltInPromptTemplates(database, now = () => new Date().toISOString()) {
+  const createdAt = now()
+  const insertTemplate = database.prepare(`
+    INSERT OR IGNORE INTO prompt_templates (id, task, name, kind, enabled, current_version, created_at, updated_at)
+    VALUES (?, ?, ?, 'built_in', 1, ?, ?, ?)
+  `)
+  const insertVersion = database.prepare(`
+    INSERT OR IGNORE INTO prompt_template_versions (id, template_id, version, content_json, created_at)
+    VALUES (?, ?, ?, ?, ?)
+  `)
+  const updateTemplate = database.prepare(`
+    UPDATE prompt_templates
+    SET name = ?, current_version = ?, updated_at = ?
+    WHERE id = ? AND kind = 'built_in' AND current_version <= ?
+  `)
+  for (const template of BUILTIN_PROMPT_TEMPLATES) {
+    insertTemplate.run(template.id, template.task, template.name, template.version, createdAt, createdAt)
+    insertVersion.run(`${template.id}-version-${template.version}`, template.id, template.version, JSON.stringify(template.content), createdAt)
+    updateTemplate.run(template.name, template.version, createdAt, template.id, template.version)
+  }
 }

@@ -23,7 +23,10 @@ function seedWorkspace(database) {
     INSERT INTO projects (id, title, genre, idea, style, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?)
   `).run('project-1', '测试项目', '都市', '想法', '', now, now)
-  database.prepare('INSERT INTO chapters VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run('chapter-1', 'project-1', 1, '第一章', 'draft', '{}', '', '正文', now)
+  database.prepare(`
+    INSERT INTO chapters (id, project_id, chapter_no, title, status, card_json, scene_plan, manuscript, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run('chapter-1', 'project-1', 1, '第一章', 'draft', '{}', '', '正文', now)
   database.prepare('INSERT INTO revisions VALUES (?, ?, ?, ?, ?)').run('revision-1', 'chapter-1', '旧正文', 'manual', now)
   database.prepare(`
     INSERT INTO model_profiles (id, provider, name, base_url, model, api_key_cipher, enabled, created_at, updated_at)
@@ -44,6 +47,7 @@ test('fresh database migrates to the latest schema with foreign keys enabled', (
     assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'app_settings'").get())
     assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'projects_archived_at_idx'").get())
     assert.ok(database.prepare("PRAGMA table_info(projects)").all().some((column) => column.name === 'archived_at'))
+    assert.ok(database.prepare("PRAGMA table_info(projects)").all().some((column) => column.name === 'default_execution_mode'))
     assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'planning_documents'").get())
     assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'planning_entities'").get())
     assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'planning_candidates'").get())
@@ -54,6 +58,9 @@ test('fresh database migrates to the latest schema with foreign keys enabled', (
     assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'character_relationships'").get())
     assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'story_arcs'").get())
     assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'story_arc_beats'").get())
+    assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'story_change_sets'").get())
+    assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'story_change_items'").get())
+    assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'story_change_snapshots'").get())
     assert.match(database.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'knowledge_items'").get().sql, /'ai'/)
     assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'context_profiles'").get())
     assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'chapter_memories'").get())
@@ -65,12 +72,15 @@ test('fresh database migrates to the latest schema with foreign keys enabled', (
     assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'prompt_addons'").get())
     assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'prompt_addon_versions'").get())
     assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'prompt_addon_bindings'").get())
-    assert.equal(database.prepare("SELECT COUNT(*) AS count FROM prompt_templates WHERE kind = 'built_in'").get().count, 8)
-    assert.equal(database.prepare("SELECT COUNT(*) AS count FROM prompt_bindings WHERE scope_type = 'global'").get().count, 8)
-    assert.equal(database.prepare("SELECT COUNT(*) AS count FROM prompt_addons WHERE kind = 'built_in'").get().count, 17)
-    assert.equal(database.prepare("SELECT current_version FROM prompt_templates WHERE id = 'builtin-chapter-card-v1'").get().current_version, 2)
-    assert.equal(database.prepare("SELECT current_version FROM prompt_templates WHERE id = 'builtin-scene-plan-v1'").get().current_version, 2)
-    assert.equal(database.prepare("SELECT current_version FROM prompt_templates WHERE id = 'builtin-chapter-v1'").get().current_version, 2)
+    assert.equal(database.prepare("SELECT COUNT(*) AS count FROM prompt_templates WHERE kind = 'built_in'").get().count, 9)
+    assert.equal(database.prepare("SELECT COUNT(*) AS count FROM prompt_bindings WHERE scope_type = 'global'").get().count, 9)
+    assert.equal(database.prepare("SELECT COUNT(*) AS count FROM prompt_addons WHERE kind = 'built_in'").get().count, 32)
+    assert.equal(database.prepare("SELECT current_version FROM prompt_templates WHERE id = 'builtin-chapter-card-v1'").get().current_version, 9)
+    assert.equal(database.prepare("SELECT current_version FROM prompt_templates WHERE id = 'builtin-scene-plan-v1'").get().current_version, 11)
+    assert.equal(database.prepare("SELECT current_version FROM prompt_templates WHERE id = 'builtin-chapter-v1'").get().current_version, 18)
+    assert.equal(database.prepare("SELECT current_version FROM prompt_templates WHERE id = 'builtin-chapter-state-extract-v1'").get().current_version, 6)
+    assert.equal(database.prepare("SELECT current_version FROM prompt_templates WHERE id = 'builtin-continuity-audit-v1'").get().current_version, 2)
+    assert.equal(database.prepare("SELECT current_version FROM prompt_templates WHERE id = 'builtin-quality-review-v1'").get().current_version, 6)
     assert.equal(database.prepare("SELECT COUNT(*) AS count FROM prompt_template_versions WHERE template_id = 'builtin-chapter-v1'").get().count, 2)
     assert.ok(database.prepare('PRAGMA table_info(model_profiles)').all().some((column) => column.name === 'settings_json'))
     assert.ok(database.prepare('PRAGMA table_info(model_profiles)').all().some((column) => column.name === 'capabilities_json'))
@@ -150,8 +160,8 @@ test('v10 upgrades existing prompt records while preserving v1 template versions
     runMigrations(database, { now: () => '2026-08-23T01:00:00.000Z' })
     assert.equal(getSchemaVersion(database), LATEST_SCHEMA_VERSION)
     assert.equal(database.prepare("SELECT COUNT(*) AS count FROM prompt_template_versions WHERE template_id = 'builtin-chapter-v1'").get().count, 2)
-    assert.equal(database.prepare("SELECT current_version FROM prompt_templates WHERE id = 'builtin-chapter-v1'").get().current_version, 2)
-    assert.equal(database.prepare("SELECT COUNT(*) AS count FROM prompt_addons WHERE kind = 'built_in'").get().count, 17)
+    assert.equal(database.prepare("SELECT current_version FROM prompt_templates WHERE id = 'builtin-chapter-v1'").get().current_version, 18)
+    assert.equal(database.prepare("SELECT COUNT(*) AS count FROM prompt_addons WHERE kind = 'built_in'").get().count, 32)
     assert.deepEqual(database.prepare('PRAGMA foreign_key_check').all(), [])
   } finally {
     database.close()
@@ -183,11 +193,159 @@ test('foreign keys reject orphan chapters and routed model profiles remain prote
     runMigrations(database)
     seedWorkspace(database)
     assert.throws(() => {
-      database.prepare('INSERT INTO chapters VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(
+      database.prepare(`
+        INSERT INTO chapters (id, project_id, chapter_no, title, status, card_json, scene_plan, manuscript, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
         'orphan', 'missing-project', 2, '孤章', 'draft', '{}', '', '', '2026-08-20T00:00:00.000Z',
       )
     }, /FOREIGN KEY constraint failed/)
     assert.throws(() => database.prepare('DELETE FROM model_profiles WHERE id = ?').run('model-1'), /FOREIGN KEY constraint failed/)
+  } finally {
+    database.close()
+  }
+})
+
+test('v15 to v16 preserves legacy scene notes and remaps old prompt add-on bindings', () => {
+  const database = createDatabase()
+  try {
+    const now = '2026-08-24T12:00:00.000Z'
+    runMigrations(database, { now: () => now, targetVersion: 15 })
+    database.prepare('INSERT INTO projects (id, title, genre, idea, style, created_at, updated_at, archived_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .run('project-v16', '旧项目', '悬疑', '旧场景计划', '', now, now, '')
+    database.prepare(`INSERT INTO chapters
+      (id, project_id, chapter_no, title, status, card_json, scene_plan, manuscript, updated_at)
+      VALUES (?, ?, 1, '第一章', 'draft', '{}', ?, '', ?)`)
+      .run('chapter-v16', 'project-v16', '场景一：雨夜进入医院。', now)
+    database.prepare("INSERT INTO prompt_addons (id, name, category, kind, enabled, current_version, created_at, updated_at) VALUES ('addon-dialogue', '旧对白', '旧版', 'built_in', 1, 1, ?, ?)")
+      .run(now, now)
+    database.prepare("INSERT INTO prompt_addon_versions (id, addon_id, version, content, created_at) VALUES ('addon-dialogue-version-1', 'addon-dialogue', 1, '旧要求', ?)").run(now)
+    database.prepare(`INSERT INTO prompt_addon_bindings
+      (id, project_id, scope_type, scope_id, task, addon_id, enabled, priority, created_at, updated_at)
+      VALUES ('legacy-binding', 'project-v16', 'project', 'project-v16', 'chapter', 'addon-dialogue', 1, 1, ?, ?)`)
+      .run(now, now)
+
+    runMigrations(database, { now: () => '2026-08-24T13:00:00.000Z' })
+    const scenePlan = JSON.parse(database.prepare('SELECT scene_plan_json FROM chapters WHERE id = ?').get('chapter-v16').scene_plan_json)
+    assert.equal(scenePlan.legacyNotes, '场景一：雨夜进入医院。')
+    assert.equal(database.prepare('SELECT project_type FROM projects WHERE id = ?').get('project-v16').project_type, 'user')
+    assert.equal(database.prepare('SELECT addon_id FROM prompt_addon_bindings WHERE id = ?').get('legacy-binding').addon_id, 'addon-dialogue-subtext')
+    assert.equal(database.prepare("SELECT COUNT(*) AS count FROM prompt_addons WHERE id = 'addon-dialogue'").get().count, 0)
+    assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'quality_reports'").get())
+    assert.deepEqual(database.prepare('PRAGMA foreign_key_check').all(), [])
+  } finally {
+    database.close()
+  }
+})
+
+test('v17 to v18 preserves agent data and adds Codex session lineage', () => {
+  const database = createDatabase()
+  try {
+    const now = '2026-08-25T12:00:00.000Z'
+    runMigrations(database, { now: () => now, targetVersion: 16 })
+    database.prepare('INSERT INTO projects (id, title, genre, idea, style, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run('project-v18', 'ACP 迁移', '悬疑', '验证会话恢复', '', now, now)
+    database.prepare(`INSERT INTO chapters
+      (id, project_id, chapter_no, title, status, card_json, scene_plan, manuscript, updated_at)
+      VALUES ('chapter-v18', 'project-v18', 1, '第一章', 'draft', '{}', '', '旧正文', ?)`)
+      .run(now)
+    runMigrations(database, { now: () => now, targetVersion: 17 })
+    const pack = database.prepare(`
+      SELECT binding.pack_id, binding.pack_version, version.digest
+      FROM project_pack_bindings binding
+      JOIN creative_pack_versions version
+        ON version.pack_id = binding.pack_id AND version.version = binding.pack_version
+      WHERE binding.project_id = ?
+    `)
+      .get('project-v18')
+    database.prepare(`INSERT INTO agent_runs (
+      id, project_id, chapter_id, workflow_id, creative_pack_id, creative_pack_version,
+      creative_pack_digest, model_routes_json, status, created_at, updated_at
+    ) VALUES ('run-v18', 'project-v18', 'chapter-v18', 'chapter-creation', ?, ?, ?, '{}', 'running', ?, ?)`)
+      .run(pack.pack_id, pack.pack_version, pack.digest, now, now)
+    database.prepare(`INSERT INTO agent_steps (
+      id, run_id, step_key, position, action, task, candidate_type, status,
+      depends_on_json, input_json, output_json, created_at, updated_at
+    ) VALUES ('step-v18', 'run-v18', 'chapter-card', 1, 'generate', 'chapter_card',
+      'chapter_card', 'running', '[]', '{}', '{}', ?, ?)`)
+      .run(now, now)
+    database.prepare(`INSERT INTO agent_candidates (
+      id, run_id, step_id, project_id, chapter_id, artifact_type, status,
+      source_digest, payload_json, evidence_json, created_at
+    ) VALUES ('candidate-v18', 'run-v18', 'step-v18', 'project-v18', 'chapter-v18',
+      'chapter_card', 'pending', 'digest', '{}', '{}', ?)`)
+      .run(now)
+
+    runMigrations(database, { now: () => '2026-08-25T12:05:00.000Z', targetVersion: 18 })
+
+    assert.equal(getSchemaVersion(database), 18)
+    assert.equal(database.prepare('SELECT execution_mode FROM agent_runs WHERE id = ?').get('run-v18').execution_mode, 'app_model')
+    assert.equal(database.prepare('SELECT status FROM agent_steps WHERE id = ?').get('step-v18').status, 'running')
+    assert.equal(database.prepare('SELECT status FROM agent_candidates WHERE id = ?').get('candidate-v18').status, 'pending')
+    assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'agent_sessions'").get())
+    assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'agent_events'").get())
+    assert.ok(database.prepare('PRAGMA table_info(generation_records)').all().some((column) => column.name === 'agent_run_id'))
+    assert.deepEqual(database.prepare('PRAGMA foreign_key_check').all(), [])
+
+    database.prepare('DELETE FROM projects WHERE id = ?').run('project-v18')
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM agent_runs').get().count, 0)
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM agent_steps').get().count, 0)
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM agent_candidates').get().count, 0)
+  } finally {
+    database.close()
+  }
+})
+
+test('v18 to v19 preserves projects and defaults creative execution to app models', () => {
+  const database = createDatabase()
+  try {
+    const now = '2026-08-25T15:00:00.000Z'
+    runMigrations(database, { now: () => now, targetVersion: 18 })
+    database.prepare('INSERT INTO projects (id, title, genre, idea, style, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run('project-v19', '就地创作', '悬疑', '任何位置调用 Codex', '', now, now)
+
+    runMigrations(database, { now: () => now })
+
+    assert.equal(database.prepare('SELECT default_execution_mode FROM projects WHERE id = ?').get('project-v19').default_execution_mode, 'app_model')
+    database.prepare("UPDATE projects SET default_execution_mode = 'codex' WHERE id = 'project-v19'").run()
+    assert.equal(database.prepare('SELECT default_execution_mode FROM projects WHERE id = ?').get('project-v19').default_execution_mode, 'codex')
+    assert.throws(() => database.prepare("UPDATE projects SET default_execution_mode = 'other' WHERE id = 'project-v19'").run(), /CHECK constraint failed/)
+    assert.deepEqual(database.prepare('PRAGMA foreign_key_check').all(), [])
+  } finally {
+    database.close()
+  }
+})
+
+test('v19 to v20 adds atomic story change sets and cascades their complete history', () => {
+  const database = createDatabase()
+  try {
+    const now = '2026-08-26T08:00:00.000Z'
+    runMigrations(database, { now: () => now, targetVersion: 19 })
+    database.prepare('INSERT INTO projects (id, title, genre, idea, style, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run('project-v20', '联动修改', '悬疑', '旧设定影响全书', '', now, now)
+
+    runMigrations(database, { now: () => now })
+
+    database.prepare(`
+      INSERT INTO story_change_sets (
+        id, project_id, root_target_key, root_label, source_digest, created_at, updated_at
+      ) VALUES ('change-v20', 'project-v20', 'project:project-v20:idea', '一句话想法', 'digest', ?, ?)
+    `).run(now, now)
+    database.prepare(`
+      INSERT INTO story_change_items (
+        id, change_set_id, target_key, target_kind, target_id, field_key, field_label,
+        impact_level, created_at, updated_at
+      ) VALUES ('item-v20', 'change-v20', 'project:project-v20:idea', 'project', 'project-v20', 'idea', '一句话想法', 'required', ?, ?)
+    `).run(now, now)
+    database.prepare(`
+      INSERT INTO story_change_snapshots (id, change_set_id, item_id, target_key, created_at)
+      VALUES ('snapshot-v20', 'change-v20', 'item-v20', 'project:project-v20:idea', ?)
+    `).run(now)
+    database.prepare("DELETE FROM projects WHERE id = 'project-v20'").run()
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM story_change_sets').get().count, 0)
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM story_change_items').get().count, 0)
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM story_change_snapshots').get().count, 0)
+    assert.deepEqual(database.prepare('PRAGMA foreign_key_check').all(), [])
   } finally {
     database.close()
   }

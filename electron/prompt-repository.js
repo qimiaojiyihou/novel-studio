@@ -13,7 +13,7 @@ function cleanText(value) {
   return String(value ?? '').trim()
 }
 
-const PROMPT_TASKS = ['planning_field', 'chapter_card', 'scene_plan', 'chapter', 'rewrite', 'chapter_state_extract', 'continuity_audit']
+const PROMPT_TASKS = ['planning_field', 'chapter_card', 'scene_plan', 'chapter', 'rewrite', 'chapter_state_extract', 'continuity_audit', 'quality_review']
 const SCOPE_RANK = { project: 1, volume: 2, chapter: 3 }
 
 function mapTemplate(row) {
@@ -62,6 +62,11 @@ function mapGenerationRecord(row) {
     error: row.error,
     request: parseJson(row.request_json),
     retryOfId: row.retry_of_id || '',
+    intent: row.generation_intent || 'draft',
+    parentGenerationId: row.parent_generation_id || '',
+    executionBackend: row.execution_backend || '',
+    agentRunId: row.agent_run_id || '',
+    agentStepId: row.agent_step_id || '',
     attemptCount: Number(row.attempt_count || 1),
     events: parseJson(row.events_json, []),
     createdAt: row.created_at,
@@ -207,8 +212,21 @@ export function createPromptRepository(database, {
         style: parseJson(profile.style_json),
       }
     }).filter((source) => source.text || Object.keys(source.style).length)
+    const packRow = database.prepare(`
+      SELECT b.pack_id, b.pack_version, v.digest, v.manifest_json, v.content_json
+      FROM project_pack_bindings b
+      JOIN creative_pack_versions v ON v.pack_id = b.pack_id AND v.version = b.pack_version
+      WHERE b.project_id = ?
+    `).get(projectId)
     return {
       template: resolveTemplate(task, projectId, chapter?.id || '', volume?.id || ''),
+      creativePack: packRow ? {
+        id: packRow.pack_id,
+        version: packRow.pack_version,
+        digest: packRow.digest,
+        manifest: parseJson(packRow.manifest_json),
+        prompt: parseJson(packRow.content_json)?.prompts?.[task] || null,
+      } : null,
       addons: resolveAddons(task, projectId, chapter?.id || '', volume?.id || ''),
       style: {
         sources,
@@ -262,7 +280,23 @@ export function createPromptRepository(database, {
       const stored = storedStyles.get(`${scope.scopeType}:${scope.scopeId}`)
       return { ...scope, profileId: stored?.id || '', text: scope.text, style: parseJson(stored?.style_json) }
     })
-    return { tasks: PROMPT_TASKS, templates, bindings, addons, addonBindings, styleScopes, volumes, chapters }
+    const pack = database.prepare(`
+      SELECT b.pack_id AS id, b.pack_version AS version, v.digest, v.manifest_json
+      FROM project_pack_bindings b
+      JOIN creative_pack_versions v ON v.pack_id = b.pack_id AND v.version = b.pack_version
+      WHERE b.project_id = ?
+    `).get(projectId)
+    return {
+      tasks: PROMPT_TASKS,
+      templates,
+      bindings,
+      addons,
+      addonBindings,
+      styleScopes,
+      volumes,
+      chapters,
+      creativePack: pack ? { ...pack, manifest: parseJson(pack.manifest_json) } : null,
+    }
   }
 
   function savePromptTemplate(input = {}) {
@@ -426,7 +460,8 @@ export function createPromptRepository(database, {
         id, task_id, project_id, chapter_id, task, status, model_profile_id, model_json,
         prompt_template_id, prompt_template_version, prompt_snapshot_json, parameters_json,
         output_text, error, created_at, completed_at, request_json, retry_of_id, attempt_count, events_json
-      ) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, '{}', '', '', ?, '', ?, ?, 1, '[]')
+        , generation_intent, parent_generation_id, execution_backend, agent_run_id, agent_step_id
+      ) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, '{}', '', '', ?, '', ?, ?, 1, '[]', ?, ?, ?, ?, ?)
     `).run(
       id,
       cleanText(input.taskId) || id,
@@ -441,19 +476,26 @@ export function createPromptRepository(database, {
       createdAt,
       JSON.stringify(input.request || {}),
       input.retryOfId || null,
+      cleanText(input.intent) || 'draft',
+      input.parentGenerationId || null,
+      cleanText(input.executionBackend),
+      input.agentRunId || null,
+      input.agentStepId || null,
     )
     return mapGenerationRecord(database.prepare('SELECT * FROM generation_records WHERE id = ?').get(id))
   }
 
-  function finishGenerationRecord({ id, status, parameters = {}, output = '', error = '', attemptCount = 1, events = [] }) {
+  function finishGenerationRecord({ id, status, parameters = {}, output = '', error = '', attemptCount = 1, events = [], executionBackend = '' }) {
     if (!['completed', 'cancelled', 'failed'].includes(status)) throw new Error('生成记录状态不受支持')
     const current = database.prepare('SELECT * FROM generation_records WHERE id = ?').get(id)
     if (!current) throw new Error('生成记录不存在')
     database.prepare(`
       UPDATE generation_records
-      SET status = ?, parameters_json = ?, output_text = ?, error = ?, attempt_count = ?, events_json = ?, completed_at = ?
+      SET status = ?, parameters_json = ?, output_text = ?, error = ?, attempt_count = ?, events_json = ?,
+        execution_backend = CASE WHEN ? = '' THEN execution_backend ELSE ? END, completed_at = ?
       WHERE id = ?
-    `).run(status, JSON.stringify(parameters || {}), String(output || ''), String(error || ''), Math.max(1, Number(attemptCount || 1)), JSON.stringify(events || []), now(), id)
+    `).run(status, JSON.stringify(parameters || {}), String(output || ''), String(error || ''), Math.max(1, Number(attemptCount || 1)),
+      JSON.stringify(events || []), cleanText(executionBackend), cleanText(executionBackend), now(), id)
     return mapGenerationRecord(database.prepare('SELECT * FROM generation_records WHERE id = ?').get(id))
   }
 

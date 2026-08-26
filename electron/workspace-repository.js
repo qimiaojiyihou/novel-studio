@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto'
+import { emptyScenePlan, normalizeScenePlan, renderScenePlan } from './creative-quality.js'
+import { bindDefaultCreativePack } from './creative-pack.js'
 
 function parseJson(value, fallback) {
   try {
@@ -15,7 +17,15 @@ function cleanText(value, fallback = '') {
 
 function mapChapter(chapter) {
   if (!chapter) return null
-  return { ...chapter, card: parseJson(chapter.card_json, {}) }
+  let scenePlanCorrupt = false
+  if (String(chapter.scene_plan_json || '').trim()) {
+    try {
+      const parsed = JSON.parse(chapter.scene_plan_json)
+      scenePlanCorrupt = !parsed || typeof parsed !== 'object' || Array.isArray(parsed)
+    } catch { scenePlanCorrupt = true }
+  }
+  const scenePlan = normalizeScenePlan(chapter.scene_plan_json, chapter.scene_plan)
+  return { ...chapter, card: parseJson(chapter.card_json, {}), scenePlan, scenePlanCorrupt }
 }
 
 function mapProject(project) {
@@ -49,6 +59,7 @@ export function createWorkspaceRepository(database, {
   function setActiveProject(projectId) {
     const project = projectById.get(projectId)
     if (!project) throw new Error('项目不存在')
+    if (project.project_type !== 'user') throw new Error('基准工作区不能设为当前创作项目')
     if (project.archived_at) throw new Error('归档项目需要先恢复才能继续创作')
     database.prepare(`
       INSERT INTO app_settings (key, value, updated_at) VALUES ('active_project_id', ?, ?)
@@ -64,6 +75,7 @@ export function createWorkspaceRepository(database, {
         COALESCE(SUM(LENGTH(c.manuscript)), 0) AS characterCount
       FROM projects p
       LEFT JOIN chapters c ON c.project_id = p.id
+      WHERE p.project_type = 'user'
       GROUP BY p.id
       ORDER BY p.updated_at DESC, p.created_at DESC
     `).all().map((project) => ({
@@ -80,12 +92,18 @@ export function createWorkspaceRepository(database, {
     let project = selectedId ? projectById.get(selectedId) : null
     if (project?.archived_at) project = null
     if (!project) {
-      project = database.prepare("SELECT * FROM projects WHERE archived_at = '' ORDER BY updated_at DESC, created_at DESC LIMIT 1").get()
+      project = database.prepare("SELECT * FROM projects WHERE archived_at = '' AND project_type = 'user' ORDER BY updated_at DESC, created_at DESC LIMIT 1").get()
       selectedId = project?.id || ''
     }
     if (!project) return { project: null, chapters: [], projects: [] }
     setActiveProject(selectedId)
     return { project: mapProject(project), chapters: listChapters(selectedId), projects: listProjects() }
+  }
+
+  function loadWorkspaceSnapshot(projectId) {
+    const project = projectById.get(projectId)
+    if (!project) throw new Error('项目不存在')
+    return { project: mapProject(project), chapters: listChapters(projectId), projects: project.project_type === 'user' ? listProjects() : [] }
   }
 
   function createChapter({ projectId, title = '', mode = 'blank', sourceChapterId = '' }) {
@@ -99,8 +117,8 @@ export function createWorkspaceRepository(database, {
     const updatedAt = now()
     const copyPlan = mode === 'copy-plan' && source
     database.prepare(`
-      INSERT INTO chapters (id, project_id, chapter_no, title, status, card_json, scene_plan, manuscript, updated_at)
-      VALUES (?, ?, ?, ?, 'draft', ?, ?, '', ?)
+      INSERT INTO chapters (id, project_id, chapter_no, title, status, card_json, scene_plan, manuscript, updated_at, scene_plan_json)
+      VALUES (?, ?, ?, ?, 'draft', ?, ?, '', ?, ?)
     `).run(
       id,
       projectId,
@@ -109,6 +127,7 @@ export function createWorkspaceRepository(database, {
       copyPlan ? source.card_json : '{}',
       copyPlan ? source.scene_plan : '',
       updatedAt,
+      copyPlan ? source.scene_plan_json : JSON.stringify(emptyScenePlan()),
     )
     database.prepare('UPDATE projects SET updated_at = ? WHERE id = ?').run(updatedAt, projectId)
     return mapChapter(chapterById.get(id))
@@ -137,6 +156,7 @@ export function createWorkspaceRepository(database, {
         INSERT INTO chapters (id, project_id, chapter_no, title, status, card_json, scene_plan, manuscript, updated_at)
         VALUES (?, ?, 1, '第一章', 'draft', '{}', '', '', ?)
       `).run(chapterId, id, createdAt)
+      bindDefaultCreativePack(database, id, { boundAt: createdAt })
       database.prepare(`
         INSERT INTO app_settings (key, value, updated_at) VALUES ('active_project_id', ?, ?)
         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
@@ -152,10 +172,18 @@ export function createWorkspaceRepository(database, {
   function updateProject(patch = {}) {
     const projectId = patch.id || activeProjectId()
     if (!projectById.get(projectId)) throw new Error('项目不存在')
-    const allowed = ['title', 'genre', 'idea', 'style']
+    const allowed = ['title', 'genre', 'idea', 'style', 'default_execution_mode']
     const entries = Object.entries(patch)
       .filter(([key]) => allowed.includes(key))
-      .map(([key, value]) => [key, key === 'title' ? cleanText(value, '未命名小说') : String(value ?? '').trim()])
+      .map(([key, value]) => {
+        if (key === 'title') return [key, cleanText(value, '未命名小说')]
+        if (key === 'default_execution_mode') {
+          const mode = String(value || '').trim()
+          if (!['app_model', 'codex'].includes(mode)) throw new Error('项目默认执行方式不受支持')
+          return [key, mode]
+        }
+        return [key, String(value ?? '').trim()]
+      })
     if (!entries.length) return projectById.get(projectId)
     const values = entries.map(([, value]) => value)
     const assignments = entries.map(([key]) => `${key} = ?`).join(', ')
@@ -174,7 +202,15 @@ export function createWorkspaceRepository(database, {
     if (typeof patch.title === 'string') { updates.push('title = ?'); values.push(cleanText(patch.title, `第 ${current.chapter_no} 章`)) }
     if (typeof patch.status === 'string') { updates.push('status = ?'); values.push(patch.status) }
     if (typeof patch.manuscript === 'string') { updates.push('manuscript = ?'); values.push(patch.manuscript) }
-    if (typeof patch.scenePlan === 'string') { updates.push('scene_plan = ?'); values.push(patch.scenePlan) }
+    if (patch.scenePlan && typeof patch.scenePlan === 'object') {
+      const scenePlan = normalizeScenePlan(patch.scenePlan)
+      updates.push('scene_plan_json = ?', 'scene_plan = ?')
+      values.push(JSON.stringify(scenePlan), renderScenePlan(scenePlan))
+    } else if (typeof patch.scenePlan === 'string') {
+      const scenePlan = normalizeScenePlan('', patch.scenePlan)
+      updates.push('scene_plan_json = ?', 'scene_plan = ?')
+      values.push(JSON.stringify(scenePlan), patch.scenePlan)
+    }
     if (patch.card && typeof patch.card === 'object') {
       nextVolumeId = cleanText(patch.card.volumeId)
       if (nextVolumeId) {
@@ -254,14 +290,14 @@ export function createWorkspaceRepository(database, {
     const current = projectById.get(projectId)
     if (!current) throw new Error('项目不存在')
     if (current.archived_at) return loadWorkspace()
-    const availableCount = Number(database.prepare("SELECT COUNT(*) AS count FROM projects WHERE archived_at = ''").get().count)
+    const availableCount = Number(database.prepare("SELECT COUNT(*) AS count FROM projects WHERE archived_at = '' AND project_type = 'user'").get().count)
     if (availableCount <= 1) throw new Error('至少保留一个未归档项目')
     const archivedAt = now()
     database.exec('BEGIN IMMEDIATE')
     try {
       database.prepare('UPDATE projects SET archived_at = ?, updated_at = ? WHERE id = ?').run(archivedAt, archivedAt, projectId)
       if (activeProjectId() === projectId) {
-        const next = database.prepare("SELECT id FROM projects WHERE archived_at = '' ORDER BY updated_at DESC, created_at DESC LIMIT 1").get()
+        const next = database.prepare("SELECT id FROM projects WHERE archived_at = '' AND project_type = 'user' ORDER BY updated_at DESC, created_at DESC LIMIT 1").get()
         database.prepare(`
           INSERT INTO app_settings (key, value, updated_at) VALUES ('active_project_id', ?, ?)
           ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
@@ -287,14 +323,14 @@ export function createWorkspaceRepository(database, {
   function deleteProject(projectId) {
     const current = projectById.get(projectId)
     if (!current) throw new Error('项目不存在')
-    const availableCount = Number(database.prepare("SELECT COUNT(*) AS count FROM projects WHERE archived_at = ''").get().count)
+    const availableCount = Number(database.prepare("SELECT COUNT(*) AS count FROM projects WHERE archived_at = '' AND project_type = 'user'").get().count)
     if (!current.archived_at && availableCount <= 1) throw new Error('至少保留一个未归档项目')
     const deletedAt = now()
     database.exec('BEGIN IMMEDIATE')
     try {
       database.prepare('DELETE FROM projects WHERE id = ?').run(projectId)
       if (activeProjectId() === projectId) {
-        const next = database.prepare("SELECT id FROM projects WHERE archived_at = '' ORDER BY updated_at DESC, created_at DESC LIMIT 1").get()
+        const next = database.prepare("SELECT id FROM projects WHERE archived_at = '' AND project_type = 'user' ORDER BY updated_at DESC, created_at DESC LIMIT 1").get()
         database.prepare(`
           INSERT INTO app_settings (key, value, updated_at) VALUES ('active_project_id', ?, ?)
           ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
@@ -338,9 +374,9 @@ export function createWorkspaceRepository(database, {
     database.exec('BEGIN IMMEDIATE')
     try {
       database.prepare(`
-        INSERT INTO chapters (id, project_id, chapter_no, title, status, card_json, scene_plan, manuscript, updated_at)
-        VALUES (?, ?, ?, ?, 'draft', ?, ?, ?, ?)
-      `).run(id, source.project_id, currentChapters.length + 1, `${source.title} · 副本`, source.card_json, source.scene_plan, source.manuscript, updatedAt)
+        INSERT INTO chapters (id, project_id, chapter_no, title, status, card_json, scene_plan, manuscript, updated_at, scene_plan_json)
+        VALUES (?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?)
+      `).run(id, source.project_id, currentChapters.length + 1, `${source.title} · 副本`, source.card_json, source.scene_plan, source.manuscript, updatedAt, source.scene_plan_json)
       renumberChapters(source.project_id, orderedIds)
       database.prepare('UPDATE projects SET updated_at = ? WHERE id = ?').run(updatedAt, source.project_id)
       database.exec('COMMIT')
@@ -382,6 +418,7 @@ export function createWorkspaceRepository(database, {
     setActiveProject,
     listProjects,
     loadWorkspace,
+    loadWorkspaceSnapshot,
     createProject,
     createChapter,
     updateProject,

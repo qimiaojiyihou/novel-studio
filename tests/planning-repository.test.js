@@ -43,6 +43,49 @@ test('planning center seeds project context and persists each document kind', ()
   database.close()
 })
 
+test('foundation bundle is accepted atomically into documents and the main character card', () => {
+  const { database, repository } = testRepository()
+  const center = repository.applyFoundationBundle({
+    projectId: 'project-1',
+    foundation: { premise: '追查被修改的病历', storyPromise: '每章推进一层证据', coreConflict: '真相与身份安全冲突' },
+    mainCharacter: { title: '林砚', role: '主角', identity: '调查者', desire: '找到修改者', need: '接受协作', fear: '失去证人' },
+    world: { hardRules: '钥匙每天午夜只能使用一次', costs: '违规会永久锁门' },
+    outline: { logline: '调查者追查病历', opening: '带伤返城', incitingIncident: '收到副本', climax: '打开地下室', ending: '听见自己的声音' },
+  })
+  assert.equal(center.documents.foundation.content.premise, '追查被修改的病历')
+  assert.equal(center.documents.world.content.hardRules, '钥匙每天午夜只能使用一次')
+  assert.equal(center.documents.outline.content.ending, '听见自己的声音')
+  assert.equal(center.characters[0].title, '林砚')
+  assert.equal(center.characters[0].data.role, '主角')
+  assert.deepEqual(database.prepare('PRAGMA foreign_key_check').all(), [])
+  database.close()
+})
+
+test('foundation bundle rolls back every document and character when one write fails', () => {
+  const { database, repository } = testRepository()
+  database.exec(`
+    CREATE TRIGGER reject_outline_bundle
+    BEFORE UPDATE ON planning_documents
+    WHEN NEW.kind = 'outline'
+    BEGIN
+      SELECT RAISE(ABORT, 'outline rejected');
+    END
+  `)
+
+  assert.throws(() => repository.applyFoundationBundle({
+    projectId: 'project-1',
+    foundation: { premise: '不应留下的故事前提' },
+    mainCharacter: { title: '不应留下的人物', role: '主角' },
+    world: { hardRules: '不应留下的规则' },
+    outline: { ending: '触发回滚' },
+  }), /outline rejected/)
+
+  assert.equal(database.prepare('SELECT COUNT(*) AS count FROM planning_documents WHERE project_id = ?').get('project-1').count, 0)
+  assert.equal(database.prepare('SELECT COUNT(*) AS count FROM planning_entities WHERE project_id = ?').get('project-1').count, 0)
+  assert.equal(database.prepare('SELECT idea FROM projects WHERE id = ?').get('project-1').idea, '一个无法撤回的选择')
+  database.close()
+})
+
 test('characters, world elements and volumes support create edit reorder and delete', () => {
   const { database, repository } = testRepository()
   const first = repository.createEntity({ projectId: 'project-1', kind: 'character', title: '林默', data: { role: '主角' } })

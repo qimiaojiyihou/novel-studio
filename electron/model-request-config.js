@@ -7,6 +7,7 @@ export const MODEL_TASKS = Object.freeze([
   'rewrite',
   'chapter_state_extract',
   'continuity_audit',
+  'quality_review',
 ])
 
 export const REQUEST_CONFIG_TEMPLATE = Object.freeze({

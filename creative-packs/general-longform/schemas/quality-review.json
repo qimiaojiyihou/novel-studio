@@ -1,0 +1,5 @@
+{
+  "$id": "novel-studio://schemas/quality-review@1",
+  "type": "object",
+  "required": ["scores", "issues", "summary"]
+}

@@ -5,9 +5,13 @@ import { DatabaseSync } from 'node:sqlite'
 import { getSchemaVersion, runMigrations } from './database-migrations.js'
 import { createKnowledgeRepository } from './knowledge-repository.js'
 import { createContextRepository } from './context-repository.js'
+import { createCodexRepository } from './codex-repository.js'
+import { repairMissingCreativePackBindings } from './creative-pack.js'
 import { createPlanningRepository } from './planning-repository.js'
 import { createProjectBackup, importManuscriptProject, restoreProjectBackup } from './project-portability.js'
 import { createPromptRepository } from './prompt-repository.js'
+import { createQualityRepository } from './quality-repository.js'
+import { createStoryChangeRepository } from './story-change-repository.js'
 import { createWorkspaceRepository } from './workspace-repository.js'
 
 let database
@@ -16,6 +20,9 @@ let planningRepository
 let knowledgeRepository
 let contextRepository
 let promptRepository
+let qualityRepository
+let codexRepository
+let storyChangeRepository
 
 function timestamp() {
   return new Date().toISOString()
@@ -71,12 +78,16 @@ export function openDatabase() {
   database = new DatabaseSync(getDatabasePath())
   runMigrations(database)
   seedDatabase()
+  repairMissingCreativePackBindings(database, { boundAt: timestamp() })
   seedModelProfiles()
   workspaceRepository = createWorkspaceRepository(database)
   planningRepository = createPlanningRepository(database)
   knowledgeRepository = createKnowledgeRepository(database)
   contextRepository = createContextRepository(database)
   promptRepository = createPromptRepository(database)
+  qualityRepository = createQualityRepository(database)
+  codexRepository = createCodexRepository(database)
+  storyChangeRepository = createStoryChangeRepository(database)
   return database
 }
 
@@ -103,6 +114,21 @@ function contextStore() {
 function promptStore() {
   openDatabase()
   return promptRepository
+}
+
+function qualityStore() {
+  openDatabase()
+  return qualityRepository
+}
+
+function codexStore() {
+  openDatabase()
+  return codexRepository
+}
+
+function storyChangeStore() {
+  openDatabase()
+  return storyChangeRepository
 }
 
 export function getDatabaseInfo() {
@@ -156,7 +182,7 @@ function seedModelProfiles() {
     const createdAt = timestamp()
     const profiles = [
       ['local-default', 'local', '本地正文模型', 'http://127.0.0.1:8080/v1', '', '', {}],
-      ['deepseek-default', 'deepseek', 'DeepSeek', 'https://api.deepseek.com/v1', 'deepseek-v4-flash', '', defaultModelSettings('deepseek')],
+      ['deepseek-default', 'deepseek', 'DeepSeek', 'https://api.deepseek.com', 'deepseek-v4-flash', '', defaultModelSettings('deepseek')],
       ['openai-default', 'openai', 'OpenAI', 'https://api.openai.com/v1', '', '', {}],
       ['kimi-default', 'kimi', 'Kimi', 'https://api.moonshot.cn/v1', '', '', {}],
     ]
@@ -170,6 +196,12 @@ function seedModelProfiles() {
     }
   }
 
+  database.prepare(`
+    UPDATE model_profiles
+    SET base_url = 'https://api.deepseek.com', updated_at = ?
+    WHERE id = 'deepseek-default' AND base_url = 'https://api.deepseek.com/v1'
+  `).run(timestamp())
+
   const createdAt = timestamp()
   const insert = database.prepare('INSERT OR IGNORE INTO task_routes (task, model_profile_id, updated_at) VALUES (?, ?, ?)')
   insert.run('chapter', 'local-default', createdAt)
@@ -179,10 +211,15 @@ function seedModelProfiles() {
   insert.run('rewrite', 'local-default', createdAt)
   insert.run('chapter_state_extract', 'deepseek-default', createdAt)
   insert.run('continuity_audit', 'deepseek-default', createdAt)
+  insert.run('quality_review', 'deepseek-default', createdAt)
 }
 
 export function loadWorkspace(projectId = '') {
   return workspaceStore().loadWorkspace(projectId)
+}
+
+export function loadWorkspaceSnapshot(projectId) {
+  return workspaceStore().loadWorkspaceSnapshot(projectId)
 }
 
 export function listProjects() {
@@ -266,6 +303,10 @@ export function savePlanningDocument(input) {
   return planningStore().saveDocument(input)
 }
 
+export function applyPlanningFoundationBundle(input) {
+  return planningStore().applyFoundationBundle(input)
+}
+
 export function createPlanningEntity(input) {
   return planningStore().createEntity(input)
 }
@@ -324,6 +365,52 @@ export function createPlanningCandidate(input) {
 
 export function resolvePlanningCandidate(input) {
   return planningStore().resolveCandidate(input)
+}
+
+export function createStoryChangeSet(input) {
+  return storyChangeStore().createChangeSet(input)
+}
+
+export function getStoryChangeSet(id) {
+  return storyChangeStore().getChangeSet(id)
+}
+
+export function listStoryChangeSets(input) {
+  return storyChangeStore().listChangeSets(input)
+}
+
+export function getStoryChangeModelContext(id) {
+  return storyChangeStore().modelContext(id)
+}
+
+export function attachStoryChangeAnalysis(input) {
+  return storyChangeStore().attachAnalysis(input)
+}
+
+export function updateStoryChangeSelection(input) {
+  return storyChangeStore().updateSelection(input)
+}
+
+function refreshStoryChangeDerivedData(projectId) {
+  knowledgeStore().syncPlanningSources(projectId)
+  contextStore().rebuildChapterMemories(projectId)
+  knowledgeStore().refreshContinuityChecks(projectId)
+}
+
+export function applyStoryChangeSet(input) {
+  const result = storyChangeStore().applyChangeSet(input)
+  refreshStoryChangeDerivedData(result.projectId)
+  return storyChangeStore().getChangeSet(result.id)
+}
+
+export function revertStoryChangeSet(id) {
+  const result = storyChangeStore().revertChangeSet(id)
+  refreshStoryChangeDerivedData(result.projectId)
+  return storyChangeStore().getChangeSet(result.id)
+}
+
+export function updateStoryChangeStatus(input) {
+  return storyChangeStore().updateStatus(input)
 }
 
 export function loadKnowledgeCenter(projectId) {
@@ -434,6 +521,54 @@ export function listGenerationRecords(input) {
   return promptStore().listGenerationRecords(input)
 }
 
+export function createQualityReport(input) {
+  return qualityStore().createReport(input)
+}
+
+export function getQualityReport(id) {
+  return qualityStore().getReport(id)
+}
+
+export function getQualityReportByGeneration(generationRecordId) {
+  return qualityStore().getReportByGeneration(generationRecordId)
+}
+
+export function getBlindQualityReviewPacket(id) {
+  return qualityStore().getBlindReviewPacket(id)
+}
+
+export function addQualityHumanReview(input) {
+  return qualityStore().addHumanReview(input)
+}
+
+export function listQualityReports(input) {
+  return qualityStore().listReports(input)
+}
+
+export function createBenchmarkRun(input) {
+  return qualityStore().createBenchmarkRun(input)
+}
+
+export function updateBenchmarkRun(id, input) {
+  return qualityStore().updateBenchmarkRun(id, input)
+}
+
+export function startBenchmarkStep(input) {
+  return qualityStore().startBenchmarkStep(input)
+}
+
+export function finishBenchmarkStep(id, input) {
+  return qualityStore().finishBenchmarkStep(id, input)
+}
+
+export function getBenchmarkRun(id) {
+  return qualityStore().getBenchmarkRun(id)
+}
+
+export function listBenchmarkRuns(input) {
+  return qualityStore().listBenchmarkRuns(input)
+}
+
 export function loadModelSettings() {
   openDatabase()
   const profiles = database.prepare(`
@@ -533,4 +668,96 @@ export function getModelApiKey(id) {
   openDatabase()
   const profile = database.prepare('SELECT api_key_cipher FROM model_profiles WHERE id = ?').get(id)
   return decryptApiKey(profile?.api_key_cipher || '')
+}
+
+export function loadCodexSettings() {
+  return codexStore().getProviderSettings()
+}
+
+export function saveCodexSettings(input) {
+  return codexStore().updateProviderSettings(input)
+}
+
+export function createAgentRun(input) {
+  return codexStore().createRun(input)
+}
+
+export function createInlineAgentRun(input) {
+  return codexStore().createInlineRun(input)
+}
+
+export function appendInlineAgentRevision(input) {
+  return codexStore().appendInlineRevision(input)
+}
+
+export function listAgentRuns(input) {
+  return codexStore().listRuns(input)
+}
+
+export function getAgentRun(id, options) {
+  return codexStore().getRun(id, options)
+}
+
+export function getAgentRunPack(id) {
+  return codexStore().getRunPack(id)
+}
+
+export function updateAgentRun(id, input) {
+  return codexStore().updateRun(id, input)
+}
+
+export function updateAgentStep(id, input) {
+  return codexStore().updateStep(id, input)
+}
+
+export function createAgentCandidate(input) {
+  return codexStore().createCandidate(input)
+}
+
+export function resolveAgentCandidate(input) {
+  return codexStore().resolveCandidate(input)
+}
+
+export function markAgentCandidateStale(id, reason) {
+  return codexStore().markCandidateStale(id, reason)
+}
+
+export function cancelPendingAgentCandidates(agentRunId) {
+  return codexStore().cancelPendingCandidates(agentRunId)
+}
+
+export function saveAgentSession(input) {
+  return codexStore().upsertSession(input)
+}
+
+export function appendAgentEvent(input) {
+  return codexStore().appendEvent(input)
+}
+
+export function listAgentEvents(agentRunId, options) {
+  return codexStore().listEvents(agentRunId, options)
+}
+
+export function createApprovalRequest(input) {
+  return codexStore().createApproval(input)
+}
+
+export function listApprovalRequests(input) {
+  return codexStore().listApprovals(input)
+}
+
+export function getApprovalRequest(id) {
+  return codexStore().getApproval(id)
+}
+
+export function resolveApprovalRequest(input) {
+  return codexStore().resolveApproval(input)
+}
+
+export function completeApprovalRequest(id, input) {
+  return codexStore().completeApproval(id, input)
+}
+
+export function expirePendingApprovalRequests() {
+  return codexStore().expireAllPendingApprovals()
 }

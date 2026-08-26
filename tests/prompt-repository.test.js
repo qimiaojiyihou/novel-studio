@@ -34,7 +34,7 @@ test('prompt repository resolves built-in template and project-volume-chapter st
   const { database, repository } = setup()
   const context = repository.resolvePromptContext({ projectId: 'project-1', chapterId: 'chapter-1', task: 'chapter' })
   assert.equal(context.template.id, 'builtin-chapter-v1')
-  assert.equal(context.template.version, 2)
+  assert.equal(context.template.version, 18)
   assert.equal(context.style.volume.id, 'volume-1')
   assert.deepEqual(context.style.sources.map((source) => source.scopeType), ['project', 'volume', 'chapter'])
   assert.equal(context.style.mergedText, '项目克制文风\n卷级压迫感\n章节增加对白')
@@ -77,6 +77,7 @@ test('generation records preserve prompt snapshot, request parameters and termin
     modelProfileId: 'model-1', model: { name: '测试模型' },
     request: { task: 'chapter', projectId: 'project-1', chapterId: 'chapter-1', instruction: '保持克制' },
     promptSnapshot: { template: { id: promptContext.template.id, version: 1 }, promptHash: 'hash' },
+    intent: 'continue',
   })
   assert.equal(record.status, 'pending')
   const completed = repository.finishGenerationRecord({
@@ -90,7 +91,14 @@ test('generation records preserve prompt snapshot, request parameters and termin
   assert.equal(completed.request.instruction, '保持克制')
   assert.equal(completed.attemptCount, 2)
   assert.equal(completed.events[0].type, 'retrying')
-  assert.equal(repository.listGenerationRecords({ projectId: 'project-1' })[0].id, record.id)
+  assert.equal(completed.intent, 'continue')
+  const repair = repository.startGenerationRecord({
+    taskId: 'task-repair', projectId: 'project-1', chapterId: 'chapter-1', task: 'chapter',
+    promptSnapshot: { template: { id: promptContext.template.id, version: 3 } }, intent: 'repair', parentGenerationId: record.id,
+  })
+  assert.equal(repair.parentGenerationId, record.id)
+  assert.equal(repair.intent, 'repair')
+  assert.deepEqual(new Set(repository.listGenerationRecords({ projectId: 'project-1' }).map((item) => item.id)), new Set([record.id, repair.id]))
 
   database.prepare("DELETE FROM projects WHERE id = 'project-1'").run()
   assert.equal(database.prepare('SELECT COUNT(*) AS count FROM generation_records').get().count, 0)
@@ -135,14 +143,14 @@ test('structured styles persist while canonical free text stays in project volum
 
 test('prompt add-ons resolve by task and project-volume-chapter order', () => {
   const { database, repository } = setup()
-  repository.setPromptAddonBinding({ projectId: 'project-1', scopeType: 'chapter', scopeId: 'chapter-1', task: 'chapter', addonId: 'addon-ending-hook', enabled: true, priority: 2 })
-  repository.setPromptAddonBinding({ projectId: 'project-1', scopeType: 'project', scopeId: 'project-1', task: 'chapter', addonId: 'addon-dialogue', enabled: true, priority: 1 })
-  repository.setPromptAddonBinding({ projectId: 'project-1', scopeType: 'volume', scopeId: 'volume-1', task: '*', addonId: 'addon-conflict', enabled: true, priority: 1 })
+  repository.setPromptAddonBinding({ projectId: 'project-1', scopeType: 'chapter', scopeId: 'chapter-1', task: 'chapter', addonId: 'addon-ending-action', enabled: true, priority: 2 })
+  repository.setPromptAddonBinding({ projectId: 'project-1', scopeType: 'project', scopeId: 'project-1', task: 'chapter', addonId: 'addon-dialogue-subtext', enabled: true, priority: 1 })
+  repository.setPromptAddonBinding({ projectId: 'project-1', scopeType: 'volume', scopeId: 'volume-1', task: '*', addonId: 'addon-goal-obstacle-change', enabled: true, priority: 1 })
   const context = repository.resolvePromptContext({ projectId: 'project-1', chapterId: 'chapter-1', task: 'chapter' })
-  assert.deepEqual(context.addons.map((item) => item.id), ['addon-dialogue', 'addon-conflict', 'addon-ending-hook'])
+  assert.deepEqual(context.addons.map((item) => item.id), ['addon-dialogue-subtext', 'addon-goal-obstacle-change', 'addon-ending-action'])
   const planning = repository.resolvePromptContext({ projectId: 'project-1', chapterId: 'chapter-1', task: 'planning_field' })
-  assert.deepEqual(planning.addons.map((item) => item.id), ['addon-conflict'])
-  repository.setPromptAddonBinding({ projectId: 'project-1', scopeType: 'chapter', scopeId: 'chapter-1', task: 'chapter', addonId: 'addon-ending-hook', enabled: false })
-  assert.deepEqual(repository.resolvePromptContext({ projectId: 'project-1', chapterId: 'chapter-1', task: 'chapter' }).addons.map((item) => item.id), ['addon-dialogue', 'addon-conflict'])
+  assert.deepEqual(planning.addons.map((item) => item.id), ['addon-goal-obstacle-change'])
+  repository.setPromptAddonBinding({ projectId: 'project-1', scopeType: 'chapter', scopeId: 'chapter-1', task: 'chapter', addonId: 'addon-ending-action', enabled: false })
+  assert.deepEqual(repository.resolvePromptContext({ projectId: 'project-1', chapterId: 'chapter-1', task: 'chapter' }).addons.map((item) => item.id), ['addon-dialogue-subtext', 'addon-goal-obstacle-change'])
   database.close()
 })

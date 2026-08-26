@@ -365,7 +365,15 @@ export function createContextRepository(database, { now = () => new Date().toISO
     if (stateSnapshots.length) {
       const snapshotLimit = Math.max(800, Math.floor(profile.chapterSummaryChars * 1.5))
       append('已确认章后状态', stateSnapshots.map((snapshot) => (
-        `第 ${snapshot.chapterNo} 章《${snapshot.title}》：${excerpt(JSON.stringify(snapshot.payload), snapshotLimit)}`
+        `第 ${snapshot.chapterNo} 章《${snapshot.title}》：${excerpt(JSON.stringify({
+          summary: snapshot.payload?.summary || '',
+          characterStates: snapshot.payload?.characterStates || [],
+          relationshipChanges: snapshot.payload?.relationshipChanges || [],
+          openThreads: snapshot.payload?.openThreads || [],
+          foreshadow: snapshot.payload?.foreshadow || { setups: [], payoffs: [] },
+          facts: (snapshot.payload?.facts || []).slice(0, 8),
+          timelineEvents: (snapshot.payload?.timelineEvents || []).slice(0, 6),
+        }), snapshotLimit)}`
       )).join('\n'))
     }
     if (recent.length) append('最近章节记忆', recent.map((memory) => memory.summary).join('\n\n'))

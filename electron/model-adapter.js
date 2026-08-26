@@ -6,24 +6,126 @@ import {
   requestParametersFor,
 } from './model-request-config.js'
 import { compilePrompt } from './prompt-compiler.js'
+import { cleanPlanningFieldText } from './generated-text.js'
+import { normalizeModelReview, normalizeScenePlan, validateChapterCard, validateScenePlan } from './creative-quality.js'
 
 function now() {
   return new Date().toISOString()
 }
 
-const STRUCTURED_TASKS = new Set(['chapter_card', 'chapter_state_extract', 'continuity_audit'])
+const STRUCTURED_TASKS = new Set(['chapter_card', 'scene_plan', 'chapter_state_extract', 'continuity_audit', 'quality_review'])
+
+export class StructuredOutputError extends Error {
+  constructor(label, rawOutput, cause, detail = '返回内容不是有效 JSON') {
+    super(`${label}${detail}`, cause ? { cause } : undefined)
+    this.name = 'StructuredOutputError'
+    this.rawOutput = String(rawOutput || '')
+  }
+}
 
 function parseJsonObject(value, label = '结构化任务') {
   const fence = String.fromCharCode(96).repeat(3)
   let source = String(value || '').trim()
   source = source.replace(fence + 'json', '').replace(fence, '').trim()
+  let parseError = null
   try {
     return JSON.parse(source)
-  } catch {
-    const start = source.indexOf('{')
-    const end = source.lastIndexOf('}')
-    if (start >= 0 && end > start) return JSON.parse(source.slice(start, end + 1))
-    throw new Error(`${label}返回内容不是有效 JSON`)
+  } catch (error) {
+    parseError = error
+  }
+  const start = source.indexOf('{')
+  const end = source.lastIndexOf('}')
+  if (start >= 0 && end > start) {
+    try {
+      return JSON.parse(source.slice(start, end + 1))
+    } catch (error) {
+      parseError = error
+    }
+  }
+  throw new StructuredOutputError(label, source, parseError)
+}
+
+function stateText(value) {
+  return typeof value === 'string' || typeof value === 'number' ? String(value).trim() : ''
+}
+
+function stateTextList(value) {
+  return (Array.isArray(value) ? value : [])
+    .map((item) => stateText(item?.description || item?.thread || item?.event || item))
+    .filter(Boolean)
+}
+
+export function normalizeChapterStateSnapshot(value = {}) {
+  const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {}
+  const facts = (Array.isArray(source.facts) ? source.facts : []).map((fact) => {
+    if (typeof fact === 'string') {
+      return { subject: '', predicate: '', object: fact.trim(), certainty: 'confirmed', evidence: '' }
+    }
+    const certainty = ['confirmed', 'reported', 'suspected'].includes(fact?.certainty)
+      ? fact.certainty
+      : ['confirmed', 'reported', 'suspected'].includes(fact?.status) ? fact.status : 'confirmed'
+    return {
+      subject: stateText(fact?.subject),
+      predicate: stateText(fact?.predicate),
+      object: stateText(fact?.object || fact?.fact || fact?.statement),
+      certainty,
+      evidence: stateText(fact?.evidence || fact?.location),
+    }
+  }).filter((fact) => fact.subject || fact.predicate || fact.object)
+
+  const rawStates = Array.isArray(source.characterStates)
+    ? source.characterStates.map((state) => ['', state])
+    : source.characterStates && typeof source.characterStates === 'object'
+      ? Object.entries(source.characterStates)
+      : []
+  const characterStates = rawStates.map(([fallbackName, state]) => ({
+    character: stateText(state?.character || state?.name || fallbackName),
+    location: stateText(state?.location),
+    physical: stateText(state?.physical || state?.physicalState),
+    emotional: stateText(state?.emotional || state?.emotionalState),
+    possessions: stateTextList(state?.possessions || state?.inventory),
+    knows: stateTextList(state?.knows || state?.knowledge),
+  })).filter((state) => state.character)
+
+  const relationshipChanges = (Array.isArray(source.relationshipChanges) ? source.relationshipChanges : [])
+    .map((change) => {
+      if (typeof change === 'string') return change.trim()
+      const relation = [stateText(change?.from), stateText(change?.to)].filter(Boolean).join(' → ')
+      const description = stateText(change?.change || change?.description || change?.relationship)
+      return [relation, description].filter(Boolean).join('：')
+    }).filter(Boolean)
+  const timelineEvents = (Array.isArray(source.timelineEvents) ? source.timelineEvents : []).map((event) => {
+    if (typeof event === 'string') return event.trim()
+    return {
+      time: stateText(event?.time),
+      event: stateText(event?.event || event?.description),
+      participants: Array.isArray(event?.participants)
+        ? event.participants.map((item) => stateText(item)).filter(Boolean).join('、')
+        : stateText(event?.participants),
+      consequence: stateText(event?.consequence),
+      evidence: stateText(event?.evidence),
+    }
+  }).filter((event) => typeof event === 'string' ? event : event.event)
+
+  const rawForeshadow = source.foreshadow
+  const foreshadow = Array.isArray(rawForeshadow)
+    ? {
+        setups: rawForeshadow.filter((item) => !['fulfilled', 'payoff', 'resolved'].includes(item?.status)).map((item) => stateText(item?.description || item)).filter(Boolean),
+        payoffs: rawForeshadow.filter((item) => ['fulfilled', 'payoff', 'resolved'].includes(item?.status)).map((item) => stateText(item?.description || item)).filter(Boolean),
+      }
+    : {
+        setups: stateTextList(rawForeshadow?.setups),
+        payoffs: stateTextList(rawForeshadow?.payoffs),
+      }
+
+  return {
+    summary: stateText(source.summary),
+    facts,
+    characterStates,
+    relationshipChanges,
+    timelineEvents,
+    foreshadow,
+    openThreads: stateTextList(source.openThreads),
   }
 }
 
@@ -31,7 +133,8 @@ function mockContentFor(task, result) {
   if (task === 'chapter_card') return JSON.stringify(result.card)
   if (task === 'chapter_state_extract') return JSON.stringify(result.stateSnapshot)
   if (task === 'continuity_audit') return JSON.stringify(result.audit)
-  if (task === 'scene_plan') return result.scenePlan || ''
+  if (task === 'scene_plan') return JSON.stringify(result.scenePlan || {})
+  if (task === 'quality_review') return JSON.stringify(result.review || {})
   if (task === 'chapter') return result.manuscript || ''
   return result.text || ''
 }
@@ -50,14 +153,47 @@ function finiteNumber(value, minimum, maximum) {
   return Number.isFinite(number) && number >= minimum && number <= maximum ? number : null
 }
 
+function isMiMoProfile(modelProfile = {}) {
+  return modelProfile.provider === 'mimo'
+    || /xiaomimimo\.com/i.test(String(modelProfile.baseUrl || ''))
+    || /^mimo-/i.test(String(modelProfile.model || ''))
+}
+
 function parametersFor(task, modelProfile) {
   const provider = modelProfile?.provider || 'mock'
   const settings = modelProfile?.settings || {}
   const taskTemperature = task === 'rewrite' ? 0.55
     : task === 'planning_field' ? 0.68
       : task === 'connection_test' ? 0
-        : STRUCTURED_TASKS.has(task) ? 0.25
+        : ['chapter_state_extract', 'continuity_audit', 'quality_review'].includes(task) ? 0.1
+          : STRUCTURED_TASKS.has(task) ? 0.25
           : 0.78
+  if (isMiMoProfile(modelProfile)) {
+    const thinkingEnabled = settings.thinkingEnabled !== false
+    const parameters = {
+      thinking: { type: thinkingEnabled ? 'enabled' : 'disabled' },
+      max_completion_tokens: Math.round(finiteNumber(settings.maxTokens, 1, 131072) || (task === 'connection_test' ? 32 : 16384)),
+      response_format: {
+        type: settings.responseFormat === 'json_object' || (settings.responseFormat !== 'text' && STRUCTURED_TASKS.has(task))
+          ? 'json_object'
+          : 'text',
+      },
+    }
+    if (!thinkingEnabled) {
+      if (settings.samplingMode === 'top_p') parameters.top_p = finiteNumber(settings.topP, 0, 1) ?? 0.95
+      else parameters.temperature = settings.samplingMode === 'temperature'
+        ? finiteNumber(settings.temperature, 0, 1.5) ?? taskTemperature
+        : taskTemperature
+    }
+    if (task === 'connection_test') {
+      parameters.thinking = { type: 'disabled' }
+      parameters.max_completion_tokens = 32
+      parameters.response_format = { type: 'text' }
+      parameters.temperature = 0
+      delete parameters.top_p
+    }
+    return parameters
+  }
   if (provider !== 'deepseek') return { temperature: taskTemperature }
 
   const parameters = {
@@ -107,6 +243,11 @@ export function prepareModelTask(input) {
   const parameters = parametersFor(task, modelProfile)
   const requestConfig = normalizeRequestConfig(modelProfile?.settings?.requestConfig)
   const mergedParameters = requestParametersFor(task, parameters, requestConfig)
+  if (input.structuredRetry?.deterministic && isMiMoProfile(modelProfile) && STRUCTURED_TASKS.has(task)) {
+    mergedParameters.thinking = { type: 'disabled' }
+    mergedParameters.temperature = 0.1
+    mergedParameters.response_format = { type: 'json_object' }
+  }
   const compiledPrompt = input.compiledPrompt || compilePrompt(input)
   const prepared = {
     task,
@@ -126,6 +267,8 @@ export function prepareModelTask(input) {
     mockDelayMs: Number.isFinite(input.mockDelayMs) ? input.mockDelayMs : 8,
     contextDiagnostics: input.longContext?.diagnostics || null,
     promptSnapshot: compiledPrompt.snapshot,
+    validationChapter: input.chapter || null,
+    planningFieldLabel: input.planning?.fieldLabel || '',
   }
   if (!missingConfiguration) return prepared
 
@@ -155,11 +298,36 @@ export function shapeModelResult(prepared, content, gateway = 'embedded') {
   }
   if (prepared.fallbackReason) base.fallbackReason = prepared.fallbackReason
   if (prepared.contextDiagnostics) base.contextDiagnostics = prepared.contextDiagnostics
-  if (prepared.task === 'chapter_card') return { ...base, card: parseJsonObject(content, '章节卡') }
-  if (prepared.task === 'chapter_state_extract') return { ...base, stateSnapshot: parseJsonObject(content, '章后状态') }
+  if (prepared.task === 'chapter_card') {
+    const card = parseJsonObject(content, '章节卡')
+    const failures = validateChapterCard(card).filter((item) => item.critical && !item.passed)
+    if (failures.length) {
+      throw new StructuredOutputError('章节卡', content, null, `结构校验失败：${failures.map((item) => item.label).join('、')}`)
+    }
+    return { ...base, card }
+  }
+  if (prepared.task === 'chapter_state_extract') {
+    return { ...base, stateSnapshot: normalizeChapterStateSnapshot(parseJsonObject(content, '章后状态')) }
+  }
   if (prepared.task === 'continuity_audit') return { ...base, audit: parseJsonObject(content, '连续性审计') }
-  if (prepared.task === 'scene_plan') return { ...base, scenePlan: String(content).trim() }
-  if (prepared.task === 'rewrite' || prepared.task === 'planning_field' || prepared.task === 'connection_test') return { ...base, text: String(content).trim() }
+  if (prepared.task === 'scene_plan') {
+    const scenePlan = normalizeScenePlan(parseJsonObject(content, '场景计划'))
+    const failures = validateScenePlan(scenePlan).filter((item) => item.critical && !item.passed)
+    const ending = String(prepared.validationChapter?.card?.ending || '').trim()
+    const finalBeat = String(scenePlan.scenes.at(-1)?.actionBeats?.at(-1) || '').trim()
+    if (ending && finalBeat !== ending) {
+      failures.push({
+        label: `最后 actionBeat 必须逐字等于章节卡 ending；期望：${JSON.stringify(ending)}；实际：${JSON.stringify(finalBeat)}`,
+      })
+    }
+    if (failures.length) {
+      throw new StructuredOutputError('场景计划', content, null, `结构校验失败：${failures.map((item) => item.label).join('、')}`)
+    }
+    return { ...base, scenePlan }
+  }
+  if (prepared.task === 'quality_review') return { ...base, review: normalizeModelReview(parseJsonObject(content, '质量评审')) }
+  if (prepared.task === 'planning_field') return { ...base, text: cleanPlanningFieldText(content, { fieldLabel: prepared.planningFieldLabel }) }
+  if (prepared.task === 'rewrite' || prepared.task === 'connection_test') return { ...base, text: String(content).trim() }
   return { ...base, manuscript: String(content).trim() }
 }
 

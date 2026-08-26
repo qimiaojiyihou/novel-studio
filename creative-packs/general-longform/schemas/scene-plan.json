@@ -1,0 +1,5 @@
+{
+  "$id": "novel-studio://schemas/scene-plan@1",
+  "type": "object",
+  "required": ["schemaVersion", "summary", "scenes", "legacyNotes"]
+}

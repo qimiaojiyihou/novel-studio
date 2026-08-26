@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["foundation", "mainCharacter", "world", "outline"],
+  "properties": {
+    "foundation": {
+      "type": "object",
+      "required": ["premise", "storyPromise", "coreConflict"],
+      "properties": {
+        "premise": { "type": "string", "minLength": 1 },
+        "storyPromise": { "type": "string", "minLength": 1 },
+        "coreConflict": { "type": "string", "minLength": 1 },
+        "audience": { "type": "string" }, "lengthTarget": { "type": "string" },
+        "themes": { "type": "string" }, "tone": { "type": "string" },
+        "endingDirection": { "type": "string" }, "boundaries": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "mainCharacter": {
+      "type": "object",
+      "required": ["title", "role", "identity", "desire", "need", "fear"],
+      "properties": {
+        "title": { "type": "string", "minLength": 1 }, "role": { "type": "string", "minLength": 1 },
+        "identity": { "type": "string", "minLength": 1 }, "desire": { "type": "string", "minLength": 1 },
+        "need": { "type": "string", "minLength": 1 }, "fear": { "type": "string", "minLength": 1 },
+        "flaw": { "type": "string" }, "secret": { "type": "string" }, "arc": { "type": "string" },
+        "voice": { "type": "string" }, "relationships": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "world": {
+      "type": "object",
+      "required": ["hardRules", "costs"],
+      "properties": {
+        "era": { "type": "string" }, "geography": { "type": "string" }, "society": { "type": "string" },
+        "powerSystem": { "type": "string" }, "hardRules": { "type": "string", "minLength": 1 },
+        "costs": { "type": "string", "minLength": 1 }, "dailyLife": { "type": "string" }, "history": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "outline": {
+      "type": "object",
+      "required": ["logline", "opening", "incitingIncident", "climax", "ending"],
+      "properties": {
+        "logline": { "type": "string", "minLength": 1 }, "opening": { "type": "string", "minLength": 1 },
+        "incitingIncident": { "type": "string", "minLength": 1 }, "firstTurn": { "type": "string" },
+        "midpoint": { "type": "string" }, "secondTurn": { "type": "string" },
+        "climax": { "type": "string", "minLength": 1 }, "ending": { "type": "string", "minLength": 1 },
+        "thematicArc": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

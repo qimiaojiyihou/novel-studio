@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "chapter-creation",
+  "name": "逐章创作",
+  "steps": [
+    { "id": "preflight", "action": "preflight" },
+    { "id": "chapter-card", "action": "generate", "task": "chapter_card", "candidateType": "chapter_card", "dependsOn": ["preflight"] },
+    { "id": "confirm-card", "action": "checkpoint", "dependsOn": ["chapter-card"] },
+    { "id": "scene-plan", "action": "generate", "task": "scene_plan", "candidateType": "scene_plan", "dependsOn": ["confirm-card"] },
+    { "id": "confirm-scenes", "action": "checkpoint", "dependsOn": ["scene-plan"] },
+    { "id": "chapter-draft", "action": "generate", "task": "chapter", "candidateType": "manuscript", "dependsOn": ["confirm-scenes"] },
+    { "id": "review-draft", "action": "quality_review", "task": "quality_review", "dependsOn": ["chapter-draft"] },
+    { "id": "confirm-draft", "action": "checkpoint", "dependsOn": ["review-draft"] },
+    { "id": "chapter-state", "action": "state_extract", "task": "chapter_state_extract", "candidateType": "chapter_state", "dependsOn": ["confirm-draft"] },
+    { "id": "confirm-state", "action": "checkpoint", "dependsOn": ["chapter-state"] }
+  ]
+}

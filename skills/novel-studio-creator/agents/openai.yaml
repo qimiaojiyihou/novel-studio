@@ -1,0 +1,7 @@
+interface:
+  display_name: "Novel Studio Creator"
+  short_description: "用锁定能力包生成小说规划、正文与评审候选"
+  brand_color: "#A65B3D"
+  default_prompt: "Use $novel-studio-creator to continue the current Novel Studio AgentRun and return a reviewable candidate."
+policy:
+  allow_implicit_invocation: true

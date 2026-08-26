@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { normalizeScenePlan, renderScenePlan } from './creative-quality.js'
 
 const DOCUMENT_KINDS = new Set(['foundation', 'world', 'outline'])
 const ENTITY_KINDS = new Set(['character', 'world', 'volume'])
@@ -167,7 +168,7 @@ export function createPlanningRepository(database, {
     return project
   }
 
-  function ensureDocuments(projectId) {
+  function seedDocuments(projectId) {
     const project = assertProject(projectId)
     const createdAt = now()
     const insert = database.prepare(`
@@ -179,11 +180,15 @@ export function createPlanningRepository(database, {
       premise: project.idea || '',
       tone: project.style || '',
     }
+    insert.run(projectId, 'foundation', JSON.stringify(foundation), createdAt, createdAt)
+    insert.run(projectId, 'world', JSON.stringify(DOCUMENT_DEFAULTS.world), createdAt, createdAt)
+    insert.run(projectId, 'outline', JSON.stringify(DOCUMENT_DEFAULTS.outline), createdAt, createdAt)
+  }
+
+  function ensureDocuments(projectId) {
     database.exec('BEGIN IMMEDIATE')
     try {
-      insert.run(projectId, 'foundation', JSON.stringify(foundation), createdAt, createdAt)
-      insert.run(projectId, 'world', JSON.stringify(DOCUMENT_DEFAULTS.world), createdAt, createdAt)
-      insert.run(projectId, 'outline', JSON.stringify(DOCUMENT_DEFAULTS.outline), createdAt, createdAt)
+      seedDocuments(projectId)
       database.exec('COMMIT')
     } catch (error) {
       database.exec('ROLLBACK')
@@ -308,9 +313,13 @@ export function createPlanningRepository(database, {
     `).all(projectId).map((row) => [row.kind, mapDocument(row)]))
     const chapters = database.prepare(`
       SELECT id, project_id AS projectId, chapter_no AS chapterNo, title, status,
-        card_json AS cardJson, scene_plan AS scenePlan, updated_at AS updatedAt
+        card_json AS cardJson, scene_plan AS scenePlanText, scene_plan_json AS scenePlanJson, updated_at AS updatedAt
       FROM chapters WHERE project_id = ? ORDER BY chapter_no
-    `).all(projectId).map((chapter) => ({ ...chapter, card: parseJson(chapter.cardJson) }))
+    `).all(projectId).map((chapter) => ({
+      ...chapter,
+      card: parseJson(chapter.cardJson),
+      scenePlan: normalizeScenePlan(chapter.scenePlanJson, chapter.scenePlanText),
+    }))
     const characters = listEntities(projectId, 'character')
     const worldElements = listEntities(projectId, 'world')
     return {
@@ -524,10 +533,10 @@ export function createPlanningRepository(database, {
     return listStoryArcs(arc.project_id).find((item) => item.id === arc.id)
   }
 
-  function saveDocument({ projectId, kind, content = {} }) {
+  function saveDocumentRecord({ projectId, kind, content = {} }, { ensure = true } = {}) {
     assertProject(projectId)
     if (!DOCUMENT_KINDS.has(kind)) throw new Error('规划文档类型不受支持')
-    ensureDocuments(projectId)
+    if (ensure) ensureDocuments(projectId)
     const updatedAt = now()
     const normalized = { ...DOCUMENT_DEFAULTS[kind], ...content }
     database.prepare(`
@@ -535,6 +544,30 @@ export function createPlanningRepository(database, {
     `).run(JSON.stringify(normalized), updatedAt, projectId, kind)
     database.prepare('UPDATE projects SET updated_at = ? WHERE id = ?').run(updatedAt, projectId)
     return mapDocument(database.prepare('SELECT * FROM planning_documents WHERE project_id = ? AND kind = ?').get(projectId, kind))
+  }
+
+  function saveDocument(input) {
+    return saveDocumentRecord(input)
+  }
+
+  function applyFoundationBundle({ projectId, foundation = {}, mainCharacter = {}, world = {}, outline = {} }) {
+    assertProject(projectId)
+    const existingCharacters = listEntities(projectId, 'character')
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      seedDocuments(projectId)
+      saveDocumentRecord({ projectId, kind: 'foundation', content: foundation }, { ensure: false })
+      saveDocumentRecord({ projectId, kind: 'world', content: world }, { ensure: false })
+      saveDocumentRecord({ projectId, kind: 'outline', content: outline }, { ensure: false })
+      const existingMainCharacter = existingCharacters.find((character) => /主角|protagonist/i.test(String(character.data?.role || '')))
+      if (existingMainCharacter) updateEntity({ id: existingMainCharacter.id, title: mainCharacter.title, data: mainCharacter })
+      else createEntity({ projectId, kind: 'character', title: mainCharacter.title, data: mainCharacter })
+      database.exec('COMMIT')
+    } catch (error) {
+      database.exec('ROLLBACK')
+      throw error
+    }
+    return loadPlanningCenter(projectId)
   }
 
   function createEntity({ projectId, kind, title = '', data = {} }) {
@@ -672,7 +705,11 @@ export function createPlanningRepository(database, {
     if (!chapter || chapter.project_id !== candidate.project_id) throw new Error('候选对应的章节不存在')
     if (candidate.field_key === 'title') return chapter.title
     if (candidate.field_key === 'card') return JSON.stringify(parseJson(chapter.card_json))
-    if (candidate.field_key === 'scenePlan') return chapter.scene_plan
+    if (candidate.field_key === 'scenePlan') {
+      return candidate.original_value.trim().startsWith('{')
+        ? JSON.stringify(normalizeScenePlan(chapter.scene_plan_json, chapter.scene_plan))
+        : chapter.scene_plan
+    }
     return String(parseJson(chapter.card_json)[candidate.field_key] ?? '')
   }
 
@@ -707,7 +744,16 @@ export function createPlanningRepository(database, {
       if (!card || Array.isArray(card) || typeof card !== 'object') throw new Error('章节卡候选不是有效对象')
       database.prepare('UPDATE chapters SET card_json = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(card), resolvedAt, candidate.target_id)
     } else if (candidate.field_key === 'scenePlan') {
-      database.prepare('UPDATE chapters SET scene_plan = ?, updated_at = ? WHERE id = ?').run(candidate.candidate_value, resolvedAt, candidate.target_id)
+      const structuredCandidate = candidate.candidate_value.trim().startsWith('{')
+      const scenePlan = normalizeScenePlan(candidate.candidate_value)
+      if (!scenePlan.scenes.length && !scenePlan.legacyNotes) throw new Error('场景计划候选没有可用内容')
+      database.prepare('UPDATE chapters SET scene_plan_json = ?, scene_plan = ?, updated_at = ? WHERE id = ?')
+        .run(
+          JSON.stringify(scenePlan),
+          structuredCandidate ? renderScenePlan(scenePlan) : candidate.candidate_value,
+          resolvedAt,
+          candidate.target_id,
+        )
     } else {
       const card = parseJson(chapter.card_json)
       card[candidate.field_key] = candidate.candidate_value
@@ -742,6 +788,7 @@ export function createPlanningRepository(database, {
   return {
     loadPlanningCenter,
     saveDocument,
+    applyFoundationBundle,
     createEntity,
     updateEntity,
     reorderEntities,

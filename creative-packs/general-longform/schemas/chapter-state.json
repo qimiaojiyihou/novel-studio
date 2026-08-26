@@ -1,0 +1,5 @@
+{
+  "$id": "novel-studio://schemas/chapter-state@1",
+  "type": "object",
+  "required": ["summary", "facts", "characterStates", "relationshipChanges", "timelineEvents", "foreshadow", "openThreads"]
+}

@@ -130,7 +130,10 @@
         <div v-if="section === 'foundation'" class="planning-sheet">
           <div class="sheet-heading">
             <div><span>FOUNDATION / {{ project.genre }}</span><h2>这本书为什么必须成立</h2></div>
-            <p>先固定会影响全书选择的事实。仍不确定的部分可以空着，也可以逐项生成候选。</p>
+            <div class="sheet-heading-support">
+              <p>先固定会影响全书选择的事实。仍不确定的部分可以空着，也可以逐项生成候选。</p>
+              <CreativeExecutionControl :default-mode="defaultExecutionMode" :app-model-label="planningModelName" action-label="AI 补全本页" @execute="generateDocumentBundle('foundation', foundationFields, $event)" />
+            </div>
           </div>
           <div class="planning-field-grid">
             <PlanningField
@@ -140,8 +143,12 @@
               :field="field"
               :model-value="center.documents.foundation.content[field.key]"
               :busy="isGenerating('document', 'foundation', field.key)"
+              :default-execution-mode="defaultExecutionMode"
+              :app-model-label="planningModelName"
               @update:model-value="updateDocumentField('foundation', field.key, $event)"
-              @generate="generateDocumentField('foundation', field)"
+              @generate="generateDocumentField('foundation', field, $event)"
+              @cascade="requestDocumentChange('foundation', field)"
+              @edit-default="$emit('edit-project')"
             />
           </div>
         </div>
@@ -155,10 +162,16 @@
               :entity-count="center.characters.length"
               :fields="entityFields.character"
               :generation-key="generationKey"
+              :default-execution-mode="defaultExecutionMode"
+              :app-model-label="planningModelName"
               @update-title="updateEntityTitle(selectedCharacter, $event)"
               @update-field="updateEntityField(selectedCharacter, $event.key, $event.value)"
-              @generate-title="generateEntityTitle(selectedCharacter)"
-              @generate-field="generateEntityField(selectedCharacter, $event)"
+              @generate-title="generateEntityTitle(selectedCharacter, $event)"
+              @generate-field="generateEntityField(selectedCharacter, $event.field, $event.mode)"
+              @generate-all="generateEntityBundle(selectedCharacter, entityFields.character, $event)"
+              @cascade-title="requestEntityChange(selectedCharacter, { key: 'title', label: '人物姓名 / 称谓' })"
+              @cascade-field="requestEntityChange(selectedCharacter, $event.field)"
+              @edit-default="$emit('edit-project')"
               @move="moveEntity('character', selectedCharacter, $event)"
               @delete="requestEntityDelete(selectedCharacter)"
             />
@@ -198,12 +211,12 @@
                 <div class="relationship-form-grid">
                   <label><span>人物 A</span><select v-model="relationshipForm.fromCharacterId"><option v-for="character in center.characters" :key="character.id" :value="character.id">{{ character.title }}</option></select></label>
                   <label><span>人物 B</span><select v-model="relationshipForm.toCharacterId"><option v-for="character in center.characters" :key="character.id" :value="character.id">{{ character.title }}</option></select></label>
-                  <label><span>关系名称</span><input v-model="relationshipForm.label" placeholder="例如：旧搭档、母女、竞争者" /></label>
+                  <label><span class="form-label-line"><span>关系名称</span><span class="form-field-actions"><button v-if="relationshipForm.id" class="form-cascade" @click="requestRelationshipChange('label', '关系名称')">联动修改</button><CreativeExecutionControl compact :default-mode="defaultExecutionMode" :app-model-label="planningModelName" action-label="候选" @execute="requestRelationshipDraft('label', '关系名称', $event)" /></span></span><input v-model="relationshipForm.label" placeholder="例如：旧搭档、母女、竞争者" /></label>
                   <label><span>影响方向</span><select v-model="relationshipForm.direction"><option value="mutual">相互影响</option><option value="from_to">A 影响 B</option><option value="to_from">B 影响 A</option></select></label>
                   <label><span>关系趋势</span><select v-model="relationshipForm.trend"><option value="warming">靠近</option><option value="stable">稳定</option><option value="cooling">疏远</option><option value="hostile">敌对</option></select></label>
                   <label><span>当前状态</span><select v-model="relationshipForm.status"><option value="active">持续中</option><option value="changed">已变化</option><option value="ended">已结束</option></select></label>
-                  <label class="wide"><span>表面关系</span><textarea v-model="relationshipForm.surface" placeholder="他人和当事人表面上如何理解这段关系"></textarea></label>
-                  <label class="wide"><span>真实张力</span><textarea v-model="relationshipForm.tension" placeholder="双方真正争夺、隐瞒、亏欠或依赖什么"></textarea></label>
+                  <label class="wide"><span class="form-label-line"><span>表面关系</span><span class="form-field-actions"><button v-if="relationshipForm.id" class="form-cascade" @click="requestRelationshipChange('surface', '表面关系')">联动修改</button><CreativeExecutionControl compact :default-mode="defaultExecutionMode" :app-model-label="planningModelName" action-label="候选" @execute="requestRelationshipDraft('surface', '表面关系', $event)" /></span></span><textarea v-model="relationshipForm.surface" placeholder="他人和当事人表面上如何理解这段关系"></textarea></label>
+                  <label class="wide"><span class="form-label-line"><span>真实张力</span><span class="form-field-actions"><button v-if="relationshipForm.id" class="form-cascade" @click="requestRelationshipChange('tension', '真实张力')">联动修改</button><CreativeExecutionControl compact :default-mode="defaultExecutionMode" :app-model-label="planningModelName" action-label="候选" @execute="requestRelationshipDraft('tension', '真实张力', $event)" /></span></span><textarea v-model="relationshipForm.tension" placeholder="双方真正争夺、隐瞒、亏欠或依赖什么"></textarea></label>
                 </div>
                 <div class="relationship-editor-actions"><button @click="cancelRelationshipEdit">取消</button><button class="save" @click="saveRelationship">{{ relationshipForm.id ? '保存关系' : '建立关系' }}</button></div>
               </section>
@@ -216,7 +229,10 @@
           <template v-if="worldMode === 'overview'">
             <div class="sheet-heading">
               <div><span>WORLD CONTRACT</span><h2>先写约束行动的世界规则</h2></div>
-              <p>世界观总览负责共同规则；具体地点、组织、物件和历史放进设定卡片。</p>
+              <div class="sheet-heading-support">
+                <p>世界观总览负责共同规则；具体地点、组织、物件和历史放进设定卡片。</p>
+                <CreativeExecutionControl :default-mode="defaultExecutionMode" :app-model-label="planningModelName" action-label="AI 补全本页" @execute="generateDocumentBundle('world', worldOverviewFields, $event)" />
+              </div>
             </div>
             <div class="planning-field-grid">
               <PlanningField
@@ -225,8 +241,12 @@
                 :field="field"
                 :model-value="center.documents.world.content[field.key]"
                 :busy="isGenerating('document', 'world', field.key)"
+                :default-execution-mode="defaultExecutionMode"
+                :app-model-label="planningModelName"
                 @update:model-value="updateDocumentField('world', field.key, $event)"
-                @generate="generateDocumentField('world', field)"
+                @generate="generateDocumentField('world', field, $event)"
+                @cascade="requestDocumentChange('world', field)"
+                @edit-default="$emit('edit-project')"
               />
             </div>
           </template>
@@ -237,10 +257,16 @@
             :entity-count="center.worldElements.length"
             :fields="entityFields.world"
             :generation-key="generationKey"
+            :default-execution-mode="defaultExecutionMode"
+            :app-model-label="planningModelName"
             @update-title="updateEntityTitle(selectedWorldElement, $event)"
             @update-field="updateEntityField(selectedWorldElement, $event.key, $event.value)"
-            @generate-title="generateEntityTitle(selectedWorldElement)"
-            @generate-field="generateEntityField(selectedWorldElement, $event)"
+            @generate-title="generateEntityTitle(selectedWorldElement, $event)"
+            @generate-field="generateEntityField(selectedWorldElement, $event.field, $event.mode)"
+            @generate-all="generateEntityBundle(selectedWorldElement, entityFields.world, $event)"
+            @cascade-title="requestEntityChange(selectedWorldElement, { key: 'title', label: '设定名称' })"
+            @cascade-field="requestEntityChange(selectedWorldElement, $event.field)"
+            @edit-default="$emit('edit-project')"
             @move="moveEntity('world', selectedWorldElement, $event)"
             @delete="requestEntityDelete(selectedWorldElement)"
           />
@@ -270,7 +296,10 @@
           <template v-if="structureMode === 'outline'">
             <div class="sheet-heading">
               <div><span>STORY SPINE</span><h2>全书转折骨架</h2></div>
-              <p>这里不是章节摘要的堆叠，而是主角一次次改变策略后形成的因果链。</p>
+              <div class="sheet-heading-support">
+                <p>这里不是章节摘要的堆叠，而是主角一次次改变策略后形成的因果链。</p>
+                <CreativeExecutionControl :default-mode="defaultExecutionMode" :app-model-label="planningModelName" action-label="AI 补全本页" @execute="generateDocumentBundle('outline', outlineFields, $event)" />
+              </div>
             </div>
             <div class="planning-field-grid">
               <PlanningField
@@ -279,8 +308,12 @@
                 :field="field"
                 :model-value="center.documents.outline.content[field.key]"
                 :busy="isGenerating('document', 'outline', field.key)"
+                :default-execution-mode="defaultExecutionMode"
+                :app-model-label="planningModelName"
                 @update:model-value="updateDocumentField('outline', field.key, $event)"
-                @generate="generateDocumentField('outline', field)"
+                @generate="generateDocumentField('outline', field, $event)"
+                @cascade="requestDocumentChange('outline', field)"
+                @edit-default="$emit('edit-project')"
               />
             </div>
           </template>
@@ -291,10 +324,16 @@
             :entity-count="center.volumes.length"
             :fields="entityFields.volume"
             :generation-key="generationKey"
+            :default-execution-mode="defaultExecutionMode"
+            :app-model-label="planningModelName"
             @update-title="updateEntityTitle(selectedVolume, $event)"
             @update-field="updateEntityField(selectedVolume, $event.key, $event.value)"
-            @generate-title="generateEntityTitle(selectedVolume)"
-            @generate-field="generateEntityField(selectedVolume, $event)"
+            @generate-title="generateEntityTitle(selectedVolume, $event)"
+            @generate-field="generateEntityField(selectedVolume, $event.field, $event.mode)"
+            @generate-all="generateEntityBundle(selectedVolume, entityFields.volume, $event)"
+            @cascade-title="requestEntityChange(selectedVolume, { key: 'title', label: '分卷名称' })"
+            @cascade-field="requestEntityChange(selectedVolume, $event.field)"
+            @edit-default="$emit('edit-project')"
             @move="moveEntity('volume', selectedVolume, $event)"
             @delete="requestEntityDelete(selectedVolume)"
           />
@@ -302,7 +341,10 @@
           <template v-else-if="structureMode === 'arcs'">
             <div class="entity-editor-heading arc-heading">
               <div><span>STORY THREADS</span><h2>跨卷情节弧</h2><p>沿着分卷追踪每条主线、人物线或悬疑线发生了什么实质变化。</p></div>
-              <button class="arc-create-button" @click="createArc">＋ 新情节线</button>
+              <div class="arc-heading-actions">
+                <button v-if="selectedArc" class="danger-link" @click="requestArcDelete(selectedArc)">删除当前情节线</button>
+                <button class="arc-create-button" @click="createArc">＋ 新情节线</button>
+              </div>
             </div>
             <div v-if="!center.storyArcs.length" class="relationship-empty arc-empty"><span>⌁</span><strong>还没有贯穿全书的情节线</strong><p>先建立一条主线，再把关键变化放进不同分卷；尚未建立分卷时也可先放在“未归卷”。</p><button @click="createArc">建立第一条线</button></div>
             <template v-else>
@@ -325,14 +367,14 @@
               </div>
 
               <section v-if="arcForm" class="arc-editor" :class="`arc-${arcForm.colorKey}`">
-                <div class="arc-editor-heading"><div><span>THREAD CONTRACT</span><h3>{{ arcForm.title || '新情节线' }}</h3></div><button @click="removeArc">删除情节线</button></div>
+                <div class="arc-editor-heading"><div><span>THREAD CONTRACT</span><h3>{{ arcForm.title || '新情节线' }}</h3></div><button @click="requestArcDelete(selectedArc)">删除情节线</button></div>
                 <div class="arc-form-grid">
-                  <label class="wide"><span>情节线名称</span><input v-model="arcForm.title" placeholder="例如：失踪案真相"></label>
+                  <label class="wide"><span class="form-label-line"><span>情节线名称</span><span class="form-field-actions"><button v-if="arcForm.id" class="form-cascade" @click="requestArcChange('title', '情节线名称')">联动修改</button><CreativeExecutionControl compact :default-mode="defaultExecutionMode" :app-model-label="planningModelName" action-label="候选" @execute="requestArcDraft('title', '情节线名称', $event)" /></span></span><input v-model="arcForm.title" placeholder="例如：失踪案真相"></label>
                   <label><span>类型</span><select v-model="arcForm.category"><option value="main">主线</option><option value="character">人物弧</option><option value="relationship">关系线</option><option value="mystery">悬疑线</option><option value="world">世界变化</option><option value="other">其他</option></select></label>
                   <label><span>状态</span><select v-model="arcForm.status"><option value="planned">待展开</option><option value="active">推进中</option><option value="resolved">已兑现</option><option value="paused">暂挂</option></select></label>
                   <label><span>线条颜色</span><select v-model="arcForm.colorKey"><option value="copper">铜红</option><option value="pine">松绿</option><option value="slate">岩蓝</option><option value="ochre">赭黄</option><option value="plum">梅紫</option></select></label>
-                  <label class="wide"><span>起点 / 初始问题</span><textarea v-model="arcForm.premise" placeholder="这条线一开始提出什么问题、欠下什么承诺？"></textarea></label>
-                  <label class="wide"><span>终点 / 兑现结果</span><textarea v-model="arcForm.destination" placeholder="到最后，局势、认知或关系必须发生什么不可逆变化？"></textarea></label>
+                  <label class="wide"><span class="form-label-line"><span>起点 / 初始问题</span><span class="form-field-actions"><button v-if="arcForm.id" class="form-cascade" @click="requestArcChange('premise', '起点 / 初始问题')">联动修改</button><CreativeExecutionControl compact :default-mode="defaultExecutionMode" :app-model-label="planningModelName" action-label="候选" @execute="requestArcDraft('premise', '起点 / 初始问题', $event)" /></span></span><textarea v-model="arcForm.premise" placeholder="这条线一开始提出什么问题、欠下什么承诺？"></textarea></label>
+                  <label class="wide"><span class="form-label-line"><span>终点 / 兑现结果</span><span class="form-field-actions"><button v-if="arcForm.id" class="form-cascade" @click="requestArcChange('destination', '终点 / 兑现结果')">联动修改</button><CreativeExecutionControl compact :default-mode="defaultExecutionMode" :app-model-label="planningModelName" action-label="候选" @execute="requestArcDraft('destination', '终点 / 兑现结果', $event)" /></span></span><textarea v-model="arcForm.destination" placeholder="到最后，局势、认知或关系必须发生什么不可逆变化？"></textarea></label>
                 </div>
                 <div class="relationship-editor-actions"><button @click="resetArcForm">还原</button><button class="save" @click="saveArc">保存情节线</button></div>
               </section>
@@ -342,8 +384,8 @@
                 <div class="arc-form-grid">
                   <label><span>所属分卷</span><select v-model="arcBeatForm.volumeId" @change="handleArcBeatVolumeChange"><option value="">未归卷</option><option v-for="volume in center.volumes" :key="volume.id" :value="volume.id">{{ volume.title }}</option></select></label>
                   <label><span>对应章节（可选）</span><select v-model="arcBeatForm.chapterId"><option value="">不绑定章节</option><option v-for="chapter in arcBeatChapterOptions" :key="chapter.id" :value="chapter.id">第 {{ chapter.chapterNo }} 章 · {{ chapter.title }}</option></select></label>
-                  <label class="wide"><span>节点名称</span><input v-model="arcBeatForm.label" placeholder="例如：第二份证词出现"></label>
-                  <label class="wide"><span>发生了什么实质变化</span><textarea v-model="arcBeatForm.changeText" placeholder="写结果，不只写事件：谁改变策略、掌握了什么、失去了什么？"></textarea></label>
+                  <label class="wide"><span class="form-label-line"><span>节点名称</span><span class="form-field-actions"><button v-if="arcBeatForm.id" class="form-cascade" @click="requestArcBeatChange('label', '节点名称')">联动修改</button><CreativeExecutionControl compact :default-mode="defaultExecutionMode" :app-model-label="planningModelName" action-label="候选" @execute="requestArcBeatDraft('label', '节点名称', $event)" /></span></span><input v-model="arcBeatForm.label" placeholder="例如：第二份证词出现"></label>
+                  <label class="wide"><span class="form-label-line"><span>发生了什么实质变化</span><span class="form-field-actions"><button v-if="arcBeatForm.id" class="form-cascade" @click="requestArcBeatChange('changeText', '关键节点变化')">联动修改</button><CreativeExecutionControl compact :default-mode="defaultExecutionMode" :app-model-label="planningModelName" action-label="候选" @execute="requestArcBeatDraft('changeText', '关键节点变化', $event)" /></span></span><textarea v-model="arcBeatForm.changeText" placeholder="写结果，不只写事件：谁改变策略、掌握了什么、失去了什么？"></textarea></label>
                 </div>
                 <div class="relationship-editor-actions"><button @click="cancelArcBeatEdit">取消</button><button class="save" @click="saveArcBeat">保存节点</button></div>
               </section>
@@ -353,6 +395,7 @@
             <div class="entity-editor-heading chapter-plan-heading">
               <div><span>CHAPTER {{ String(selectedChapter.chapterNo).padStart(2, '0') }}</span><h2>{{ selectedChapter.title }}</h2><p>章节规划会直接进入正文生成上下文。</p></div>
               <div class="chapter-scope-tools">
+                <CreativeExecutionControl :default-mode="defaultExecutionMode" :app-model-label="planningModelName" action-label="AI 补全本章" @execute="generateChapterBundle(selectedChapter, $event)" />
                 <label>
                   <span>所属分卷</span>
                   <select :value="selectedChapter.card?.volumeId || ''" @change="assignChapterVolume(selectedChapter, $event.target.value)">
@@ -361,6 +404,7 @@
                   </select>
                 </label>
                 <span class="chapter-plan-status">{{ selectedChapter.status === 'draft' ? '草稿' : selectedChapter.status }}</span>
+                <button class="danger-link chapter-delete-button" @click="$emit('delete-chapter', selectedChapter)">删除章节</button>
               </div>
             </div>
             <div class="planning-field-grid">
@@ -370,8 +414,12 @@
                 :field="field"
                 :model-value="chapterFieldValue(selectedChapter, field)"
                 :busy="isGenerating('chapter', selectedChapter.id, field.key)"
+                :default-execution-mode="defaultExecutionMode"
+                :app-model-label="planningModelName"
                 @update:model-value="updateChapterField(selectedChapter, field, $event)"
-                @generate="generateChapterField(selectedChapter, field)"
+                @generate="generateChapterField(selectedChapter, field, $event)"
+                @cascade="requestChapterChange(selectedChapter, field)"
+                @edit-default="$emit('edit-project')"
               />
             </div>
           </template>
@@ -422,10 +470,10 @@
 
     <div v-if="deleteTarget" class="planning-confirm-backdrop" @mousedown.self="deleteTarget = null">
       <section class="planning-confirm">
-        <span class="eyebrow copper">REMOVE CARD</span>
-        <h2>删除“{{ deleteTarget.title }}”？</h2>
-        <p>这张规划卡及尚未处理的字段候选会一并移除，其他人物、设定或分卷不会改变。</p>
-        <div><button @click="deleteTarget = null">取消</button><button class="danger" @click="confirmEntityDelete">删除卡片</button></div>
+        <span class="eyebrow copper">{{ deleteDialog.eyebrow }}</span>
+        <h2>删除“{{ deleteDialog.title }}”？</h2>
+        <p>{{ deleteDialog.body }}</p>
+        <div><button @click="deleteTarget = null">取消</button><button class="danger" @click="confirmDeleteTarget">{{ deleteDialog.confirmLabel }}</button></div>
       </section>
     </div>
   </section>
@@ -435,10 +483,13 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { appService } from '../services/app-service.js'
+import { planningPromptProfile, renderScenePlan } from '../../electron/creative-quality.js'
 import { chapterPlanFields, entityFields, foundationFields, outlineFields, sectionMeta, worldOverviewFields } from '../services/planning-schema.js'
 import PlanningField from './PlanningField.vue'
 import EntityEditor from './planning/EntityEditor.vue'
 import EmptyPlanning from './planning/EmptyPlanning.vue'
+import CreativeExecutionControl from './CreativeExecutionControl.vue'
+import { draftDigest } from '../utils/inline-creative.js'
 
 const props = defineProps({
   project: { type: Object, required: true },
@@ -446,7 +497,7 @@ const props = defineProps({
   modelSettings: { type: Object, required: true },
 })
 
-const emit = defineEmits(['toast', 'open-settings', 'chapter-updated'])
+const emit = defineEmits(['toast', 'open-settings', 'edit-project', 'chapter-updated', 'delete-chapter', 'codex-action', 'story-change'])
 const center = ref(null)
 const loadError = ref('')
 const saveState = ref('saved')
@@ -520,6 +571,20 @@ const planningModelName = computed(() => {
   const id = props.modelSettings.routes?.planning_field
   return props.modelSettings.profiles.find((profile) => profile.id === id)?.name || 'MockProvider'
 })
+const defaultExecutionMode = computed(() => props.project.default_execution_mode === 'codex' ? 'codex' : 'app_model')
+const deleteDialog = computed(() => deleteTarget.value?.type === 'arc'
+  ? {
+      eyebrow: 'REMOVE STORY THREAD',
+      title: deleteTarget.value.arc?.title || '当前情节线',
+      body: '这条情节线及其全部关键节点会一并删除；已经写入章节、分卷和正文的内容保持不变。',
+      confirmLabel: '删除情节线',
+    }
+  : {
+      eyebrow: 'REMOVE CARD',
+      title: deleteTarget.value?.entity?.title || '当前规划卡',
+      body: '这张规划卡及尚未处理的字段候选会一并移除，其他人物、设定或分卷不会改变。',
+      confirmLabel: '删除卡片',
+    })
 const saveStateLabel = computed(() => ({ dirty: '等待自动保存', saving: '正在保存', saved: '规划已保存', error: '保存失败' }[saveState.value]))
 const completionCount = computed(() => {
   if (!center.value) return { completed: 0, total: 0 }
@@ -727,14 +792,20 @@ async function saveArc() {
     emit('toast', '情节线已保存')
   } catch (error) { emit('toast', `保存情节线失败：${error.message}`) }
 }
+function requestArcDelete(arc) {
+  if (!arc?.id) return
+  deleteTarget.value = { type: 'arc', arc }
+}
 async function removeArc() {
-  if (!arcForm.value?.id) return
+  const arc = deleteTarget.value?.type === 'arc' ? deleteTarget.value.arc : selectedArc.value
+  if (!arc?.id) return
   try {
-    center.value.storyArcs = await appService.deleteStoryArc(arcForm.value.id)
+    center.value.storyArcs = await appService.deleteStoryArc(arc.id)
     selectedArcId.value = center.value.storyArcs[0]?.id || ''
     selectedArcBeatId.value = ''
     arcBeatForm.value = null
     resetArcForm()
+    deleteTarget.value = null
     emit('toast', '情节线及其节点已删除')
   } catch (error) { emit('toast', `删除情节线失败：${error.message}`) }
 }
@@ -822,7 +893,7 @@ function markEntityDirty(entity) {
 }
 
 function chapterFieldValue(chapter, field) {
-  return field.special ? chapter.scenePlan || '' : String(chapter.card?.[field.key] || '')
+  return field.special ? renderScenePlan(chapter.scenePlan) : String(chapter.card?.[field.key] || '')
 }
 
 function updateChapterField(chapter, field, value) {
@@ -954,9 +1025,13 @@ async function moveEntity(kind, entity, direction) {
   } catch (error) { emit('toast', `调整顺序失败：${error.message}`) }
 }
 
-function requestEntityDelete(entity) { deleteTarget.value = entity }
+function requestEntityDelete(entity) { deleteTarget.value = { type: 'entity', entity } }
+async function confirmDeleteTarget() {
+  if (deleteTarget.value?.type === 'arc') return removeArc()
+  return confirmEntityDelete()
+}
 async function confirmEntityDelete() {
-  const entity = deleteTarget.value
+  const entity = deleteTarget.value?.entity
   if (!entity) return
   await flushSaves()
   try {
@@ -984,42 +1059,291 @@ async function confirmEntityDelete() {
   } catch (error) { emit('toast', `删除规划卡片失败：${error.message}`) }
 }
 
-function generateDocumentField(kind, field) {
+function generateDocumentField(kind, field, mode = defaultExecutionMode.value) {
   return startFieldGeneration(field, {
     targetType: 'document', targetId: kind, targetLabel: meta.value.title,
     scopeType: 'project', scopeId: props.project.id,
+    planningScopeType: kind,
     currentValue: center.value.documents[kind].content[field.key] || '',
     nearbyContext: JSON.stringify(center.value.documents[kind].content),
-  })
+  }, mode)
 }
 
-function generateEntityTitle(entity) {
+function generateEntityTitle(entity, mode = defaultExecutionMode.value) {
   return startFieldGeneration({ key: 'title', label: entity.kind === 'character' ? '人物姓名 / 称谓' : entity.kind === 'world' ? '设定名称' : '分卷名称' }, {
     targetType: 'entity', targetId: entity.id, targetLabel: entity.title, currentValue: entity.title,
+    entityKind: entity.kind,
     scopeType: entity.kind === 'volume' ? 'volume' : 'project', scopeId: entity.kind === 'volume' ? entity.id : props.project.id,
     nearbyContext: JSON.stringify(entity.data),
-  })
+  }, mode)
 }
 
-function generateEntityField(entity, field) {
+function generateEntityField(entity, field, mode = defaultExecutionMode.value) {
   return startFieldGeneration(field, {
     targetType: 'entity', targetId: entity.id, targetLabel: entity.title,
+    entityKind: entity.kind,
     scopeType: entity.kind === 'volume' ? 'volume' : 'project', scopeId: entity.kind === 'volume' ? entity.id : props.project.id,
     currentValue: entity.data[field.key] || '', nearbyContext: JSON.stringify(entity.data),
-  })
+  }, mode)
 }
 
-function generateChapterField(chapter, field) {
+async function generateDocumentBundle(kind, fields, mode = defaultExecutionMode.value) {
+  try {
+    await flushSaves()
+    emit('codex-action', {
+      request: {
+        projectId: props.project.id,
+        task: 'planning_field',
+        intent: 'draft',
+        executionMode: mode === 'app_model' ? 'app_model' : 'codex',
+        modelProfileId: mode === 'app_model' ? props.modelSettings.routes?.planning_field || '' : '',
+        modelProfileName: mode === 'app_model' ? planningModelName.value : '',
+        target: {
+          kind: 'planning_document_bundle',
+          targetId: kind,
+          fieldLabel: `${sectionMeta[kind]?.title || '当前规划页'} · AI 补全本页`,
+          fieldKeys: fields.map((field) => field.key),
+          includeFilled: false,
+        },
+        instruction: [
+          '一次补全当前规划页仍为空白的字段；所有字段必须属于同一套故事设计，并形成清晰因果。',
+          '保留没有被请求的已确认字段，不要用同义改写覆盖它们。',
+          generationInstruction.value,
+        ].filter(Boolean).join('\n'),
+      },
+      onAccepted: () => loadCenter(),
+    })
+  } catch (error) {
+    emit('toast', `整页生成启动失败：${error.message}`)
+  }
+}
+
+async function generateEntityBundle(entity, fields, mode = defaultExecutionMode.value) {
+  try {
+    await flushSaves()
+    emit('codex-action', {
+      request: {
+        projectId: props.project.id,
+        task: 'planning_field',
+        intent: 'draft',
+        executionMode: mode === 'app_model' ? 'app_model' : 'codex',
+        modelProfileId: mode === 'app_model' ? props.modelSettings.routes?.planning_field || '' : '',
+        modelProfileName: mode === 'app_model' ? planningModelName.value : '',
+        target: {
+          kind: 'planning_entity_bundle',
+          targetId: entity.id,
+          fieldLabel: `${entity.title} · AI 补全整卡`,
+          fieldKeys: ['title', ...fields.map((field) => field.key)],
+          includeFilled: false,
+        },
+        instruction: [
+          '一次补全这张规划卡仍为空白的字段；所有字段必须来自同一套人物、世界或分卷设计，彼此不能矛盾。',
+          '保留没有被请求的已确认字段，不要用同义改写覆盖它们。',
+          generationInstruction.value,
+        ].filter(Boolean).join('\n'),
+      },
+      onAccepted: () => loadCenter(),
+    })
+  } catch (error) {
+    emit('toast', `整卡生成启动失败：${error.message}`)
+  }
+}
+
+async function generateChapterBundle(chapter, mode = defaultExecutionMode.value) {
+  try {
+    await flushSaves()
+    emit('codex-action', {
+      request: {
+        projectId: props.project.id,
+        chapterId: chapter.id,
+        task: 'planning_field',
+        intent: 'draft',
+        executionMode: mode === 'app_model' ? 'app_model' : 'codex',
+        modelProfileId: mode === 'app_model' ? props.modelSettings.routes?.planning_field || '' : '',
+        modelProfileName: mode === 'app_model' ? planningModelName.value : '',
+        target: {
+          kind: 'planning_chapter_bundle',
+          targetId: chapter.id,
+          fieldLabel: `第 ${chapter.chapterNo} 章《${chapter.title}》 · AI 补全本章`,
+          fieldKeys: chapterPlanFields.map((field) => field.key),
+          includeFilled: false,
+        },
+        instruction: [
+          '一次补全本章仍为空白的规划字段；本章合同、人物目标、阻力、转折、回报、代价、结尾和场景计划必须形成可执行的因果链。',
+          '保留没有被请求的已确认字段，不要覆盖已有章节事实或越过已确认结尾。',
+          generationInstruction.value,
+        ].filter(Boolean).join('\n'),
+      },
+      onAccepted: () => loadCenter(),
+    })
+  } catch (error) {
+    emit('toast', `整章规划生成启动失败：${error.message}`)
+  }
+}
+
+function generateChapterField(chapter, field, mode = defaultExecutionMode.value) {
   return startFieldGeneration(field, {
     targetType: 'chapter', targetId: chapter.id, targetLabel: `第 ${chapter.chapterNo} 章 · ${chapter.title}`,
     currentValue: chapterFieldValue(chapter, field), nearbyContext: JSON.stringify({ card: chapter.card, scenePlan: chapter.scenePlan }),
     chapterId: chapter.id, scopeType: 'chapter', scopeId: chapter.id,
+  }, mode)
+}
+
+async function emitStoryChange(target, currentValue) {
+  try {
+    await flushSaves()
+    emit('story-change', {
+      target: { ...target, currentValue: String(currentValue ?? '') },
+    })
+  } catch (error) {
+    emit('toast', `保存当前设定后才能联动修改：${error.message}`)
+  }
+}
+
+function requestDocumentChange(kind, field) {
+  return emitStoryChange({
+    kind: 'planning_document',
+    targetId: kind,
+    fieldKey: field.key,
+    fieldLabel: field.label,
+  }, center.value?.documents?.[kind]?.content?.[field.key])
+}
+
+function requestEntityChange(entity, field) {
+  const currentValue = field.key === 'title' ? entity.title : entity.data?.[field.key]
+  return emitStoryChange({
+    kind: 'planning_entity',
+    targetId: entity.id,
+    fieldKey: field.key,
+    fieldLabel: `${entity.title} · ${field.label}`,
+  }, currentValue)
+}
+
+function requestChapterChange(chapter, field) {
+  return emitStoryChange({
+    kind: 'chapter_field',
+    targetId: chapter.id,
+    fieldKey: field.key,
+    fieldLabel: `第 ${chapter.chapterNo} 章 · ${field.label}`,
+  }, chapterFieldValue(chapter, field))
+}
+
+async function requestRendererDraft({ kind, form, targetId = '', fieldKey, fieldLabel, mode }) {
+  if (!form) return
+  const digest = () => draftDigest(form)
+  const instruction = [
+    `请为“${fieldLabel}”生成一项可直接填入表单的文本候选。`,
+    `当前未保存表单（只作为草稿，不作为项目事实）：${JSON.stringify(form)}`,
+  ].join('\n')
+  if (mode !== 'codex') {
+    const generation = appService.startGeneration({
+      task: 'planning_field', projectId: props.project.id,
+      instruction,
+      modelProfileId: props.modelSettings.routes?.planning_field,
+      planning: {
+        sectionLabel: meta.value.title, targetLabel: fieldLabel, targetType: 'renderer_draft', targetId: targetId || 'new',
+        fieldKey, fieldLabel, currentValue: String(form[fieldKey] || ''), nearbyContext: JSON.stringify(form),
+        scopeType: 'project', scopeId: props.project.id,
+      },
+    })
+    try {
+      const result = await generation.promise
+      form[fieldKey] = result.text || ''
+      emit('toast', `${fieldLabel}候选已填入编辑器，尚未保存`)
+    } catch (error) { emit('toast', `生成失败：${error.message}`) }
+    return
+  }
+  const initialDigest = digest()
+  emit('codex-action', {
+    request: {
+      projectId: props.project.id,
+      task: 'planning_field',
+      target: { kind, targetId, fieldKey, fieldLabel, draftDigest: initialDigest },
+      instruction,
+    },
+    getDraftDigest: digest,
+    getDraftValue: () => String(form[fieldKey] || ''),
+    applyDraft: (text) => { form[fieldKey] = text },
   })
 }
 
-async function startFieldGeneration(field, target) {
+function requestRelationshipDraft(fieldKey, fieldLabel, mode) {
+  return requestRendererDraft({ kind: 'relationship_draft', form: relationshipForm.value, targetId: relationshipForm.value?.id || '', fieldKey, fieldLabel, mode })
+}
+function requestArcDraft(fieldKey, fieldLabel, mode) {
+  return requestRendererDraft({ kind: 'story_arc_draft', form: arcForm.value, targetId: arcForm.value?.id || '', fieldKey, fieldLabel, mode })
+}
+function requestArcBeatDraft(fieldKey, fieldLabel, mode) {
+  return requestRendererDraft({ kind: 'story_arc_beat_draft', form: arcBeatForm.value, targetId: arcBeatForm.value?.id || '', fieldKey, fieldLabel, mode })
+}
+
+function ensurePersistedFormValue(saved, form, fieldKey, label) {
+  if (!saved || String(saved[fieldKey] ?? '') !== String(form?.[fieldKey] ?? '')) {
+    emit('toast', `“${label}”有尚未保存的修改，请先保存后再联动分析`)
+    return false
+  }
+  return true
+}
+
+function requestRelationshipChange(fieldKey, fieldLabel) {
+  const saved = center.value.relationships.find((item) => item.id === relationshipForm.value?.id)
+  if (!ensurePersistedFormValue(saved, relationshipForm.value, fieldKey, fieldLabel)) return
+  return emitStoryChange({ kind: 'relationship', targetId: saved.id, fieldKey, fieldLabel: `人物关系 · ${fieldLabel}` }, saved[fieldKey])
+}
+
+function requestArcChange(fieldKey, fieldLabel) {
+  const saved = center.value.storyArcs.find((item) => item.id === arcForm.value?.id)
+  if (!ensurePersistedFormValue(saved, arcForm.value, fieldKey, fieldLabel)) return
+  return emitStoryChange({ kind: 'story_arc', targetId: saved.id, fieldKey, fieldLabel: `${saved.title} · ${fieldLabel}` }, saved[fieldKey])
+}
+
+function requestArcBeatChange(fieldKey, fieldLabel) {
+  const saved = selectedArc.value?.beats?.find((item) => item.id === arcBeatForm.value?.id)
+  if (!ensurePersistedFormValue(saved, arcBeatForm.value, fieldKey, fieldLabel)) return
+  const storageFieldKey = fieldKey === 'changeText' ? 'change_text' : fieldKey
+  return emitStoryChange({ kind: 'story_arc_beat', targetId: saved.id, fieldKey: storageFieldKey, fieldLabel: `${saved.label} · ${fieldLabel}` }, saved[fieldKey])
+}
+
+async function startFieldGeneration(field, target, mode = defaultExecutionMode.value) {
   if (activeGeneration) return
   try { await flushSaves() } catch { return }
+  const planning = {
+    sectionLabel: meta.value.title,
+    targetLabel: target.targetLabel,
+    targetType: target.targetType,
+    targetId: target.targetId,
+    fieldKey: field.key,
+    fieldLabel: field.label,
+    currentValue: target.currentValue,
+    nearbyContext: target.nearbyContext,
+    scopeType: target.planningScopeType || target.scopeType,
+    scopeId: target.scopeId,
+    entityKind: target.entityKind || '',
+    boundaries: center.value.documents?.foundation?.content?.boundaries || '',
+  }
+  if (mode === 'codex') {
+    const kind = target.targetType === 'document' ? 'planning_document' : target.targetType === 'entity' ? 'planning_entity' : 'chapter_field'
+    emit('codex-action', {
+      request: {
+        projectId: props.project.id,
+        chapterId: target.chapterId || '',
+        task: 'planning_field',
+        intent: 'draft',
+        target: {
+          kind,
+          targetId: target.targetId,
+          fieldKey: field.key,
+          fieldLabel: field.label,
+          promptProfile: planningPromptProfile(planning),
+          scopeType: target.scopeType,
+          scopeId: target.scopeId,
+        },
+        instruction: generationInstruction.value,
+      },
+      onAccepted: () => loadCenter(),
+    })
+    return
+  }
   generationKey.value = `${target.targetType}:${target.targetId}:${field.key}`
   generationVisible.value = true
   generationStream.value = ''
@@ -1029,18 +1353,8 @@ async function startFieldGeneration(field, target) {
     task: 'planning_field', projectId: props.project.id, chapterId: target.chapterId,
     instruction: generationInstruction.value,
     modelProfileId: props.modelSettings.routes?.planning_field,
-    planning: {
-      sectionLabel: meta.value.title,
-      targetLabel: target.targetLabel,
-      targetType: target.targetType,
-      targetId: target.targetId,
-      fieldKey: field.key,
-      fieldLabel: field.label,
-      currentValue: target.currentValue,
-      nearbyContext: target.nearbyContext,
-      scopeType: target.scopeType,
-      scopeId: target.scopeId,
-    },
+    promptProfile: planningPromptProfile(planning),
+    planning,
   }, handleGenerationEvent)
   activeGeneration = generation
   try {
@@ -1093,11 +1407,11 @@ function candidateTargetLabel(candidate) {
   return chapter ? `第 ${chapter.chapterNo} 章 · ${chapter.title}` : '章节规划'
 }
 
-defineExpose({ flushSaves })
+defineExpose({ flushSaves, reload: loadCenter })
 </script>
 
 <style scoped>
-.planning-center { grid-column: 2 / 4; min-width: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); color: var(--ink); background: #eee7da; }
+.planning-center { grid-column: 2 / 4; min-width: 0; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; color: var(--ink); background: #eee7da; }
 .planning-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 32px; padding: 24px 28px 20px; color: #f5f1e8; border-bottom: 1px solid #3f464b; background: #262c31; }
 .planning-header h1 { margin: 8px 0 4px; font: 28px/1.15 var(--font-display); }
 .planning-header p { margin: 0; color: #9ca4a8; font-size: 10px; }
@@ -1108,7 +1422,7 @@ defineExpose({ flushSaves })
 .planning-save-state.dirty { color: #d8b878; }.planning-save-state.dirty i { background: #c8964a; }
 .planning-save-state.saving i { animation: save-pulse .8s ease-in-out infinite; }.planning-save-state.error { color: #df8c78; }.planning-save-state.error i { background: #c75e48; }
 .planning-layout { min-height: 0; display: grid; grid-template-columns: 205px minmax(430px, 1fr) 285px; }
-.planning-index { min-height: 0; overflow: auto; padding: 17px 10px 28px; color: #c8ccce; border-right: 1px solid #434b50; background: #2b3238; }
+.planning-index { min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 17px 10px 28px; color: #c8ccce; border-right: 1px solid #434b50; background: #2b3238; }
 .index-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 8px 12px; color: #899299; font-size: 8px; letter-spacing: .1em; }
 .index-heading small { color: #657078; font-size: 7px; letter-spacing: 0; }.index-heading button { padding: 3px 5px; color: var(--copper-light); border: 0; background: transparent; font-size: 8px; }
 .index-check { display: flex; align-items: center; gap: 9px; width: 100%; padding: 9px 8px; color: #9ca4a8; border: 0; background: transparent; text-align: left; font-size: 10px; }
@@ -1120,12 +1434,14 @@ defineExpose({ flushSaves })
 .entity-index-item:hover, .entity-index-item.active { background: #353e44; border-color: #4e585d; }.entity-index-item.active { box-shadow: inset 2px 0 0 var(--copper); }
 .entity-index-item b { color: #cf7b63; font: 8px var(--font-ui); }.entity-index-item > span { min-width: 0; display: grid; gap: 4px; }.entity-index-item strong { overflow: hidden; font: 11px var(--font-display); text-overflow: ellipsis; white-space: nowrap; }.entity-index-item small { overflow: hidden; color: #747f85; text-overflow: ellipsis; white-space: nowrap; font-size: 7px; }.entity-index-item.compact { padding-top: 8px; padding-bottom: 8px; }
 .index-empty { margin: 10px 7px; padding: 14px 10px; color: #899399; border: 1px dashed #566168; font: 11px/1.6 var(--font-display); }.index-empty small { font: 8px var(--font-ui); }
-.planning-canvas { min-width: 0; min-height: 0; overflow: auto; padding: 25px 28px 60px; background: #eee7da; }
+.planning-canvas { min-width: 0; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 25px 28px 60px; background: #eee7da; }
 .planning-sheet { width: min(820px, 100%); margin: 0 auto; padding: 29px 32px 44px; background: var(--paper-soft); box-shadow: 0 8px 28px rgba(62,49,39,.08); }
 .sheet-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 28px; margin-bottom: 28px; padding-bottom: 20px; border-bottom: 1px solid var(--line); }
 .sheet-heading span, .entity-editor-heading span { color: var(--copper); font: 600 8px var(--font-ui); letter-spacing: .14em; }.sheet-heading h2, .entity-editor-heading h2 { margin: 8px 0 0; font: 24px/1.25 var(--font-display); }.sheet-heading p { max-width: 260px; margin: 2px 0 0; color: #918578; font: 9px/1.65 var(--font-body); }
+.sheet-heading-support { display: grid; justify-items: end; gap: 12px; max-width: 300px; }
+.sheet-heading-support p { text-align: right; }
 .planning-field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 23px 18px; }
-.candidate-rail { min-height: 0; overflow: auto; color: #514a43; border-left: 1px solid #cec2b3; background: #e5dccd; }
+.candidate-rail { min-height: 0; overflow: auto; overscroll-behavior: contain; color: #514a43; border-left: 1px solid #cec2b3; background: #e5dccd; }
 .candidate-heading { display: flex; align-items: flex-start; justify-content: space-between; padding: 22px 20px 17px; border-bottom: 1px solid #cfc3b4; }.candidate-heading h2 { margin: 8px 0 0; font: 19px var(--font-display); }.candidate-count { display: grid; place-items: center; min-width: 23px; height: 23px; color: #fff7ed; border-radius: 50%; background: var(--copper); font-size: 9px; }
 .candidate-instruction { display: grid; gap: 7px; padding: 15px 20px; border-bottom: 1px solid #d0c4b5; }.candidate-instruction span { color: #8b7e70; font-size: 8px; }.candidate-instruction textarea { min-height: 54px; padding: 8px; color: #554d45; border: 1px solid #cbbdab; outline: 0; resize: vertical; background: rgba(255,255,255,.35); font: 9px/1.5 var(--font-body); }.candidate-instruction textarea:focus { border-color: var(--copper-light); background: #fffaf2; }
 .candidate-stream { margin: 17px 16px; border: 1px solid #cda992; border-left: 3px solid var(--copper); background: #fff8ef; box-shadow: 0 8px 20px rgba(80,57,43,.1); }.candidate-stream > div { display: flex; align-items: center; gap: 7px; padding: 8px 9px; color: #76685d; border-bottom: 1px solid #e0ccbc; font-size: 8px; }.candidate-stream i { width: 6px; height: 6px; border-radius: 50%; background: var(--copper); animation: save-pulse .8s infinite; }.candidate-stream button { margin-left: auto; color: var(--copper); border: 0; background: transparent; font-size: 8px; }.candidate-stream pre { max-height: 260px; overflow: auto; margin: 0; padding: 12px; color: #51473f; font: 11px/1.75 var(--font-body); white-space: pre-wrap; }
@@ -1134,7 +1450,7 @@ defineExpose({ flushSaves })
 .candidate-model { padding: 2px 20px 13px; color: #a09385; font-size: 7px; }.candidate-actions { display: grid; grid-template-columns: 1fr 1.6fr; gap: 7px; padding: 0 16px 18px; }.candidate-actions button { padding: 9px; color: #776b60; border: 1px solid #c8baaa; background: transparent; font-size: 8px; }.candidate-actions .accept { color: #fff8ef; border-color: var(--copper); background: var(--copper); }
 .candidate-empty { display: grid; justify-items: center; padding: 48px 25px; color: #8d8073; text-align: center; }.candidate-empty > span { color: var(--copper); font-size: 28px; }.candidate-empty strong { margin-top: 10px; color: #5d544c; font: 14px var(--font-display); }.candidate-empty p { margin: 8px 0 0; font: 9px/1.65 var(--font-body); }
 .candidate-queue { display: grid; gap: 4px; padding: 14px 16px 25px; border-top: 1px solid #cfc3b4; }.candidate-queue > span { margin-bottom: 5px; color: #918375; font-size: 8px; }.candidate-queue button { display: grid; gap: 3px; padding: 8px 9px; color: #71675d; border: 1px solid transparent; background: rgba(255,255,255,.2); text-align: left; }.candidate-queue button.active { border-color: #c69b84; background: #fff8ef; }.candidate-queue strong { font: 10px var(--font-display); }.candidate-queue small { color: #9b8e81; font-size: 7px; }
-.entity-editor-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; margin-bottom: 25px; padding-bottom: 18px; border-bottom: 1px solid var(--line); }.chapter-plan-heading p { margin: 7px 0 0; color: #93877b; font-size: 9px; }.chapter-scope-tools { display: flex; align-items: flex-end; gap: 10px; }.chapter-scope-tools label { display: grid; gap: 5px; color: #8d7f72; font-size: 8px; }.chapter-scope-tools select { min-width: 145px; height: 29px; padding: 0 8px; color: #5a5047; border: 1px solid #d4c5b5; outline: 0; background: rgba(255,255,255,.48); font-size: 9px; }.chapter-scope-tools select:focus { border-color: var(--copper-light); }.chapter-plan-status { padding: 5px 7px; border: 1px solid #d5b6a3; }
+.entity-editor-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; margin-bottom: 25px; padding-bottom: 18px; border-bottom: 1px solid var(--line); }.chapter-plan-heading p { margin: 7px 0 0; color: #93877b; font-size: 9px; }.chapter-scope-tools { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: flex-end; gap: 10px; }.chapter-scope-tools label { display: grid; gap: 5px; color: #8d7f72; font-size: 8px; }.chapter-scope-tools select { min-width: 145px; height: 29px; padding: 0 8px; color: #5a5047; border: 1px solid #d4c5b5; outline: 0; background: rgba(255,255,255,.48); font-size: 9px; }.chapter-scope-tools select:focus { border-color: var(--copper-light); }.chapter-plan-status { padding: 5px 7px; border: 1px solid #d5b6a3; }.chapter-delete-button { align-self: center; padding: 6px 4px; color: #a34e3c; border: 0; background: transparent; font-size: 8px; }
 .planning-confirm-backdrop { position: fixed; inset: 0; z-index: 90; display: grid; place-items: center; background: rgba(20,23,26,.7); backdrop-filter: blur(4px); }.planning-confirm { width: min(430px, 90vw); padding: 29px 31px; background: var(--paper-soft); box-shadow: 0 24px 65px rgba(10,12,14,.38); }.planning-confirm h2 { margin: 10px 0 8px; font: 23px var(--font-display); }.planning-confirm p { color: #8c7f72; font: 10px/1.65 var(--font-body); }.planning-confirm > div { display: flex; justify-content: flex-end; gap: 7px; margin-top: 20px; }.planning-confirm button { padding: 8px 11px; color: #766b61; border: 1px solid var(--line); background: transparent; font-size: 8px; }.planning-confirm button.danger { color: white; border-color: #9b4332; background: #9b4332; }
 .index-add:disabled { opacity: .38; cursor: default; }.relationship-index-item { display: grid; gap: 4px; width: 100%; padding: 9px; color: #a2aaae; border: 0; border-left: 2px solid transparent; background: transparent; text-align: left; }.relationship-index-item:hover, .relationship-index-item.active { color: #fff8ef; border-left-color: #8aa2ad; background: #353e44; }.relationship-index-item span { overflow: hidden; font: 10px var(--font-display); text-overflow: ellipsis; white-space: nowrap; }.relationship-index-item small { overflow: hidden; color: #748086; font-size: 7px; text-overflow: ellipsis; white-space: nowrap; }
 .relationship-heading, .location-heading { align-items: center; }.relationship-graph { position: relative; min-height: 440px; overflow: hidden; margin-top: 20px; border: 1px solid #c8c1b6; background-color: #e7e4dc; background-image: linear-gradient(rgba(82,96,101,.08) 1px, transparent 1px), linear-gradient(90deg, rgba(82,96,101,.08) 1px, transparent 1px); background-size: 28px 28px; box-shadow: inset 0 0 80px rgba(67,77,81,.06); }.relationship-graph::before { content: ''; position: absolute; inset: 18px; border: 1px solid rgba(91,108,115,.16); pointer-events: none; }.relationship-graph svg { position: absolute; inset: 0; z-index: 1; width: 100%; height: 100%; overflow: visible; }.relationship-edge { cursor: pointer; }.relationship-edge line { stroke: #71848c; stroke-width: .42; vector-effect: non-scaling-stroke; transition: stroke-width .15s, opacity .15s; }.relationship-edge text { fill: #65757c; paint-order: stroke; stroke: #e7e4dc; stroke-width: .8px; font: 2.2px var(--font-ui); text-anchor: middle; dominant-baseline: central; }.relationship-edge.trend-warming line { stroke: #648b78; }.relationship-edge.trend-cooling line { stroke: #878d99; stroke-dasharray: 2 1; }.relationship-edge.trend-hostile line { stroke: #a25443; stroke-dasharray: 1.3 .8; }.relationship-edge.active line, .relationship-edge:hover line { stroke-width: 1.2; opacity: 1; }.relationship-node { position: absolute; z-index: 2; display: grid; justify-items: center; width: 112px; padding: 0; color: #455057; border: 0; background: transparent; transform: translate(-50%, -50%); }.relationship-node > span { display: grid; place-items: center; width: 47px; height: 47px; color: #fffaf2; border: 3px solid #e7e4dc; border-radius: 50%; background: #53656d; box-shadow: 0 0 0 1px #86969d, 0 7px 18px rgba(57,66,70,.18); font: 19px var(--font-display); }.relationship-node strong { max-width: 112px; margin-top: 8px; overflow: hidden; font: 13px var(--font-display); text-overflow: ellipsis; white-space: nowrap; }.relationship-node small { margin-top: 2px; color: #7d878b; font-size: 7px; }.relationship-node:hover > span, .relationship-node.active > span { background: var(--copper); box-shadow: 0 0 0 1px var(--copper), 0 8px 20px rgba(132,75,58,.2); }.relationship-graph-hint { position: absolute; z-index: 3; left: 50%; top: 50%; padding: 12px 15px; color: #788387; background: rgba(231,228,220,.9); text-align: center; transform: translate(-50%, -50%); font: 9px/1.6 var(--font-body); }.relationship-graph-hint button { margin-top: 5px; padding: 6px 8px; color: #fff8ef; border: 0; background: #53656d; font-size: 8px; }
@@ -1142,11 +1458,15 @@ defineExpose({ flushSaves })
 .location-atlas { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 11px; margin-top: 18px; }.location-card { min-width: 0; min-height: 150px; padding: 15px 16px; color: #595149; border: 1px solid #d2c5b6; border-top: 3px solid #758a92; background: rgba(255,252,246,.65); text-align: left; }.location-card.observed { border-top-style: dashed; border-top-color: #b27a5e; }.location-card:hover, .location-card.active { border-color: #758a92; background: #fffaf2; box-shadow: 0 8px 22px rgba(67,78,83,.09); }.location-card > div:first-child { display: flex; justify-content: space-between; gap: 10px; color: #7d8c91; font-size: 7px; }.location-card > div:first-child small { color: #9a8d81; }.location-card h3 { margin: 11px 0 5px; font: 18px var(--font-display); }.location-card p { min-height: 31px; margin: 0; overflow: hidden; color: #877a6e; font: 9px/1.55 var(--font-body); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }.location-occupants { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 12px; }.location-occupants span { padding: 3px 5px; color: #53656d; border: 1px solid #b9c4c5; font-size: 7px; }.location-detail { margin-top: 16px; padding: 20px 22px; border: 1px solid #d2c5b6; background: rgba(255,252,246,.72); }.location-detail-heading button { padding: 7px 9px; color: #fff8ef; border: 0; background: #758a92; font-size: 8px; }.location-detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 18px; padding: 16px 0; }.location-detail-grid .wide { grid-column: 1 / -1; }.location-detail-grid span { color: #79898f; font-size: 8px; }.location-detail-grid p { margin: 5px 0 0; color: #73695f; font: 10px/1.6 var(--font-body); white-space: pre-line; }.location-state-list { display: grid; gap: 6px; padding-top: 13px; border-top: 1px solid #ded4c8; }.location-state-list article { display: grid; grid-template-columns: minmax(90px, .4fr) auto minmax(150px, 1fr); align-items: baseline; gap: 10px; padding: 7px 0; }.location-state-list strong { font: 12px var(--font-display); }.location-state-list span { color: #8b989c; font-size: 7px; }.location-state-list p { margin: 0; color: #7b7065; font: 9px var(--font-body); }
 .arc-copper { --arc-color: #a85e47; --arc-wash: rgba(168,94,71,.1); }.arc-pine { --arc-color: #587b69; --arc-wash: rgba(88,123,105,.1); }.arc-slate { --arc-color: #647d8a; --arc-wash: rgba(100,125,138,.1); }.arc-ochre { --arc-color: #a47b35; --arc-wash: rgba(164,123,53,.11); }.arc-plum { --arc-color: #806079; --arc-wash: rgba(128,96,121,.1); }
 .arc-index-item { display: flex; align-items: flex-start; gap: 8px; width: 100%; padding: 9px 8px; color: #aeb4b6; border: 0; border-left: 2px solid transparent; background: transparent; text-align: left; }.arc-index-item > i { flex: 0 0 auto; width: 8px; height: 8px; margin-top: 2px; border-radius: 50%; background: var(--arc-color); box-shadow: 0 0 0 3px color-mix(in srgb, var(--arc-color) 16%, transparent); }.arc-index-item > span { min-width: 0; display: grid; gap: 4px; }.arc-index-item strong, .arc-index-item small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.arc-index-item strong { font: 10px var(--font-display); }.arc-index-item small { color: #727d82; font-size: 7px; }.arc-index-item:hover, .arc-index-item.active { color: #fff8ef; border-left-color: var(--arc-color); background: #353e44; }
-.arc-planning-sheet { width: min(1120px, 100%); }.arc-heading { align-items: center; }.arc-create-button { padding: 8px 10px; color: #fff8ef; border: 0; background: #596a70; font-size: 8px; }.arc-empty { min-height: 320px; }.arc-matrix { overflow-x: auto; margin-top: 18px; border: 1px solid #c9bdaf; background: #e9e2d7; box-shadow: inset 0 0 35px rgba(72,60,50,.04); }.arc-grid { display: grid; align-items: stretch; }.arc-corner, .arc-column-heading { min-height: 62px; padding: 13px 14px; border-right: 1px solid #cfc4b7; border-bottom: 1px solid #c7baac; background: #dfd6c8; }.arc-corner, .arc-column-heading { display: grid; align-content: center; gap: 5px; }.arc-corner span, .arc-column-heading span { color: #5f5750; font: 12px var(--font-display); }.arc-corner small, .arc-column-heading small { color: #94877a; font-size: 7px; }.arc-column-heading { text-align: center; background: #e4dccf; }
+.arc-planning-sheet { width: min(1120px, 100%); }.arc-heading { align-items: center; }.arc-heading-actions { display: flex; align-items: center; gap: 8px; }.arc-heading-actions .danger-link { padding: 7px 8px; color: #a34e3c; border: 1px solid #d2a99d; background: transparent; font-size: 8px; }.arc-create-button { padding: 8px 10px; color: #fff8ef; border: 0; background: #596a70; font-size: 8px; }.arc-empty { min-height: 320px; }.arc-matrix { overflow-x: auto; margin-top: 18px; border: 1px solid #c9bdaf; background: #e9e2d7; box-shadow: inset 0 0 35px rgba(72,60,50,.04); }.arc-grid { display: grid; align-items: stretch; }.arc-corner, .arc-column-heading { min-height: 62px; padding: 13px 14px; border-right: 1px solid #cfc4b7; border-bottom: 1px solid #c7baac; background: #dfd6c8; }.arc-corner, .arc-column-heading { display: grid; align-content: center; gap: 5px; }.arc-corner span, .arc-column-heading span { color: #5f5750; font: 12px var(--font-display); }.arc-corner small, .arc-column-heading small { color: #94877a; font-size: 7px; }.arc-column-heading { text-align: center; background: #e4dccf; }
 .arc-row-label { position: relative; display: flex; align-items: flex-start; gap: 10px; min-height: 126px; padding: 19px 14px; color: #5b534c; border: 0; border-right: 1px solid #cfc4b7; border-bottom: 1px solid #d0c5b8; background: #e8e0d4; text-align: left; }.arc-row-label::after { content: ''; position: absolute; right: -7px; top: 29px; z-index: 2; width: 14px; height: 2px; background: var(--arc-color); }.arc-row-label > i { flex: 0 0 auto; width: 9px; height: 9px; margin-top: 3px; border: 2px solid #e8e0d4; border-radius: 50%; background: var(--arc-color); box-shadow: 0 0 0 1px var(--arc-color); }.arc-row-label > span { min-width: 0; display: grid; gap: 6px; }.arc-row-label strong { font: 14px/1.3 var(--font-display); }.arc-row-label small { color: #908477; font-size: 7px; }.arc-row-label:hover, .arc-row-label.active { background: #f4ede3; box-shadow: inset 3px 0 0 var(--arc-color); }
 .arc-cell { position: relative; min-height: 126px; padding: 18px 11px 10px; border-right: 1px solid #d3c8bb; border-bottom: 1px solid #d0c5b8; background: rgba(255,252,246,.38); }.arc-cell::before { content: ''; position: absolute; left: 0; right: 0; top: 29px; height: 2px; background: var(--arc-color); opacity: .72; }.arc-beat-card { position: relative; z-index: 1; display: grid; gap: 5px; width: 100%; margin-bottom: 7px; padding: 10px 10px 9px; color: #5a514a; border: 1px solid color-mix(in srgb, var(--arc-color) 44%, #cfc4b8); border-left: 3px solid var(--arc-color); background: #fffaf2; text-align: left; box-shadow: 0 5px 12px rgba(67,55,47,.07); }.arc-beat-card::before { content: ''; position: absolute; left: 12px; top: -10px; width: 7px; height: 7px; border: 2px solid #e8e0d4; border-radius: 50%; background: var(--arc-color); }.arc-beat-card:hover, .arc-beat-card.active { background: #fffdf8; box-shadow: 0 7px 16px var(--arc-wash); transform: translateY(-1px); }.arc-beat-card strong { font: 11px var(--font-display); }.arc-beat-card small { color: var(--arc-color); font-size: 7px; }.arc-beat-card p { margin: 0; color: #86796d; font: 8px/1.5 var(--font-body); }.arc-beat-add { position: relative; z-index: 1; width: 100%; padding: 6px; color: #93867a; border: 1px dashed #c6b9aa; background: rgba(244,237,227,.9); font-size: 7px; }.arc-beat-add:hover { color: var(--arc-color); border-color: var(--arc-color); }
 .arc-editor, .arc-beat-editor { margin-top: 18px; padding: 20px 22px; border: 1px solid #cec1b3; border-top: 3px solid var(--arc-color, #647d8a); background: rgba(255,252,246,.72); }.arc-beat-editor { --arc-color: #647d8a; }.arc-editor-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding-bottom: 13px; border-bottom: 1px solid #ded4c8; }.arc-editor-heading span { color: var(--arc-color, #647d8a); font: 600 8px var(--font-ui); letter-spacing: .12em; }.arc-editor-heading h3 { margin: 5px 0 0; font: 18px var(--font-display); }.arc-editor-heading > button { color: #a34e3c; border: 0; background: transparent; font-size: 8px; }.arc-form-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px 16px; padding-top: 17px; }.arc-form-grid label { display: grid; gap: 6px; }.arc-form-grid label.wide { grid-column: 1 / -1; }.arc-form-grid label > span { color: #6e655c; font: 10px var(--font-display); }.arc-form-grid input, .arc-form-grid select, .arc-form-grid textarea { width: 100%; min-height: 35px; padding: 7px 9px; color: #504840; border: 1px solid #d4c7b8; outline: 0; background: rgba(255,255,255,.5); font: 10px/1.55 var(--font-body); }.arc-form-grid textarea { min-height: 64px; resize: vertical; }.arc-form-grid input:focus, .arc-form-grid select:focus, .arc-form-grid textarea:focus { border-color: var(--arc-color, #647d8a); box-shadow: 0 0 0 2px var(--arc-wash, rgba(100,125,138,.1)); }
 .planning-loading { grid-column: 2 / 4; display: grid; place-items: center; color: #9b8d7e; background: var(--paper); font: 16px var(--font-display); }
+.form-label-line { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.form-field-actions { display: flex; align-items: center; gap: 6px; }
+.form-cascade { padding: 4px 6px; color: #786c61; border: 1px solid #d5c8b8; background: transparent; font: 8px var(--font-ui); }
+.form-cascade:hover { color: var(--copper); border-color: #d9b7a6; }
 @keyframes save-pulse { 50% { opacity: .35; transform: scale(.75); } }
 @media (max-width: 1240px) { .planning-layout { grid-template-columns: 180px minmax(400px, 1fr) 250px; }.planning-canvas { padding-right: 18px; padding-left: 18px; }.planning-sheet { padding-right: 24px; padding-left: 24px; } }
 </style>

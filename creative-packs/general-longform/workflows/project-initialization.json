@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "id": "project-initialization",
+  "name": "项目初始化",
+  "steps": [
+    { "id": "foundation", "action": "generate", "task": "planning_field", "candidateType": "foundation_bundle" },
+    { "id": "confirm-foundation", "action": "checkpoint", "dependsOn": ["foundation"] }
+  ]
+}

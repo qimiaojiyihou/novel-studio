@@ -1,0 +1,5 @@
+{
+  "$id": "novel-studio://schemas/chapter-card@1",
+  "type": "object",
+  "required": ["goal", "protagonistGoal", "resistance", "turningPoint", "payoff", "cost", "ending", "requiredScenes"]
+}

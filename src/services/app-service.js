@@ -1,3 +1,5 @@
+import { toIpcPayload } from '../utils/ipc-payload.js'
+
 const electronApi = window.novelStudio
 
 export const appService = {
@@ -103,6 +105,27 @@ export const appService = {
   resolvePlanningCandidate(payload) {
     return electronApi.resolvePlanningCandidate(payload)
   },
+  createStoryChangeSet(payload) {
+    return electronApi.createStoryChangeSet(toIpcPayload(payload, '设定联动修改'))
+  },
+  getStoryChangeSet(id) {
+    return electronApi.getStoryChangeSet(id)
+  },
+  listStoryChangeSets(payload) {
+    return electronApi.listStoryChangeSets(payload)
+  },
+  updateStoryChangeSelection(payload) {
+    return electronApi.updateStoryChangeSelection(payload)
+  },
+  applyStoryChangeSet(payload) {
+    return electronApi.applyStoryChangeSet(payload)
+  },
+  revertStoryChangeSet(id) {
+    return electronApi.revertStoryChangeSet(id)
+  },
+  cancelStoryChangeSet(id) {
+    return electronApi.cancelStoryChangeSet(id)
+  },
   loadKnowledgeCenter(projectId) {
     return electronApi.loadKnowledgeCenter(projectId)
   },
@@ -173,16 +196,100 @@ export const appService = {
     return electronApi.loadModelSettings()
   },
   saveModelProfile(profile) {
-    return electronApi.saveModelProfile(profile)
+    return electronApi.saveModelProfile(toIpcPayload(profile, '模型配置'))
   },
   testModelProfile(profile) {
-    return electronApi.testModelProfile(profile)
+    return electronApi.testModelProfile(toIpcPayload(profile, '模型连接测试'))
   },
   deleteModelProfile(id) {
     return electronApi.deleteModelProfile(id)
   },
   updateTaskRoute(payload) {
     return electronApi.updateTaskRoute(payload)
+  },
+  getCodexStatus() {
+    return electronApi.getCodexStatus()
+  },
+  saveCodexSettings(payload) {
+    return electronApi.saveCodexSettings(toIpcPayload(payload, 'Codex Agent 设置'))
+  },
+  startCodexAuth(methodId) {
+    return electronApi.startCodexAuth(methodId)
+  },
+  cancelCodexAuth() {
+    return electronApi.cancelCodexAuth()
+  },
+  testCodex() {
+    return electronApi.testCodex()
+  },
+  restartCodexAdapter() {
+    return electronApi.restartCodexAdapter()
+  },
+  openCodexProject(projectId) {
+    return electronApi.openCodexProject(projectId)
+  },
+  getSessionModelApproval(projectId) {
+    return electronApi.getSessionModelApproval(projectId)
+  },
+  setSessionModelApproval(payload) {
+    return electronApi.setSessionModelApproval(payload)
+  },
+  startAgent(payload) {
+    return electronApi.startAgent(payload)
+  },
+  startInlineAgent(payload) {
+    return electronApi.startInlineAgent(toIpcPayload(payload, 'Codex 就地创作任务'))
+  },
+  continueInlineAgent(payload) {
+    return electronApi.continueInlineAgent(toIpcPayload(payload, 'Codex 候选修改'))
+  },
+  finishInlineAgent(runId) {
+    return electronApi.finishInlineAgent(runId)
+  },
+  listAgentRuns(payload) {
+    return electronApi.listAgentRuns(payload)
+  },
+  getAgentRun(runId) {
+    return electronApi.getAgentRun(runId)
+  },
+  pauseAgentRun(runId) {
+    return electronApi.pauseAgentRun(runId)
+  },
+  resumeAgentRun(runId) {
+    return electronApi.resumeAgentRun(runId)
+  },
+  cancelAgentRun(runId) {
+    return electronApi.cancelAgentRun(runId)
+  },
+  confirmAgentCandidate(payload) {
+    return electronApi.confirmAgentCandidate(payload)
+  },
+  rejectAgentCandidate(payload) {
+    return electronApi.rejectAgentCandidate(payload)
+  },
+  retryAgentStep(payload) {
+    return electronApi.retryAgentStep(payload)
+  },
+  listAgentEvents(payload) {
+    return electronApi.listAgentEvents(payload)
+  },
+  listApprovals(payload) {
+    return electronApi.listApprovals(payload)
+  },
+  getApproval(id) {
+    return electronApi.getApproval(id)
+  },
+  resolveApproval(payload) {
+    return electronApi.resolveApproval(payload)
+  },
+  onAgentEvent(callback) {
+    return electronApi.onAgentEvent(callback)
+  },
+  onCodexEvent(callback) {
+    return electronApi.onCodexEvent(callback)
+  },
+  onApprovalEvent(callback) {
+    return electronApi.onApprovalEvent(callback)
   },
   startGeneration(payload, onEvent = () => {}) {
     const taskId = globalThis.crypto?.randomUUID?.() || `task-${Date.now()}-${Math.random().toString(16).slice(2)}`
@@ -199,6 +306,48 @@ export const appService = {
   },
   listGenerationRecords(payload) {
     return electronApi.listGenerationRecords(payload)
+  },
+  qualityPreflight(payload) {
+    return electronApi.qualityPreflight(payload)
+  },
+  listQualityReports(payload) {
+    return electronApi.listQualityReports(payload)
+  },
+  getQualityReport(reportId) {
+    return electronApi.getQualityReport(reportId)
+  },
+  getBlindQualityReviewPacket(reportId) {
+    return electronApi.getBlindQualityReviewPacket(reportId)
+  },
+  reviewQuality(payload) {
+    return electronApi.reviewQuality(payload)
+  },
+  repairQuality(payload) {
+    return electronApi.repairQuality(payload)
+  },
+  saveHumanReview(payload) {
+    return electronApi.saveHumanReview(payload)
+  },
+  startBenchmark(payload) {
+    return electronApi.startBenchmark(payload)
+  },
+  listBenchmarkRuns(payload) {
+    return electronApi.listBenchmarkRuns(payload)
+  },
+  getBenchmarkRun(runId) {
+    return electronApi.getBenchmarkRun(runId)
+  },
+  pauseBenchmark(runId) {
+    return electronApi.pauseBenchmark(runId)
+  },
+  resumeBenchmark(runId) {
+    return electronApi.resumeBenchmark(runId)
+  },
+  cancelBenchmark(runId) {
+    return electronApi.cancelBenchmark(runId)
+  },
+  onBenchmarkEvent(callback) {
+    return electronApi.onBenchmarkEvent(callback)
   },
   retryGeneration(recordId, onEvent = () => {}) {
     const taskId = globalThis.crypto?.randomUUID?.() || `task-${Date.now()}-${Math.random().toString(16).slice(2)}`

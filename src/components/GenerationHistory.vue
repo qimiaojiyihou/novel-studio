@@ -101,6 +101,7 @@ function taskLabel(task) {
   return {
     chapter: '正文候选', planning_field: '规划字段', chapter_card: '章节卡', scene_plan: '场景计划',
     rewrite: '局部重写', chapter_state_extract: '章后状态', continuity_audit: '连续性审计',
+    quality_review: '创作质量评审',
   }[task] || task || '生成任务'
 }
 

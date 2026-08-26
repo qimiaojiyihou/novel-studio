@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { DatabaseSync } from 'node:sqlite'
 import { runMigrations } from '../electron/database-migrations.js'
+import { repairMissingCreativePackBindings } from '../electron/creative-pack.js'
 import { createWorkspaceRepository } from '../electron/workspace-repository.js'
 
 function testRepository() {
@@ -23,14 +24,38 @@ test('projects are independently created, listed and persisted as active', () =>
   assert.equal(first.project.title, '第一本书')
   assert.equal(first.chapters.length, 1)
   assert.equal(first.chapters[0].chapter_no, 1)
+  assert.equal(database.prepare('SELECT pack_id FROM project_pack_bindings WHERE project_id = ?').get(first.project.id).pack_id, 'official.general-longform.zh-CN')
 
   const second = repository.createProject({ title: '第二本书', idea: '新的故事' })
   assert.equal(second.project.title, '第二本书')
   assert.equal(repository.loadWorkspace().project.id, second.project.id)
   assert.equal(repository.listProjects().length, 2)
+  assert.equal(database.prepare('SELECT COUNT(*) AS count FROM project_pack_bindings').get().count, 2)
 
   const reopened = createWorkspaceRepository(database)
   assert.equal(reopened.loadWorkspace().project.id, second.project.id)
+  database.close()
+})
+
+test('startup repair binds the official Creative Pack only to unbound user projects', () => {
+  const database = new DatabaseSync(':memory:')
+  runMigrations(database, { now: () => '2026-08-25T00:00:00.000Z' })
+  database.prepare(`
+    INSERT INTO projects (id, title, genre, idea, style, created_at, updated_at, archived_at, project_type)
+    VALUES (?, ?, ?, '', '', ?, ?, '', ?)
+  `).run('orphan-user-project', '遗漏绑定的项目', '悬疑', '2026-08-25T01:00:00.000Z', '2026-08-25T01:00:00.000Z', 'user')
+  database.prepare(`
+    INSERT INTO projects (id, title, genre, idea, style, created_at, updated_at, archived_at, project_type)
+    VALUES (?, ?, ?, '', '', ?, ?, '', ?)
+  `).run('benchmark-project', '基准项目', '悬疑', '2026-08-25T01:00:00.000Z', '2026-08-25T01:00:00.000Z', 'benchmark')
+
+  assert.equal(repairMissingCreativePackBindings(database, { boundAt: '2026-08-25T02:00:00.000Z' }), 1)
+  const binding = database.prepare('SELECT * FROM project_pack_bindings WHERE project_id = ?').get('orphan-user-project')
+  assert.equal(binding.pack_id, 'official.general-longform.zh-CN')
+  assert.equal(binding.pack_version, '1.1.0')
+  assert.equal(database.prepare('SELECT COUNT(*) AS count FROM project_pack_bindings WHERE project_id = ?').get('benchmark-project').count, 0)
+  assert.equal(repairMissingCreativePackBindings(database, { boundAt: '2026-08-25T03:00:00.000Z' }), 0)
+  assert.deepEqual(database.prepare('PRAGMA foreign_key_check').all(), [])
   database.close()
 })
 
@@ -83,6 +108,9 @@ test('projects can be edited, archived, restored and deleted without losing the 
 
   const renamed = repository.updateProject({ id: first.project.id, title: '改名后的第一本书', idea: '新的核心想法' })
   assert.equal(renamed.title, '改名后的第一本书')
+  assert.equal(renamed.default_execution_mode, 'app_model')
+  assert.equal(repository.updateProject({ id: first.project.id, default_execution_mode: 'codex' }).default_execution_mode, 'codex')
+  assert.throws(() => repository.updateProject({ id: first.project.id, default_execution_mode: 'unknown' }), /执行方式/)
 
   const afterArchive = repository.archiveProject(second.project.id)
   assert.equal(afterArchive.project.id, first.project.id)

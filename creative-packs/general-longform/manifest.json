@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "id": "official.general-longform.zh-CN",
+  "name": "通用长篇创作包",
+  "version": "1.1.0",
+  "language": "zh-CN",
+  "license": "Apache-2.0",
+  "minAppVersion": "0.1.0",
+  "tasks": ["planning_field", "story_change", "chapter_card", "scene_plan", "chapter", "rewrite", "chapter_state_extract", "continuity_audit", "quality_review"],
+  "promptProfiles": ["generic", "premise_expander", "reader_promise", "core_conflict", "character_card", "relationship_tension", "world_rule", "outline_tree", "volume_plan", "story_change_propagation"],
+  "workflows": ["project-initialization", "chapter-creation", "story-change-propagation"],
+  "schemas": ["foundation-bundle", "story-change", "chapter-card", "scene-plan", "chapter-state", "quality-review"],
+  "evaluations": ["urban-suspense-three-chapter"],
+  "integrity": { "algorithm": "sha256", "sha256": "" }
+}
