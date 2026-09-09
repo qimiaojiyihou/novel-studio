@@ -31,17 +31,22 @@
             <label><span>默认认证</span><select v-model="codexDraft.authMethod"><option value="chatgpt">ChatGPT 登录</option><option value="environment" :disabled="!codexStatus.runtime?.environmentAuthAvailable">环境 API Key</option></select></label>
             <label>
               <span>默认模型</span>
-              <input v-model.trim="codexDraft.model" list="codex-model-options" :placeholder="codexDefaultModel ? `留空使用 ${codexDefaultModel}` : '留空使用 Codex 默认'" />
-              <datalist id="codex-model-options"><option v-for="option in codexModelOptions" :key="option.value" :value="option.value">{{ option.name }}</option></datalist>
-              <small v-if="codexModelOptions.length">ACP 当前提供 {{ codexModelOptions.length }} 个可选模型；也可直接输入适配器支持的模型 ID。</small>
+              <input v-model="codexModelSearch" type="search" placeholder="搜索名称或模型 ID" aria-label="搜索 Codex 模型" />
+              <select v-model="codexDraft.model" @change="refreshCodexModels(true)">
+                <option value="">运行时默认{{ codexDefaultModel ? ` · ${codexDefaultModel}` : '' }}</option>
+                <option v-for="option in filteredCodexModels" :key="option.value" :value="option.value">{{ option.name }} · {{ modelAvailability(option.status) }}</option>
+              </select>
+              <details><summary>高级模型 ID</summary><input v-model.trim="codexDraft.model" placeholder="例如 gpt-6-astra" aria-label="高级 Codex 模型 ID" /></details>
+              <small>GPT-6 Astra 对应 gpt-6-astra。可用性以当前 ACP 目录为准；已有对话继续使用启动时锁定的模型。</small>
             </label>
-            <label><span>推理强度</span><select v-model="codexDraft.reasoningEffort"><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option><option value="xhigh">XHigh</option></select></label>
-            <label class="codex-toggle"><span>Fast mode</span><input v-model="codexDraft.fastMode" type="checkbox" /></label>
+            <label><span>推理强度</span><select v-model="codexDraft.reasoningEffort"><option value="">模型默认</option><option v-for="option in codexReasoningOptions" :key="option.value" :value="option.value">{{ option.name }}</option><option v-if="codexDraft.reasoningEffort && !codexReasoningOptions.some(o => o.value === codexDraft.reasoningEffort)" :value="codexDraft.reasoningEffort">{{ codexDraft.reasoningEffort }} · 待刷新验证</option></select></label>
+            <label class="codex-toggle"><span>Fast mode{{ codexFastSupported ? '' : ' · 待验证支持' }}</span><input v-model="codexDraft.fastMode" type="checkbox" :disabled="!codexFastSupported" /></label>
           </div>
           <div v-if="codexMessage.text" class="connection-result" :class="codexMessage.state"><i></i><span>{{ codexMessage.text }}</span></div>
           <div class="codex-actions">
             <button class="outline-button" :disabled="codexBusy" @click="authenticateCodex">{{ codexDraft.authMethod === 'environment' ? '使用环境变量认证' : '登录 ChatGPT' }}</button>
             <button class="test-button" :disabled="codexBusy" @click="testCodex">测试 Codex</button>
+            <button class="outline-button" :disabled="codexBusy" @click="refreshCodexModels()">刷新模型列表</button>
             <button class="primary-button" :disabled="codexBusy" @click="saveCodex">保存 Agent 设置</button>
           </div>
           <small class="codex-permission-note">工具权限按次审批；不会提供永久允许。Codex 只访问当前 AgentRun 的受控镜像，结果只进入候选区。</small>
@@ -242,6 +247,7 @@
 <script setup>
 import { computed, reactive, ref, watch } from 'vue'
 import { appService } from '../services/app-service.js'
+import { modelDirectory } from '../../electron/codex-models.js'
 import {
   normalizeRequestConfig,
   parseRequestConfigJson,
@@ -279,7 +285,13 @@ const codexMessage = reactive({ state: 'idle', text: '' })
 const codexBusy = ref(false)
 const integrityLabel = computed(() => ({ verified: '摘要校验通过', development: '开发环境校验', invalid: '摘要或版本不匹配', missing: '资源缺失' }[codexStatus.runtime?.integrity] || '等待诊断'))
 const codexModelConfig = computed(() => codexStatus.runtime?.configOptions?.find((option) => option.id === 'model') || {})
-const codexModelOptions = computed(() => codexModelConfig.value.options || [])
+const codexModelSearch = ref('')
+const codexModelsRefreshed = ref(false)
+const codexModelOptions = computed(() => modelDirectory(codexStatus.runtime?.configOptions || [], codexModelsRefreshed.value))
+const filteredCodexModels = computed(() => codexModelOptions.value.filter((option) => option.value === codexDraft.model || `${option.name} ${option.value}`.toLowerCase().includes(codexModelSearch.value.toLowerCase())))
+const codexReasoningOptions = computed(() => codexStatus.runtime?.configOptions?.find(o => o.id === 'reasoning_effort')?.options || [])
+const codexFastSupported = computed(() => Boolean(codexStatus.runtime?.configOptions?.find(o => o.id === 'fast-mode')))
+const modelAvailability = (status) => ({ available: '可用', pending: '待刷新', unsupported: '当前运行时未支持' }[status])
 const codexDefaultModel = computed(() => codexModelConfig.value.currentValue || '')
 
 watch(() => props.visible, (visible) => {
@@ -324,11 +336,28 @@ async function testCodex() {
   codexBusy.value = true
   Object.assign(codexMessage, { state: 'testing', text: '正在校验 ACP 适配器与协议…' })
   try {
-    const result = await appService.testCodex()
+    const result = await appService.testCodex({ model: codexDraft.model, reasoningEffort: codexDraft.reasoningEffort, fastMode: codexDraft.fastMode })
     Object.assign(codexMessage, { state: 'success', text: result.message })
-    await loadCodex()
+    codexStatus.runtime.configOptions = result.status.configOptions
+    codexModelsRefreshed.value = true
   } catch (error) {
     Object.assign(codexMessage, { state: 'error', text: `测试失败：${error.message}` })
+  } finally { codexBusy.value = false }
+}
+
+async function refreshCodexModels(selectModel = false) {
+  codexBusy.value = true
+  try {
+    const result = await appService.getCodexModels({ model: codexDraft.model })
+    codexStatus.runtime.configOptions = result.status.configOptions
+    codexModelsRefreshed.value = true
+    if (selectModel) {
+      codexDraft.reasoningEffort = result.status.selected.reasoningEffort
+      if (!result.status.selected.fastModeSupported) codexDraft.fastMode = false
+    }
+    Object.assign(codexMessage, { state: 'success', text: result.message })
+  } catch (error) {
+    Object.assign(codexMessage, { state: 'error', text: error.message })
   } finally { codexBusy.value = false }
 }
 

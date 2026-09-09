@@ -51,3 +51,16 @@ test('default chapter names remain natural conversation titles', () => {
   })
   assert.equal(title, '第一章 · 章节卡')
 })
+
+test('chapter title generation is named after its exact creative target', () => {
+  const title = codexTaskDisplayTitle({
+    project: { title: '来信' },
+    chapter: { chapter_no: 3, title: '第三章' },
+    run: { workflowId: 'inline-action' },
+    step: {
+      task: 'planning_field',
+      input: { target: { kind: 'chapter_field', targetId: 'chapter-3', fieldKey: 'title', fieldLabel: '章节名' } },
+    },
+  })
+  assert.equal(title, '第三章 · 章节名')
+})

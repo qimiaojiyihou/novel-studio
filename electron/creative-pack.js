@@ -4,7 +4,7 @@ import path from 'node:path'
 
 export const CREATIVE_PACK_SCHEMA_VERSION = 1
 export const OFFICIAL_PACK_ID = 'official.general-longform.zh-CN'
-export const OFFICIAL_PACK_VERSION = '1.1.0'
+export const OFFICIAL_PACK_VERSION = '1.3.0'
 export const OFFICIAL_PACK_SOURCE = 'official'
 
 const SAFE_WORKFLOW_ACTIONS = new Set([
@@ -199,6 +199,8 @@ export function createCreativePackRepository(database, { appVersion = '0.1.0', n
     const validation = validateCreativePack(pack, { appVersion })
     const manifest = validation.manifest
     const installedAt = now()
+    const existing = database.prepare('SELECT digest FROM creative_pack_versions WHERE pack_id = ? AND version = ?').get(manifest.id, manifest.version)
+    if (existing && existing.digest !== validation.digest) throw new Error('同版本 Creative Pack 摘要已锁定；请使用新版本发布修改')
     const transaction = database.transaction(() => {
       database.prepare(`
         INSERT INTO creative_packs (id, name, language, license, source, current_version, enabled, created_at, updated_at)
@@ -209,8 +211,7 @@ export function createCreativePackRepository(database, { appVersion = '0.1.0', n
       database.prepare(`
         INSERT INTO creative_pack_versions (id, pack_id, version, min_app_version, digest, manifest_json, content_json, installed_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(pack_id, version) DO UPDATE SET digest = excluded.digest,
-          manifest_json = excluded.manifest_json, content_json = excluded.content_json
+        ON CONFLICT(pack_id, version) DO NOTHING
       `).run(`${manifest.id}@${manifest.version}`, manifest.id, manifest.version, manifest.minAppVersion,
         validation.digest, JSON.stringify(manifest), JSON.stringify(pack), installedAt)
       if (bindProjectId) bindProject(bindProjectId, manifest.id, manifest.version)

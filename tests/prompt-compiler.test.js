@@ -71,6 +71,27 @@ test('protected compiler rules remain after conflicting custom template text', (
   assert.ok(system.lastIndexOf('不要添加标题') > system.indexOf('添加分析和标题'))
 })
 
+test('Creative Pack chapter prompt still records and applies the protected naturalness template', () => {
+  const compiled = compilePrompt({
+    ...baseInput,
+    promptContext: {
+      ...baseInput.promptContext,
+      creativePack: {
+        id: 'official.general-longform', version: '1.2.0', digest: 'pack-digest',
+        prompt: { name: '章节正文候选', version: 2, system: '能力包正文方法。', request: '根据场景生成正文。' },
+      },
+    },
+  })
+  assert.equal(compiled.snapshot.template.id, 'official.general-longform:chapter')
+  assert.equal(compiled.snapshot.template.version, 2)
+  assert.deepEqual(compiled.snapshot.protectedTemplate, { id: 'builtin-chapter-v1', version: 20 })
+  assert.equal(compiled.snapshot.creativePack.digest, 'pack-digest')
+  assert.match(compiled.messages[0].content, /能力包正文方法/)
+  assert.match(compiled.messages[0].content, /规划只规定.*不是段落提纲/)
+  assert.match(compiled.messages[0].content, /同一时刻、同一主体、同一动作链/)
+  assert.match(compiled.messages[1].content, /叙事自然度反查/)
+})
+
 test('prompt compiler keeps planning field details and output contract separate', () => {
   const compiled = compilePrompt({
     ...baseInput,
@@ -100,6 +121,23 @@ test('planning prompt snapshot records the semantic profile and boundaries', () 
   assert.match(compiled.messages[1].content, /钥匙每天午夜只生效一次/)
 })
 
+test('chapter title profile selects a reader hook instead of summarizing the event ledger', () => {
+  const compiled = compilePrompt({
+    ...baseInput,
+    task: 'planning_field',
+    promptContext: null,
+    planning: {
+      scopeType: 'chapter', fieldKey: 'title', fieldLabel: '章节名',
+      currentValue: '第一章', nearbyContext: '{"goal":"借到夜市摊主的灶"}',
+    },
+  })
+  assert.equal(compiled.snapshot.promptProfile, 'chapter_title')
+  assert.match(compiled.messages[0].content, /点击钩子，不是.*账目式摘要/)
+  assert.match(compiled.messages[0].content, /至少拟出四个/)
+  assert.match(compiled.messages[1].content, /身份碰撞/)
+  assert.match(compiled.messages[1].content, /不要带章节序号/)
+})
+
 test('chapter generation modes compile isolated draft continue rewrite and repair contracts', () => {
   const continuation = compilePrompt({ ...baseInput, promptContext: null, intent: 'continue', manuscriptPrefix: '光标前', manuscriptSuffix: '光标后' })
   assert.match(continuation.messages[1].content, /只返回要插入光标位置的新正文/)
@@ -125,8 +163,13 @@ test('quality review prompt can grade fixed regression assertions', () => {
   assert.match(compiled.messages[0].content, /排版差异不改变文本事实/)
   assert.match(compiled.messages[1].content, /直引号和弯引号视为等价/)
   assert.equal(compiled.snapshot.template.task, 'quality_review')
-  assert.equal(compiled.snapshot.template.version, 6)
+  assert.equal(compiled.snapshot.template.version, 8)
   assert.match(compiled.messages[1].content, /任何 high 问题都必须把直接相关维度降到 2 分或以下/)
+  assert.match(compiled.messages[1].content, /成簇证据/)
+  assert.match(compiled.messages[1].content, /条款式完美对白/)
+  assert.match(compiled.messages[1].content, /动作对象/)
+  assert.match(compiled.messages[1].content, /单次孤立短句不直接判错/)
+  assert.match(compiled.messages[1].content, /不得高于 2 分/)
 })
 
 test('connection test prompt remains isolated from story context', () => {
@@ -139,7 +182,7 @@ test('connection test prompt remains isolated from story context', () => {
   assert.deepEqual(compiled.snapshot.addons, [])
 })
 
-test('built-in v18 chapter prompt enforces a complete single-stop chapter, door boundary, exit inventory, and key action budget', () => {
+test('built-in v20 chapter prompt enforces contracts and sentence-group naturalness', () => {
   const compiled = compilePrompt({
     ...baseInput,
     promptContext: null,
@@ -152,7 +195,7 @@ test('built-in v18 chapter prompt enforces a complete single-stop chapter, door 
       }] },
     },
   })
-  assert.equal(compiled.snapshot.template.version, 18)
+  assert.equal(compiled.snapshot.template.version, 20)
   assert.match(compiled.messages[0].content, /人物只知道其知情范围内的信息/)
   assert.match(compiled.messages[1].content, /从 entryState 开始/)
   assert.match(compiled.messages[1].content, /最后允许发生的事件/)
@@ -172,6 +215,8 @@ test('built-in v18 chapter prompt enforces a complete single-stop chapter, door 
   assert.match(compiled.messages[1].content, /它就是唯一允许的反应/)
   assert.match(compiled.messages[1].content, /已在项目设定或上一章已接受状态中确认的持续伤情/)
   assert.match(compiled.messages[1].content, /一次响应中生成完整本章候选正文/)
+  assert.match(compiled.messages[0].content, /先按句群组织叙事/)
+  assert.match(compiled.messages[0].content, /不依靠省略动作对象制造虚假停顿/)
   assert.match(compiled.messages[1].content, /相邻两段不得重复/)
   assert.match(compiled.messages[1].content, /命名证物—具体版本—属性—证据/)
   assert.match(compiled.messages[1].content, /已修改与未修改/)
@@ -180,6 +225,11 @@ test('built-in v18 chapter prompt enforces a complete single-stop chapter, door 
   assert.match(compiled.messages[1].content, /同一信息源的内容范围不得在后文无证据扩张/)
   assert.match(compiled.messages[1].content, /只写了取得、看到、携带或计划日后使用/)
   assert.match(compiled.messages[1].content, /没有出现的截图、地图、日志、地点编号/)
+  assert.match(compiled.messages[0].content, /规划只规定.*不是段落提纲/)
+  assert.match(compiled.messages[0].content, /注意力偏向/)
+  assert.match(compiled.messages[1].content, /不按 actionBeats 数量平均分段/)
+  assert.match(compiled.messages[1].content, /叙事自然度反查/)
+  assert.match(compiled.messages[1].content, /配角分级验证主角/)
 })
 
 test('chapter prompt forbids key use when the plan only authorizes acquisition', () => {
@@ -237,8 +287,24 @@ test('rewrite preset adds focused instructions without weakening protected contr
   assert.match(compiled.messages[1].content, /对白有效化/)
   assert.match(compiled.messages[1].content, /回避、试探、误解或筹码交换/)
   assert.match(compiled.messages[0].content, /不得擅自改变已确认事实/)
-  assert.equal(compiled.snapshot.schemaVersion, 6)
+  assert.equal(compiled.snapshot.schemaVersion, 7)
   assert.equal(compiled.snapshot.rewritePreset.id, 'dialogue')
+})
+
+test('fiction naturalness rewrite preset makes minimum evidence-based edits', () => {
+  const compiled = compilePrompt({
+    ...baseInput,
+    task: 'rewrite',
+    promptContext: null,
+    selectedText: '潘叔尝了第一口，又尝第二口，第三口后终于认可了周砚。',
+    rewriteMode: 'naturalize',
+  })
+  assert.equal(compiled.snapshot.rewritePreset.id, 'naturalize')
+  assert.match(compiled.messages[1].content, /叙事真人化精修/)
+  assert.match(compiled.messages[1].content, /章节卡逐条转写/)
+  assert.match(compiled.messages[1].content, /分级验证式反应/)
+  assert.match(compiled.messages[1].content, /随机短句、俚语、错别字/)
+  assert.match(compiled.messages[1].content, /保留有辨识度的原句/)
 })
 
 test('inline Codex prompt snapshot records execution override and target lineage', () => {
@@ -251,7 +317,7 @@ test('inline Codex prompt snapshot records execution override and target lineage
       target: { kind: 'planning_document', targetId: 'foundation', fieldKey: 'premise' },
     },
   })
-  assert.equal(compiled.snapshot.schemaVersion, 6)
+  assert.equal(compiled.snapshot.schemaVersion, 7)
   assert.equal(compiled.snapshot.creativeExecution.projectDefault, 'app_model')
   assert.equal(compiled.snapshot.creativeExecution.requested, 'codex')
   assert.equal(compiled.snapshot.creativeExecution.override, true)

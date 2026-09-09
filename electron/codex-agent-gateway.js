@@ -5,6 +5,7 @@ import { spawn } from 'node:child_process'
 import { Readable, Writable } from 'node:stream'
 import { ClientSideConnection, PROTOCOL_VERSION, ndJsonStream } from '@agentclientprotocol/sdk'
 import { readMirrorText, resolveMirrorPath, writeMirrorText } from './codex-project-mirror.js'
+import { modelDirectory, sessionModelSnapshot, execModelArgs } from './codex-models.js'
 
 const ADAPTER_VERSION = '1.6.2'
 const MAX_EXEC_OUTPUT = 8 * 1024 * 1024
@@ -18,7 +19,7 @@ function publicConfigOptions(options = []) {
     name: String(option.name || option.id),
     type: option.type,
     currentValue: option.currentValue,
-    options: Array.isArray(option.options) ? option.options.map((item) => ({
+    options: Array.isArray(option.options) ? option.options.flatMap(item => item.options || [item]).map((item) => ({
       name: String(item.name || item.value || ''),
       value: String(item.value || ''),
     })) : undefined,
@@ -176,12 +177,16 @@ function sessionDirectories(workspaceRoot, mirrorRoot) {
 }
 
 export function codexPromptText({ messages, outputSchema, displayTitle = '', mirrorRoot = '' }) {
+  const normalizedMessages = Array.isArray(messages) ? messages : [{ role: 'user', content: String(messages || '') }]
+  const systemMessages = normalizedMessages.filter((message) => message.role === 'system')
+  const taskMessages = normalizedMessages.filter((message) => message.role !== 'system')
   return [
+    ...systemMessages.map((message) => `system:\n${message.content || ''}`),
+    outputSchema ? `受保护输出 Schema（只返回符合此 Schema 的 JSON）：\n${JSON.stringify(outputSchema)}` : '',
     displayTitle,
     mirrorRoot ? `当前 AgentRun 的受控创作目录：${mirrorRoot}\n只在此目录读取项目快照或写入候选；书籍工作区根目录只用于会话归类。` : '',
-    ...(Array.isArray(messages) ? messages : [{ role: 'user', content: String(messages || '') }])
+    ...taskMessages
       .map((message) => `${message.role || 'user'}:\n${message.content || ''}`),
-    outputSchema ? `受保护输出 Schema（只返回符合此 Schema 的 JSON）：\n${JSON.stringify(outputSchema)}` : '',
   ].filter(Boolean).join('\n\n')
 }
 
@@ -356,17 +361,24 @@ export class CodexAgentGateway {
     return this.inspectRuntime()
   }
 
-  async testConnection({ cwd }) {
+  async testConnection({ cwd, model = '', reasoningEffort = '', fastMode = false } = {}) {
     await this.startAdapter()
     const created = await this.connection.newSession({ cwd, additionalDirectories: [], mcpServers: [] })
     this.configOptions = created.configOptions || this.configOptions
     try {
+      const diagnostic = { sessionId: created.sessionId, configOptions: created.configOptions || [], configKey: '' }
+      // Configuring a disposable diagnostic session never sends a model prompt.
+      if (model || reasoningEffort || fastMode) await this._configureSession(diagnostic, { model, reasoningEffort, fastMode })
+      this.configOptions = diagnostic.configOptions
       return {
         ok: true,
         protocolVersion: this.initializeResult?.protocolVersion || '',
         sessionCreated: Boolean(created?.sessionId),
         adapterVersion: ADAPTER_VERSION,
         configOptions: publicConfigOptions(this.configOptions),
+        models: modelDirectory(this.configOptions, true),
+        selected: sessionModelSnapshot(this.configOptions),
+        refreshedAt: new Date().toISOString(),
       }
     } finally {
       if (created?.sessionId && this.initializeResult?.agentCapabilities?.sessionCapabilities?.close) {
@@ -491,7 +503,6 @@ export class CodexAgentGateway {
   }
 
   async _configureSession(session, settings = {}) {
-    if (!this.connection?.setSessionConfigOption) return
     const desired = {
       model: String(settings.model || ''),
       reasoningEffort: String(settings.reasoningEffort || ''),
@@ -502,8 +513,13 @@ export class CodexAgentGateway {
     try {
       const applyOption = async (configId, value) => {
         const option = session.configOptions.find((item) => item.id === configId)
-        if (!option || option.currentValue === value) return
-        if (option.type === 'select' && !option.options?.some((item) => item.value === value)) {
+        if (!option) {
+          if (configId === 'fast-mode' && value === false) return
+          throw new Error(`当前 Codex 运行时未声明配置 ${configId}；请刷新模型列表`)
+        }
+        if (option.currentValue === value) return
+        if (!this.connection?.setSessionConfigOption) throw new Error('当前 Codex 运行时不支持显式模型配置')
+        if (option.type === 'select' && !option.options?.flatMap(item => item.options || [item]).some((item) => item.value === value)) {
           throw new Error(`Codex 会话不支持配置 ${configId}=${value}`)
         }
         const response = await this.connection.setSessionConfigOption({
@@ -512,25 +528,37 @@ export class CodexAgentGateway {
           value,
           ...(option.type === 'boolean' ? { type: 'boolean' } : {}),
         })
-        session.configOptions = response.configOptions || session.configOptions.map((item) => (
-          item.id === configId ? { ...item, currentValue: value } : item
-        ))
+        if (!response.configOptions?.some((item) => item.id === configId && item.currentValue === value)) {
+          throw new Error(`Codex 配置回读不匹配：${configId}=${value} 未生效；已停止本次调用`)
+        }
+        session.configOptions = response.configOptions
         this.configOptions = session.configOptions
       }
       if (desired.model) await applyOption('model', desired.model)
       if (desired.reasoningEffort) await applyOption('reasoning_effort', desired.reasoningEffort)
-      await applyOption('fast-mode', desired.fastMode)
+      const fastOption = session.configOptions.find(option => option.id === 'fast-mode')
+      await applyOption('fast-mode', fastOption?.type === 'select' ? (desired.fastMode ? 'on' : 'off') : desired.fastMode)
+      const actual = sessionModelSnapshot(session.configOptions)
+      if ((desired.model && actual.model !== desired.model) || (desired.reasoningEffort && actual.reasoningEffort !== desired.reasoningEffort) || actual.fastMode !== desired.fastMode) throw new Error('模型参数最终回读不匹配，已停止本次调用')
       session.configKey = configKey
+      session.modelSnapshot = sessionModelSnapshot(session.configOptions)
     } catch (error) {
       error.codexPhase = 'session_config'
       throw error
     }
   }
 
-  async prompt({ agentRunId, agentStepId, messages, outputSchema = null, signal, onEvent = () => {}, allowExecFallback = true, settings = {} }) {
+  async prompt({ agentRunId, agentStepId, messages, continuationMessages = null, outputSchema = null, signal, onEvent = () => {}, allowExecFallback = true, settings = {} }) {
     let session = this.sessions.get(agentRunId)
-    const promptText = codexPromptText({
+    const useContextDelta = Boolean(session && Array.isArray(continuationMessages) && continuationMessages.length)
+    const fullPromptText = codexPromptText({
       messages,
+      outputSchema,
+      displayTitle: settings.displayTitle,
+      mirrorRoot: settings.mirrorRoot,
+    })
+    const promptText = codexPromptText({
+      messages: useContextDelta ? continuationMessages : messages,
       outputSchema,
       displayTitle: settings.displayTitle,
       mirrorRoot: settings.mirrorRoot,
@@ -548,7 +576,7 @@ export class CodexAgentGateway {
       })
       if (!session) {
         const persistedSession = this.repository?.getRun?.(agentRunId)?.session || null
-        session = persistedSession?.sessionId && persistedSession.status !== 'closed'
+        session = persistedSession?.sessionId
           ? await this.resumeSession({
               agentRunId,
               mirrorRoot: settings.mirrorRoot,
@@ -559,6 +587,12 @@ export class CodexAgentGateway {
           : await this.createSession({ agentRunId, mirrorRoot: settings.mirrorRoot, workspaceRoot: settings.workspaceRoot, authMethod: settings.authMethod })
       }
       await this._configureSession(session, settings)
+      const lockedRun = this.repository?.getRun?.(agentRunId)
+      if (lockedRun && session.modelSnapshot?.verified && !lockedRun.modelRoutes?.codexCapabilitySnapshot) {
+        this.repository?.updateRun?.(agentRunId, { modelRoutes: { ...lockedRun.modelRoutes,
+          codexModel: session.modelSnapshot.model, codexReasoningEffort: session.modelSnapshot.reasoningEffort,
+          codexFastMode: session.modelSnapshot.fastMode, codexCapabilitySnapshot: session.modelSnapshot } })
+      }
       session.activeStepId = agentStepId
       session.onEvent = onEvent
       session.events = []
@@ -577,10 +611,12 @@ export class CodexAgentGateway {
           content: session.content,
           structuredOutput: structuredFromContent(session.content),
           usage: response.usage || {},
+          modelSnapshot: session.modelSnapshot || sessionModelSnapshot(session.configOptions),
           events: session.events,
           fallbackFrom: '',
           fallbackReason: '',
           outputStarted: session.outputStarted,
+          contextReuse: useContextDelta ? 'delta' : 'full',
         }
         this.repository?.completeApproval?.(approval.id, { result: { backend: result.backend, outputStarted: result.outputStarted } })
         return result
@@ -605,17 +641,21 @@ export class CodexAgentGateway {
           fallbackFrom: '',
           fallbackReason: '',
           outputStarted,
+          contextReuse: useContextDelta ? 'delta' : 'full',
         }
         throw error
       }
       try {
         const result = await this.runExecFallback({
-          agentRunId, agentStepId, prompt: promptText, outputSchema, signal, onEvent,
+          agentRunId, agentStepId, prompt: fullPromptText, outputSchema, signal, onEvent,
           mirrorRoot: settings.mirrorRoot || session?.mirrorRoot,
           workspaceRoot: settings.workspaceRoot || session?.workspaceRoot,
           model: settings.model || '',
+          reasoningEffort: settings.reasoningEffort || '',
+          fastMode: Boolean(settings.fastMode),
           fallbackReason: `${error.codexPhase || 'prompt_transport'}: ${error.message}`,
         })
+        result.contextReuse = 'full'
         if (approval?.id) this.repository?.completeApproval?.(approval.id, { result: { backend: result.backend, fallbackReason: result.fallbackReason } })
         return result
       } catch (fallbackError) {
@@ -631,7 +671,7 @@ export class CodexAgentGateway {
     return ['adapter_start', 'initialize', 'session_new', 'prompt_transport'].includes(phase)
   }
 
-  async runExecFallback({ agentRunId, agentStepId, prompt, outputSchema, signal, onEvent = () => {}, mirrorRoot, workspaceRoot = mirrorRoot, model = '', fallbackReason = '' }) {
+  async runExecFallback({ agentRunId, agentStepId, prompt, outputSchema, signal, onEvent = () => {}, mirrorRoot, workspaceRoot = mirrorRoot, model = '', reasoningEffort = '', fastMode = false, fallbackReason = '' }) {
     const runtime = this.runtime || inspectCodexRuntime({ appPath: this.appPath, resourcesPath: this.resourcesPath })
     if (!runtime.cliAvailable || !mirrorRoot) throw new Error('Codex exec 兼容模式运行时不完整')
     const execDirectory = path.join(mirrorRoot, '.codex', 'exec')
@@ -646,7 +686,7 @@ export class CodexAgentGateway {
       ...(path.resolve(workspaceRoot) === path.resolve(mirrorRoot) ? [] : ['--add-dir', mirrorRoot]),
       '--ignore-user-config', '--skip-git-repo-check',
       '-c', 'approval_policy="never"',
-      ...(model ? ['-c', `model=${JSON.stringify(model)}`] : []),
+      ...execModelArgs({ model, reasoningEffort, fastMode }),
       ...(outputSchema && runtime.capabilities?.execOutputSchema ? ['--output-schema', schemaPath] : []),
       '-',
     ]
@@ -688,6 +728,7 @@ export class CodexAgentGateway {
       content,
       structuredOutput: structuredFromContent(content),
       usage: {},
+      modelSnapshot: { model, reasoningEffort, fastMode, verified: false, source: 'exec_explicit_arguments' },
       events,
       fallbackFrom: 'codex_acp',
       fallbackReason,

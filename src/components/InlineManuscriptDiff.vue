@@ -30,8 +30,8 @@ onMounted(() => {
     lineNumbers: 'off',
     folding: false,
     scrollBeyondLastLine: false,
-    fontSize: 12,
-    lineHeight: 20,
+    fontSize: 14,
+    lineHeight: 24,
     padding: { top: 10, bottom: 10 },
   })
   editor.setModel({ original: originalModel, modified: candidateModel })
@@ -52,5 +52,5 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.inline-manuscript-diff { height: 270px; margin-top: 12px; border: 1px solid #c7b9a7; background: #fffaf1; }
+.inline-manuscript-diff { box-sizing: border-box; height: 100%; min-height: 0; overflow: hidden; border: 1px solid var(--ns-border); border-radius: 8px; background: white; }
 </style>

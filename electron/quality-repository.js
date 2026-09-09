@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { recordCreativeDependencies, invalidateCreativeDependencies } from './creative-context.js'
 import {
   QUALITY_RUBRIC_VERSION,
   URBAN_SUSPENSE_BENCHMARK,
@@ -88,8 +89,12 @@ export function createQualityRepository(database, {
   }
 
   function getReport(id) {
-    const row = reportById.get(id)
+    let row = reportById.get(id)
     if (!row) return null
+    if (database.prepare("SELECT name FROM sqlite_master WHERE name='creative_dependencies'").get()) {
+      invalidateCreativeDependencies(database, row.project_id)
+      row = reportById.get(id)
+    }
     const report = mapReport(row, humanReviews(id))
     const source = database.prepare(`
       SELECT model_profile_id, model_json, prompt_template_id, prompt_template_version,
@@ -146,6 +151,7 @@ export function createQualityRepository(database, {
       execution: report.execution,
       repaired: report.repaired,
     })
+    if (report.aggregate.stale) Object.assign(aggregate, { stale: true, staleReason: report.aggregate.staleReason, automaticPassed: false, finalPassed: false })
     database.prepare('UPDATE quality_reports SET aggregate_json = ?, updated_at = ? WHERE id = ?')
       .run(JSON.stringify(aggregate), now(), id)
     return getReport(id)
@@ -215,6 +221,10 @@ export function createQualityRepository(database, {
       createdAt,
       createdAt,
     )
+    const sources = [...(parseJson(generation.prompt_snapshot_json).contextSources || []), ...(input.contextSources || [])]
+    if (sources.length && database.prepare("SELECT name FROM sqlite_master WHERE name='creative_dependencies'").get()) {
+      recordCreativeDependencies(database, { projectId, artifactKind: 'review', artifactId: id, sources })
+    }
     return getReport(id)
   }
 

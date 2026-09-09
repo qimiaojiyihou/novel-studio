@@ -1,7 +1,19 @@
 const { contextBridge, ipcRenderer } = require('electron')
 
 contextBridge.exposeInMainWorld('novelStudio', {
+  creativePreferences: (payload) => ipcRenderer.invoke('creative:preferences', payload),
+  upgradeCreativePack: (payload) => ipcRenderer.invoke('creative:upgrade', payload),
+  listStyleSamples: (payload) => ipcRenderer.invoke('authoring:samples', payload),
+  saveStyleSample: (payload) => ipcRenderer.invoke('authoring:save-sample', payload),
+  listProtections: (payload) => ipcRenderer.invoke('authoring:protections', payload),
+  protectText: (payload) => ipcRenderer.invoke('authoring:protect', payload),
   loadWorkspace: (projectId) => ipcRenderer.invoke('workspace:load', projectId),
+  loadWorkspaceSnapshot: (projectId) => ipcRenderer.invoke('workspace:snapshot', projectId),
+  onCreativeChange: (callback) => {
+    const listener = (_event,payload) => callback(payload)
+    ipcRenderer.on('creative:changed',listener)
+    return () => ipcRenderer.removeListener('creative:changed',listener)
+  },
   listProjects: () => ipcRenderer.invoke('projects:list'),
   createProject: (input) => ipcRenderer.invoke('project:create', input),
   updateProject: (patch) => ipcRenderer.invoke('project:update', patch),
@@ -73,7 +85,15 @@ contextBridge.exposeInMainWorld('novelStudio', {
   saveCodexSettings: (payload) => ipcRenderer.invoke('codex:settings-save', payload),
   startCodexAuth: (methodId) => ipcRenderer.invoke('codex:start-auth', methodId),
   cancelCodexAuth: () => ipcRenderer.invoke('codex:cancel-auth'),
-  testCodex: () => ipcRenderer.invoke('codex:test'),
+  testCodex: (payload) => ipcRenderer.invoke('codex:test', payload),
+  getCodexModels: (payload) => ipcRenderer.invoke('codex:models', payload),
+  startChapterFinalization: (payload) => ipcRenderer.invoke('chapter:finalize-start', payload),
+  getChapterFinalization: (payload) => ipcRenderer.invoke('chapter:finalize-get', payload),
+  confirmChapterFinalization: (payload) => ipcRenderer.invoke('chapter:finalize-confirm', payload),
+  previewChapterAmendment: (payload) => ipcRenderer.invoke('chapter:amendment-preview', payload),
+  confirmChapterAmendment: (payload) => ipcRenderer.invoke('chapter:amendment-confirm', payload),
+  previewManualFinalization: (payload) => ipcRenderer.invoke('chapter:manual-preview', payload),
+  confirmManualFinalization: (payload) => ipcRenderer.invoke('chapter:manual-confirm', payload),
   restartCodexAdapter: () => ipcRenderer.invoke('codex:restart-adapter'),
   openCodexProject: (projectId) => ipcRenderer.invoke('codex:open-project', projectId),
   getSessionModelApproval: (projectId) => ipcRenderer.invoke('approvals:session-model-policy', { projectId }),

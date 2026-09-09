@@ -15,6 +15,7 @@ function parseJson(value, fallback = {}) {
 }
 
 function cleanText(value, fallback = '') {
+  if (value && typeof value === 'object') value = value.text || value.description || value.summary || value.event || value.thread || value.change || value.seed || ''
   const text = String(value ?? '').trim()
   return text || fallback
 }
@@ -27,6 +28,12 @@ function mapItem(row) {
     kind: row.kind,
     title: row.title,
     content: parseJson(row.content_json),
+    effectiveFromChapter: row.effective_from_chapter ?? null,
+    effectiveToChapter: row.effective_to_chapter ?? null,
+    knowledgeScope: parseJson(row.knowledge_scope_json, { author: true }),
+    evidence: parseJson(row.evidence_json, []),
+    sourceRevisionId: row.source_revision_id || '',
+    sourceDigest: row.source_digest || '',
     sourceType: row.source_type,
     sourceId: row.source_id,
     status: row.status,
@@ -703,18 +710,25 @@ export function createKnowledgeRepository(database, {
     return mapItem(itemById.get(id))
   }
 
-  function updateItem({ id, title, content, status }) {
+  function updateItem({ id, title, content, status, effectiveFromChapter, effectiveToChapter, knowledgeScope }) {
     const current = itemById.get(id)
     if (!current) throw new Error('知识条目不存在')
     assertProject(current.project_id)
     if (status && !ITEM_STATUSES.has(status)) throw new Error('知识条目状态不受支持')
     const timestamp = now()
     const nextContent = content && typeof content === 'object' ? content : parseJson(current.content_json)
+    const chapterNumber = (value, fallback) => value === undefined ? fallback : value === '' || value === null ? null : Number(value)
+    const from = chapterNumber(effectiveFromChapter, current.effective_from_chapter)
+    const to = chapterNumber(effectiveToChapter, current.effective_to_chapter)
+    if ([from, to].some(value => value !== null && (!Number.isInteger(value) || value < 1)) || from && to && to < from) throw new Error('生效章节范围无效')
+    const scope = knowledgeScope === undefined ? parseJson(current.knowledge_scope_json, { author: true }) : {
+      author: true, reader: Boolean(knowledgeScope?.reader), characters: Array.isArray(knowledgeScope?.characters) ? knowledgeScope.characters.map(String).filter(Boolean).slice(0, 100) : [],
+    }
     database.prepare(`
       UPDATE knowledge_items
-      SET title = ?, content_json = ?, source_type = CASE WHEN source_type = 'ai' THEN 'ai' ELSE 'manual' END, status = ?, updated_at = ?
+      SET title = ?, content_json = ?, source_type = CASE WHEN source_type = 'ai' THEN 'ai' ELSE 'manual' END, status = ?, updated_at = ?, effective_from_chapter=?, effective_to_chapter=?, knowledge_scope_json=?
       WHERE id = ?
-    `).run(cleanText(title, current.title), JSON.stringify(nextContent), status || current.status, timestamp, id)
+    `).run(cleanText(title, current.title), JSON.stringify(nextContent), status || current.status, timestamp, from, to, JSON.stringify(scope), id)
     database.prepare('UPDATE projects SET updated_at = ? WHERE id = ?').run(timestamp, current.project_id)
     return mapItem(itemById.get(id))
   }

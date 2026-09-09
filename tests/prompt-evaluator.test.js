@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import { aggregatePromptEvalResults, scorePromptEvalCase, validatePromptEvalSuite } from '../electron/prompt-evaluator.js'
 
@@ -12,6 +13,26 @@ const caseDefinition = {
 test('prompt eval suite requires unique cases and assertions', () => {
   assert.equal(validatePromptEvalSuite({ schemaVersion: 1, cases: [caseDefinition] }).cases.length, 1)
   assert.throws(() => validatePromptEvalSuite({ schemaVersion: 1, cases: [{ ...caseDefinition, assertions: [] }] }), /没有断言/)
+})
+
+test('repository prompt eval suite includes fiction naturalness and sentence-group regressions', () => {
+  const suite = validatePromptEvalSuite(JSON.parse(readFileSync(
+    new URL('../research/prompt-eval-cases.json', import.meta.url),
+    'utf8',
+  )))
+  assert.equal(suite.cases.length, 12)
+  const naturalness = suite.cases.find((item) => item.id === 'eval-fiction-naturalness')
+  assert.ok(naturalness)
+  assert.deepEqual(
+    naturalness.assertions.filter((item) => item.critical).map((item) => item.id),
+    ['pov-selective-attention', 'no-card-transcription', 'meaning-once'],
+  )
+  const sentenceGroups = suite.cases.find((item) => item.id === 'eval-sentence-group-continuity')
+  assert.ok(sentenceGroups)
+  assert.deepEqual(
+    sentenceGroups.assertions.filter((item) => item.critical).map((item) => item.id),
+    ['action-object-complete', 'sentence-group-continuity', 'no-abstract-summary'],
+  )
 })
 
 test('prompt eval release gate requires all critical scores and a 1.6 average', () => {

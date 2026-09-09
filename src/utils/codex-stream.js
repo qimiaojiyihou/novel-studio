@@ -15,10 +15,19 @@ export function appendCodexStream(current = '', delta = '', limit = DEFAULT_STRE
 }
 
 export function recoverCodexStream(events = [], agentStepId = '') {
-  return events
-    .filter((event) => event?.type === 'text_delta' && (!agentStepId || !event.agentStepId || event.agentStepId === agentStepId))
+  const relevant = events.filter((event) => !agentStepId || !event?.agentStepId || event.agentStepId === agentStepId)
+  const retryBoundary = relevant.findLastIndex((event) => event?.type === 'structured_retry')
+  return relevant
+    .slice(retryBoundary + 1)
+    .filter((event) => event?.type === 'text_delta')
     .map(eventText)
     .join('')
+}
+
+export function recoverCodexStreamAttempt(events = [], agentStepId = '') {
+  const retry = [...events].reverse().find((event) => event?.type === 'structured_retry'
+    && (!agentStepId || !event.agentStepId || event.agentStepId === agentStepId))
+  return Math.max(1, Math.min(3, Number(retry?.payload?.attempt) || 1))
 }
 
 export function nextCodexStreamLength(displayedLength = 0, sourceLength = 0) {

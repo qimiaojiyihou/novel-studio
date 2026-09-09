@@ -52,7 +52,7 @@ test('startup repair binds the official Creative Pack only to unbound user proje
   assert.equal(repairMissingCreativePackBindings(database, { boundAt: '2026-08-25T02:00:00.000Z' }), 1)
   const binding = database.prepare('SELECT * FROM project_pack_bindings WHERE project_id = ?').get('orphan-user-project')
   assert.equal(binding.pack_id, 'official.general-longform.zh-CN')
-  assert.equal(binding.pack_version, '1.1.0')
+  assert.equal(binding.pack_version, '1.3.0')
   assert.equal(database.prepare('SELECT COUNT(*) AS count FROM project_pack_bindings WHERE project_id = ?').get('benchmark-project').count, 0)
   assert.equal(repairMissingCreativePackBindings(database, { boundAt: '2026-08-25T03:00:00.000Z' }), 0)
   assert.deepEqual(database.prepare('PRAGMA foreign_key_check').all(), [])

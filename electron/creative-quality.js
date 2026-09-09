@@ -189,6 +189,7 @@ export function buildReadinessReport({ project = {}, chapter = {}, planningCente
 }
 
 export function planningPromptProfile({ scopeType = '', entityKind = '', fieldKey = '' } = {}) {
+  if (scopeType === 'chapter' && fieldKey === 'title') return 'chapter_title'
   if (fieldKey === 'premise') return 'premise_expander'
   if (fieldKey === 'storyPromise') return 'reader_promise'
   if (fieldKey === 'coreConflict') return 'core_conflict'
@@ -198,6 +199,89 @@ export function planningPromptProfile({ scopeType = '', entityKind = '', fieldKe
   if (entityKind === 'volume' || scopeType === 'volume') return 'volume_plan'
   if (scopeType === 'outline' || ['logline', 'opening', 'incitingIncident', 'firstTurn', 'midpoint', 'crisis', 'climax', 'ending', 'thematicArc'].includes(fieldKey)) return 'outline_tree'
   return 'generic'
+}
+
+function proseSentenceRecords(value = '') {
+  const records = []
+  String(value || '').split(/\n+/).forEach((paragraph, paragraphIndex) => {
+    const source = paragraph.trim()
+    if (!source) return
+    const sentences = source.match(/[^。！？!?]+[。！？!?]?/g) || []
+    sentences.forEach((raw, sentenceIndex) => {
+      const text = raw
+        .trim()
+        .replace(/^[“”「」『』‘’"']+|[“”「」『』‘’"'。！？!?]+$/g, '')
+        .trim()
+      if (!text) return
+      records.push({
+        raw: raw.trim(),
+        text,
+        paragraphIndex,
+        sentenceIndex,
+        chineseLength: [...text].filter((char) => /[\u3400-\u4dbf\u4e00-\u9fff]/u.test(char)).length,
+        dialogue: /^[“「『‘"']/.test(raw.trim()),
+      })
+    })
+  })
+  return records
+}
+
+function proseEvidence(records) {
+  return records.map((item) => item.raw || item.text).filter(Boolean)
+}
+
+export function detectProseRhythmSignals(value = '') {
+  const records = proseSentenceRecords(value)
+  const shortRuns = []
+  let activeRun = []
+  const flushRun = () => {
+    if (activeRun.length >= 3) {
+      shortRuns.push({
+        count: activeRun.length,
+        excerpt: activeRun.map((item) => item.raw).join(''),
+      })
+    }
+    activeRun = []
+  }
+  for (const record of records) {
+    if (!record.dialogue && record.chineseLength > 0 && record.chineseLength <= 10) activeRun.push(record)
+    else flushRun()
+  }
+  flushRun()
+
+  const negativeFragments = records.filter((record) => (
+    !record.dialogue
+    && record.chineseLength <= 10
+    && /^[\u3400-\u4dbf\u4e00-\u9fff]{1,8}(?:没有|没|不|未)[\u3400-\u4dbf\u4e00-\u9fff]{1,5}$/u.test(record.text)
+  ))
+  const abstractSummaries = records.filter((record) => (
+    !record.dialogue
+    && record.chineseLength <= 16
+    && /^(?:这些|那些|这种|那种|这件事|那件事|这东西|那东西).{0,8}(?:不归|都归|不算|只算|不是|意味着|说明|证明)/u.test(record.text)
+  ))
+  const actionReactionPairs = []
+  for (let index = 1; index < records.length; index += 1) {
+    const current = records[index]
+    const previous = records[index - 1]
+    if (
+      negativeFragments.includes(current)
+      && !previous.dialogue
+      && previous.chineseLength > 0
+      && previous.chineseLength <= 12
+    ) {
+      actionReactionPairs.push({
+        excerpt: `${previous.raw}${current.raw}`,
+        paragraphIndex: current.paragraphIndex,
+      })
+    }
+  }
+  return {
+    sentenceCount: records.length,
+    shortRuns,
+    negativeFragments: proseEvidence(negativeFragments),
+    abstractSummaries: proseEvidence(abstractSummaries),
+    actionReactionPairs,
+  }
 }
 
 export function deterministicQualityChecks({ task = 'chapter', output = '', chapter = {}, targetLength = 0 } = {}) {
@@ -234,6 +318,32 @@ export function deterministicQualityChecks({ task = 'chapter', output = '', chap
     normalizeEndingTypography(text).endsWith(normalizeEndingTypography(expectedStop))
     || (Boolean(expectedDialogue) && candidateDialogue === expectedDialogue)
   )
+  const rhythmSignals = task === 'chapter' || task === 'rewrite'
+    ? detectProseRhythmSignals(text)
+    : null
+  const rhythmChecks = rhythmSignals ? [
+    check('output-prose-short-runs', '正文没有连续机械短句', rhythmSignals.shortRuns.length === 0, {
+      critical: false,
+      severity: 'warning',
+      detail: rhythmSignals.shortRuns.length
+        ? `发现 ${rhythmSignals.shortRuns.length} 处连续短句；请判断每句是否都独立改变局势：${rhythmSignals.shortRuns.slice(0, 2).map((item) => item.excerpt).join('｜')}`
+        : '',
+    }),
+    check(
+      'output-prose-action-fragments',
+      '动作对象和反应没有被拆成孤立短句',
+      rhythmSignals.actionReactionPairs.length === 0 && rhythmSignals.negativeFragments.length < 2 && rhythmSignals.abstractSummaries.length === 0,
+      {
+        critical: false,
+        severity: 'warning',
+        detail: [
+          ...rhythmSignals.actionReactionPairs.slice(0, 2).map((item) => item.excerpt),
+          ...rhythmSignals.negativeFragments.slice(0, 2),
+          ...rhythmSignals.abstractSummaries.slice(0, 2),
+        ].filter(Boolean).join('｜'),
+      },
+    ),
+  ] : []
   return [
     check('output-nonempty', '正文候选非空', text.length >= 100, { critical: true }),
     ...(lengthRange ? [check(
@@ -241,18 +351,19 @@ export function deterministicQualityChecks({ task = 'chapter', output = '', chap
       `正文纯中文字符数达到目标范围 ${lengthRange.minimum}–${lengthRange.maximum}`,
       compactLength >= lengthRange.minimum && compactLength <= lengthRange.maximum,
       {
-        critical: true,
-        severity: 'high',
+        critical: false,
+        severity: 'warning',
         detail: `当前 ${compactLength} 个纯中文字符，目标 ${Math.round(normalizedTarget)}。`,
       },
     )] : []),
     check('output-prose-only', '正文没有分析或提纲标记', !/(创作说明|写作分析|章节提纲|```)/.test(text), { critical: true }),
     check('output-ending-contract', '存在可供评审的章节结尾合同', Boolean(ending), { critical: true, detail: '具体是否越过结尾合同由质量评审模型判断。' }),
-    check('output-ending-match', '正文完整到达章节硬停止点', endingMatches, {
+    ...(chapter.card?.boundaryMode === 'semantic' || chapter.boundaryMode === 'semantic' ? [] : [check('output-ending-match', '正文完整到达章节硬停止点', endingMatches, {
       critical: true,
       severity: 'high',
       detail: expectedStop ? `正文末尾须到达硬停止事件；对白内容及末尾标点必须一致，闭引号后不得续写：${expectedStop}` : '章节卡或场景计划缺少可验证的硬停止点。',
-    }),
+    })]),
+    ...rhythmChecks,
   ]
 }
 
@@ -267,9 +378,10 @@ export function normalizeModelReview(value = {}) {
     id: cleanText(issue?.id) || `issue-${index + 1}`,
     severity: ['info', 'warning', 'high'].includes(issue?.severity) ? issue.severity : 'warning',
     category: cleanText(issue?.category) || '综合质量',
-    criterion: cleanText(issue?.criterion),
-    evidence: cleanText(issue?.evidence),
-    repairInstruction: cleanText(issue?.repairInstruction),
+    criterion: cleanText(issue?.criterion || issue?.reason),
+    evidence: cleanText(issue?.evidence?.quote || issue?.evidence),
+    repairInstruction: cleanText(issue?.repairInstruction || issue?.suggestion),
+    ...(issue?.scope || issue?.impactScope ? { impactScope: cleanText(issue.impactScope || issue.scope) } : {}),
     resolved: Boolean(issue?.resolved),
   })) : []
   const assertionScores = value.assertionScores && typeof value.assertionScores === 'object' && !Array.isArray(value.assertionScores)
@@ -530,7 +642,7 @@ export const URBAN_SUSPENSE_BENCHMARK = Object.freeze({
 
 export const PROMPT_EVAL_BENCHMARK = Object.freeze({
   id: 'prompt-eval-cases-v1',
-  name: '10 项提示词回归基线',
+  name: '12 项提示词回归基线',
   project: {
     title: '提示词评测隔离工作区',
     genre: '都市悬疑',

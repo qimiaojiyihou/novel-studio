@@ -88,6 +88,7 @@
                 <span class="knowledge-status" :class="selectedItem.status">{{ selectedItem.status === 'resolved' ? '已回收' : selectedItem.status === 'archived' ? '已归档' : '开放' }}</span>
               </div>
               <p class="knowledge-editor-note">{{ editorNote }}</p>
+              <details class="knowledge-time-scope"><summary>来源与知情范围</summary><p>旧条目默认为作者背景；填写生效章节后才按当时信息调用，不自动推断角色知情。</p><label>从第几章生效<input type="number" min="1" v-model="selectedItem.effectiveFromChapter" @input="scheduleItemSave(selectedItem)" /></label><label>至第几章（留空表示持续有效）<input type="number" min="1" v-model="selectedItem.effectiveToChapter" @input="scheduleItemSave(selectedItem)" /></label><label><input type="checkbox" :checked="selectedItem.knowledgeScope?.reader" @change="setKnowledgeScope('reader', $event.target.checked)" />读者已知</label><label>已知人物（顿号分隔）<input :value="(selectedItem.knowledgeScope?.characters || []).join('、')" @change="setKnowledgeScope('characters', $event.target.value.split(/[、,，]/).map(s=>s.trim()).filter(Boolean))" /></label><p v-if="selectedItem.sourceDigest">来源摘要：{{ selectedItem.sourceDigest }}</p></details>
               <div class="knowledge-fields">
                 <label v-for="field in fieldsForMode" :key="field.key" :class="{ wide: field.wide }">
                   <span class="knowledge-field-heading"><span><strong>{{ field.label }}</strong><small>{{ field.hint }}</small></span><span class="knowledge-field-actions"><button class="knowledge-cascade" type="button" @click="requestKnowledgeChange(field.key, field.label)">联动修改</button><CreativeExecutionControl v-if="field.type !== 'select' && field.type !== 'number'" compact :default-mode="defaultExecutionMode" :app-model-label="knowledgeModelName" action-label="候选" @execute="requestKnowledgeDraft(field.key, field.label, $event)" /></span></span>
@@ -592,13 +593,18 @@ function markDirty(item) {
   if (itemTimers.has(item.id)) clearTimeout(itemTimers.get(item.id))
   itemTimers.set(item.id, setTimeout(() => { itemTimers.delete(item.id); Promise.resolve().then(() => saveItem(item.id)).catch(() => {}) }, 800))
 }
+function scheduleItemSave(item) { markDirty(item) }
+function setKnowledgeScope(key, value) {
+  selectedItem.value.knowledgeScope = { author: true, ...selectedItem.value.knowledgeScope, [key]: value }
+  markDirty(selectedItem.value)
+}
 function trackSave(promise) { activeSaves.add(promise); promise.then(() => activeSaves.delete(promise), () => activeSaves.delete(promise)); return promise }
 async function saveItem(id) {
   if (!dirtyItems.has(id)) return
   const item = center.value.items.find((entry) => entry.id === id)
   if (!item) return
   dirtyItems.delete(id); saveState.value = 'saving'
-  return trackSave(appService.updateKnowledgeItem({ id, title: item.title, content: cloneForIpc(item.content), status: item.status })
+  return trackSave(appService.updateKnowledgeItem({ id, title: item.title, content: cloneForIpc(item.content), status: item.status, effectiveFromChapter: item.effectiveFromChapter, effectiveToChapter: item.effectiveToChapter, knowledgeScope: cloneForIpc(item.knowledgeScope || { author: true }) })
     .then((saved) => { replaceItem(saved); settleSaveState() })
     .catch((error) => { dirtyItems.add(id); saveState.value = 'error'; emit('toast', `知识记录保存失败：${error.message}`); throw error }))
 }

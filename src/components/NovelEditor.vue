@@ -24,7 +24,7 @@ const editableCompartment = new Compartment()
 const writingTheme = EditorView.theme({
   '&': { backgroundColor: 'transparent', color: 'var(--ink)', height: '100%' },
   '.cm-scroller': { overflow: 'auto', fontFamily: 'var(--font-body)', padding: '20px 0 120px' },
-  '.cm-content': { maxWidth: '780px', margin: '0 auto', padding: '28px 44px', lineHeight: '1.95', caretColor: 'var(--copper)' },
+  '.cm-content': { maxWidth: '780px', margin: '0 auto', padding: '24px 36px', fontSize: '16px', lineHeight: '1.85', caretColor: 'var(--copper)' },
   '.cm-line': { padding: '0' },
   '.cm-focused': { outline: 'none' },
   '.cm-selectionBackground, .cm-focused .cm-selectionBackground': { backgroundColor: 'var(--selection) !important' },

@@ -3,6 +3,7 @@ import test from 'node:test'
 import {
   aggregateQuality,
   buildReadinessReport,
+  detectProseRhythmSignals,
   deterministicQualityChecks,
   normalizeModelReview,
   normalizeScenePlan,
@@ -35,6 +36,7 @@ test('planning fields map to dedicated prompt profiles with a generic fallback',
   assert.equal(planningPromptProfile({ entityKind: 'world', fieldKey: 'hardRules' }), 'world_rule')
   assert.equal(planningPromptProfile({ scopeType: 'volume', fieldKey: 'goal' }), 'volume_plan')
   assert.equal(planningPromptProfile({ scopeType: 'outline', fieldKey: 'midpoint' }), 'outline_tree')
+  assert.equal(planningPromptProfile({ scopeType: 'chapter', fieldKey: 'title' }), 'chapter_title')
   assert.equal(planningPromptProfile({ fieldKey: 'customField' }), 'generic')
 })
 
@@ -72,6 +74,32 @@ test('chapter deterministic checks reject a manuscript that stops before the har
   assert.equal(complete.find((item) => item.id === 'output-ending-match').passed, true)
 })
 
+test('prose rhythm detector catches mechanical sentence splitting without banning normal short beats', () => {
+  const mechanical = '火一着，直播间先替他紧张起来。周砚没看。锅里的声音倒没乱。这些东西不归厨艺管。女生伸手来接。周砚没松。'
+  const signals = detectProseRhythmSignals(mechanical)
+  assert.equal(signals.shortRuns.length, 1)
+  assert.ok(signals.negativeFragments.includes('周砚没看。'))
+  assert.ok(signals.negativeFragments.includes('周砚没松。'))
+  assert.ok(signals.abstractSummaries.includes('这些东西不归厨艺管。'))
+  assert.ok(signals.actionReactionPairs.some((item) => item.excerpt.includes('女生伸手来接。周砚没松。')))
+
+  const checks = deterministicQualityChecks({
+    task: 'chapter',
+    output: `${mechanical.repeat(2)}${validCard.ending}`,
+    chapter: { card: validCard, scenePlan: validPlan },
+  })
+  assert.equal(checks.find((item) => item.id === 'output-prose-short-runs').passed, false)
+  assert.equal(checks.find((item) => item.id === 'output-prose-short-runs').critical, false)
+  assert.equal(checks.find((item) => item.id === 'output-prose-action-fragments').passed, false)
+})
+
+test('prose rhythm detector preserves a concise beat when it changes the scene', () => {
+  const signals = detectProseRhythmSignals('门开了。是周砚。林砚握着钥匙，等那道声音再次响起。')
+  assert.equal(signals.shortRuns.length, 0)
+  assert.equal(signals.negativeFragments.length, 0)
+  assert.equal(signals.actionReactionPairs.length, 0)
+})
+
 test('chapter deterministic checks enforce an explicit manuscript length target', () => {
   const short = deterministicQualityChecks({
     task: 'chapter',
@@ -81,7 +109,7 @@ test('chapter deterministic checks enforce an explicit manuscript length target'
   })
   const lengthCheck = short.find((item) => item.id === 'output-length-target')
   assert.equal(lengthCheck.passed, false)
-  assert.equal(lengthCheck.critical, true)
+  assert.equal(lengthCheck.critical, false)
   assert.match(lengthCheck.detail, /目标 3000/)
   const complete = deterministicQualityChecks({
     task: 'chapter',

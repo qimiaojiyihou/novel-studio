@@ -5,6 +5,8 @@ import { AgentRuntime } from '../electron/agent-runtime.js'
 import { createCodexRepository } from '../electron/codex-repository.js'
 import { runMigrations } from '../electron/database-migrations.js'
 import {
+  INLINE_CONVERSATION_STEP_LIMIT,
+  inlineConversationReuseScope,
   inlineTargetKey,
   normalizeInlineCreativeAction,
   projectForInlineTarget,
@@ -74,12 +76,44 @@ test('inline actions enforce target/task boundaries and stable target keys', () 
   assert.equal(repair.intent, 'repair')
   assert.deepEqual(repair.target.issueIds, ['causality', 'continuity'])
   assert.equal(repair.candidateType, 'manuscript')
+  const chapterTitle = normalizeInlineCreativeAction({
+    projectId: 'project-1', chapterId: 'chapter-1', task: 'planning_field', executionMode: 'app_model',
+    target: { kind: 'chapter_field', targetId: 'chapter-1', fieldKey: 'title', fieldLabel: '章节名' },
+  })
+  assert.equal(chapterTitle.candidateType, 'planning_field')
+  assert.equal(chapterTitle.requestedExecutionMode, 'app_model')
+  assert.equal(chapterTitle.targetKey, 'chapter_field:chapter-1:title:0:0')
   const storyChange = normalizeInlineCreativeAction({
     projectId: 'project-1', task: 'story_change', intent: 'analysis',
     target: { kind: 'story_change_set', targetId: 'change-set-1', fieldKey: 'items', fieldLabel: '设定联动修改' },
   })
   assert.equal(storyChange.candidateType, 'story_change_set')
   assert.equal(storyChange.intent, 'analysis')
+})
+
+test('inline actions divide reusable conversations into book planning, chapter writing, and isolated review scopes', () => {
+  const planning = inlineConversationReuseScope(planningAction('premise'))
+  const chapter = inlineConversationReuseScope({
+    projectId: 'project-1', chapterId: 'chapter-1', task: 'chapter_card',
+    target: { kind: 'chapter_card', targetId: 'chapter-1' },
+  })
+  const review = inlineConversationReuseScope({
+    projectId: 'project-1', chapterId: 'chapter-1', task: 'continuity_audit',
+    target: { kind: 'continuity_audit', targetId: 'chapter-1' },
+  })
+
+  assert.deepEqual(planning, {
+    key: 'planning:project-1', kind: 'planning', reusable: true,
+    maxSteps: INLINE_CONVERSATION_STEP_LIMIT,
+  })
+  assert.deepEqual(chapter, {
+    key: 'chapter:project-1:chapter-1', kind: 'chapter', reusable: true,
+    maxSteps: INLINE_CONVERSATION_STEP_LIMIT,
+  })
+  assert.deepEqual(review, {
+    key: 'isolated:project-1:continuity_audit:chapter-1:*:0:0', kind: 'audit', reusable: false,
+    maxSteps: 1,
+  })
 })
 
 test('project brief drafts use a bounded pending genre without mutating formal project facts', () => {
@@ -119,6 +153,85 @@ test('inline repository reuses an active target while allowing different targets
   assert.equal(focused.focusedExisting, true)
   assert.notEqual(parallel.id, first.id)
   assert.equal(database.prepare("SELECT COUNT(*) AS count FROM agent_runs WHERE workflow_id = 'inline-action'").get().count, 2)
+  database.close()
+})
+
+test('settled planning targets reuse one bounded book conversation', () => {
+  const { database, repository } = setup()
+  const first = repository.createInlineRun(planningAction('premise'))
+  repository.updateStep(first.steps[0].id, { status: 'completed', completedAt: NOW })
+  repository.updateRun(first.id, { status: 'completed', completedAt: NOW })
+
+  const next = repository.createInlineRun(planningAction('coreConflict'))
+  assert.equal(next.id, first.id)
+  assert.equal(next.steps.length, 2)
+  assert.equal(next.steps[1].input.conversationScope.key, 'planning:project-1')
+  assert.equal(next.steps[1].input.target.fieldKey, 'coreConflict')
+  database.close()
+})
+
+test('chapter conversations reuse within one chapter and isolate the next chapter', () => {
+  const { database, repository } = setup()
+  database.prepare(`INSERT INTO chapters
+    (id, project_id, chapter_no, title, status, card_json, scene_plan, manuscript, updated_at)
+    VALUES ('chapter-2', 'project-1', 2, '第二章', 'draft', '{}', '', '', ?)`)
+    .run(NOW)
+  const first = repository.createInlineRun({
+    projectId: 'project-1', chapterId: 'chapter-1', task: 'chapter_card',
+    target: { kind: 'chapter_card', targetId: 'chapter-1' },
+  })
+  repository.updateStep(first.steps[0].id, { status: 'completed', completedAt: NOW })
+  repository.updateRun(first.id, { status: 'completed', completedAt: NOW })
+
+  const sameChapter = repository.createInlineRun({
+    projectId: 'project-1', chapterId: 'chapter-1', task: 'scene_plan',
+    target: { kind: 'scene_plan', targetId: 'chapter-1' },
+  })
+  assert.equal(sameChapter.id, first.id)
+  assert.equal(sameChapter.steps.length, 2)
+
+  repository.updateStep(sameChapter.steps[1].id, { status: 'completed', completedAt: NOW })
+  repository.updateRun(first.id, { status: 'completed', completedAt: NOW })
+  const nextChapter = repository.createInlineRun({
+    projectId: 'project-1', chapterId: 'chapter-2', task: 'chapter_card',
+    target: { kind: 'chapter_card', targetId: 'chapter-2' },
+  })
+  assert.notEqual(nextChapter.id, first.id)
+  assert.equal(nextChapter.steps[0].input.conversationScope.key, 'chapter:project-1:chapter-2')
+  database.close()
+})
+
+test('independent audits never reuse a completed creative conversation', () => {
+  const { database, repository } = setup()
+  const request = {
+    projectId: 'project-1', chapterId: 'chapter-1', task: 'continuity_audit',
+    target: { kind: 'continuity_audit', targetId: 'chapter-1' },
+  }
+  const first = repository.createInlineRun(request)
+  repository.updateStep(first.steps[0].id, { status: 'completed', completedAt: NOW })
+  repository.updateRun(first.id, { status: 'completed', completedAt: NOW })
+  const second = repository.createInlineRun(request)
+  assert.notEqual(second.id, first.id)
+  assert.equal(second.steps[0].input.conversationScope.reusable, false)
+  database.close()
+})
+
+test('book conversations rotate after the bounded step limit', () => {
+  const { database, repository } = setup()
+  let current = repository.createInlineRun(planningAction('field-1'))
+  const firstId = current.id
+  for (let index = 1; index < INLINE_CONVERSATION_STEP_LIMIT; index += 1) {
+    const step = current.steps.at(-1)
+    repository.updateStep(step.id, { status: 'completed', completedAt: NOW })
+    repository.updateRun(current.id, { status: 'completed', completedAt: NOW })
+    current = repository.createInlineRun(planningAction(`field-${index + 1}`))
+    assert.equal(current.id, firstId)
+  }
+  repository.updateStep(current.steps.at(-1).id, { status: 'completed', completedAt: NOW })
+  repository.updateRun(current.id, { status: 'completed', completedAt: NOW })
+  const rotated = repository.createInlineRun(planningAction('field-after-limit'))
+  assert.notEqual(rotated.id, firstId)
+  assert.equal(rotated.steps.length, 1)
   database.close()
 })
 
@@ -375,7 +488,7 @@ test('inline Codex conversation keeps one run and session across revision candid
     createMirror: async () => ({ root: '/tmp/inline-run', workspaceRoot: '/tmp/book', sourceDigest: 'source-a' }),
     refreshMirror: async () => ({ root: '/tmp/inline-run', workspaceRoot: '/tmp/book', sourceDigest: 'source-a' }),
     prepareCodexPrompt: async ({ step }) => {
-      if (step.input.revision) assert.match(step.input.revision.instruction, /缩短|职业阻力/)
+      if (step.input.revision) assert.match(step.input.revision.instruction, /缩短|职业阻力|结束后再次修改/)
       return { messages: [], outputSchema: null }
     },
     currentSourceDigest: async () => 'source-a',
@@ -427,11 +540,14 @@ test('inline Codex conversation keeps one run and session across revision candid
   const finished = await runtime.finishInline(run.id)
   assert.equal(finished.status, 'completed')
   assert.equal(closedSessions, 1)
-  await assert.rejects(() => runtime.continueInline({
+  await runtime.continueInline({
     runId: run.id,
     parentCandidateId: run.candidates[2].id,
     instruction: '结束后再次修改。',
-  }), /已经结束/)
+  })
+  await runtime.advance(run.id)
+  assert.equal(repository.getRun(run.id).steps.length, 4)
+  assert.equal(prompts.at(-1).agentRunId, run.id)
   database.close()
 })
 

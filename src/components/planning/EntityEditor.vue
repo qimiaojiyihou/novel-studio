@@ -29,7 +29,7 @@
     </div>
     <div class="entity-field-grid">
       <PlanningField
-        v-for="field in fields"
+        v-for="field in fields.filter(item => !item.optional)"
         :key="field.key"
         :field="field"
         :model-value="String(entity.data[field.key] || '')"
@@ -42,6 +42,14 @@
         @edit-default="$emit('edit-default')"
       />
     </div>
+    <details v-if="fields.some(item => item.optional)">
+      <summary>人物声音（可选）</summary>
+      <div class="entity-field-grid">
+        <PlanningField v-for="field in fields.filter(item => item.optional)" :key="field.key" :field="field" :model-value="String(entity.data[field.key] || '')"
+          :default-execution-mode="defaultExecutionMode" :app-model-label="appModelLabel"
+          @update:model-value="$emit('update-field', { key: field.key, value: $event })" @generate="$emit('generate-field', { field, mode: $event })" />
+      </div>
+    </details>
   </div>
 </template>
 

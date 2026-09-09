@@ -6,11 +6,14 @@ import {
 import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { validateCreativePack } from './creative-pack.js'
+import { creativeUpgradeMigrations } from './creative-upgrade-migrations.js'
 
-export const LATEST_SCHEMA_VERSION = 20
+export const LATEST_SCHEMA_VERSION = 24
 
-function bundledOfficialPack() {
-  const filePath = fileURLToPath(new URL('../creative-packs/dist/general-longform-1.1.0.nspack.json', import.meta.url))
+function bundledOfficialPack(version = '1.2.0') {
+  const directory = version === '1.3.0' ? 'dist' : 'historical'
+  const historicalPath = fileURLToPath(new URL(`../creative-packs/${directory}/general-longform-${version}.nspack.json`, import.meta.url))
+  const filePath = fs.existsSync(historicalPath) ? historicalPath : fileURLToPath(new URL(`../creative-packs/dist/general-longform-${version}.nspack.json`, import.meta.url))
   const pack = JSON.parse(fs.readFileSync(filePath, 'utf8'))
   validateCreativePack(pack, { appVersion: '0.1.0' })
   return pack
@@ -1023,7 +1026,7 @@ const migrations = [
       `)
 
       const installedAt = now()
-      const pack = bundledOfficialPack()
+      const pack = bundledOfficialPack('1.0.0')
       const manifest = pack.manifest
       database.prepare(`
         INSERT INTO creative_packs (id, name, language, license, source, current_version, enabled, created_at, updated_at)
@@ -1337,7 +1340,7 @@ const migrations = [
         CREATE INDEX story_change_snapshots_set_idx ON story_change_snapshots(change_set_id, created_at);
       `)
       const installedAt = now()
-      const pack = bundledOfficialPack()
+      const pack = bundledOfficialPack('1.1.0')
       const manifest = pack.manifest
       database.prepare(`
         INSERT INTO creative_packs (id, name, language, license, source, current_version, enabled, created_at, updated_at)
@@ -1350,19 +1353,53 @@ const migrations = [
         INSERT INTO creative_pack_versions (
           id, pack_id, version, min_app_version, digest, manifest_json, content_json, installed_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(pack_id, version) DO UPDATE SET digest = excluded.digest,
-          manifest_json = excluded.manifest_json, content_json = excluded.content_json
+        ON CONFLICT(pack_id, version) DO NOTHING
       `).run(
         `${manifest.id}@${manifest.version}`, manifest.id, manifest.version, manifest.minAppVersion,
         manifest.integrity.sha256, JSON.stringify(manifest), JSON.stringify(pack), installedAt,
       )
-      database.prepare(`
-        UPDATE project_pack_bindings
-        SET pack_version = ?, updated_at = ?
-        WHERE pack_id = ?
-      `).run(manifest.version, installedAt, manifest.id)
     },
   },
+  {
+    version: 21,
+    name: 'official-creative-pack-1-2-natural-prose',
+    up(database, now) {
+      const installedAt = now()
+      const pack = bundledOfficialPack('1.2.0')
+      const manifest = pack.manifest
+      database.prepare(`
+        INSERT INTO creative_packs (id, name, language, license, source, current_version, enabled, created_at, updated_at)
+        VALUES (?, ?, ?, ?, 'official', ?, 1, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET name = excluded.name, language = excluded.language,
+          license = excluded.license, current_version = excluded.current_version, enabled = 1,
+          updated_at = excluded.updated_at
+      `).run(manifest.id, manifest.name, manifest.language, manifest.license, manifest.version, installedAt, installedAt)
+      database.prepare(`
+        INSERT INTO creative_pack_versions (
+          id, pack_id, version, min_app_version, digest, manifest_json, content_json, installed_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(pack_id, version) DO NOTHING
+      `).run(
+        `${manifest.id}@${manifest.version}`, manifest.id, manifest.version, manifest.minAppVersion,
+        manifest.integrity.sha256, JSON.stringify(manifest), JSON.stringify(pack), installedAt,
+      )
+    },
+  },
+  ...creativeUpgradeMigrations.map((migration) => migration.version !== 22 ? migration : {
+    ...migration,
+    up(database, now) {
+      migration.up(database, now)
+      const pack = bundledOfficialPack('1.3.0')
+      const manifest = pack.manifest
+      database.prepare(`UPDATE creative_packs SET current_version = ?, updated_at = ? WHERE id = ?`)
+        .run(manifest.version, now(), manifest.id)
+      database.prepare(`INSERT OR IGNORE INTO creative_pack_versions
+        (id, pack_id, version, min_app_version, digest, manifest_json, content_json, installed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(`${manifest.id}@${manifest.version}`, manifest.id,
+          manifest.version, manifest.minAppVersion, manifest.integrity.sha256, JSON.stringify(manifest), JSON.stringify(pack), now())
+      // Existing project bindings deliberately remain pinned until the user confirms an upgrade.
+    },
+  }),
 ]
 
 function readForeignKeyCheck(database) {

@@ -55,6 +55,13 @@ function stateTextList(value) {
     .filter(Boolean)
 }
 
+function evidencedStateList(value) {
+  return (Array.isArray(value) ? value : []).map(item => {
+    const text = stateText(item?.text || item?.description || item?.thread || item?.event || item)
+    return item?.evidence ? { text, evidence: stateText(item.evidence?.quote || item.evidence) } : text
+  }).filter(item => typeof item === 'string' ? item : item.text)
+}
+
 export function normalizeChapterStateSnapshot(value = {}) {
   const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {}
   const facts = (Array.isArray(source.facts) ? source.facts : []).map((fact) => {
@@ -67,9 +74,9 @@ export function normalizeChapterStateSnapshot(value = {}) {
     return {
       subject: stateText(fact?.subject),
       predicate: stateText(fact?.predicate),
-      object: stateText(fact?.object || fact?.fact || fact?.statement),
+      object: stateText(fact?.object || fact?.fact || fact?.statement || fact?.text),
       certainty,
-      evidence: stateText(fact?.evidence || fact?.location),
+      evidence: stateText(fact?.evidence?.quote || fact?.evidence || fact?.location),
     }
   }).filter((fact) => fact.subject || fact.predicate || fact.object)
 
@@ -85,37 +92,39 @@ export function normalizeChapterStateSnapshot(value = {}) {
     emotional: stateText(state?.emotional || state?.emotionalState),
     possessions: stateTextList(state?.possessions || state?.inventory),
     knows: stateTextList(state?.knows || state?.knowledge),
+    ...(state?.evidence ? { evidence: stateText(state.evidence?.quote || state.evidence) } : {}),
   })).filter((state) => state.character)
 
   const relationshipChanges = (Array.isArray(source.relationshipChanges) ? source.relationshipChanges : [])
     .map((change) => {
       if (typeof change === 'string') return change.trim()
       const relation = [stateText(change?.from), stateText(change?.to)].filter(Boolean).join(' → ')
-      const description = stateText(change?.change || change?.description || change?.relationship)
-      return [relation, description].filter(Boolean).join('：')
+      const description = stateText(change?.change || change?.description || change?.relationship || change?.text)
+      const text = [relation, description].filter(Boolean).join('：')
+      return change?.evidence ? { text, evidence: stateText(change.evidence?.quote || change.evidence) } : text
     }).filter(Boolean)
   const timelineEvents = (Array.isArray(source.timelineEvents) ? source.timelineEvents : []).map((event) => {
     if (typeof event === 'string') return event.trim()
     return {
       time: stateText(event?.time),
-      event: stateText(event?.event || event?.description),
+      event: stateText(event?.event || event?.description || event?.text),
       participants: Array.isArray(event?.participants)
         ? event.participants.map((item) => stateText(item)).filter(Boolean).join('、')
         : stateText(event?.participants),
       consequence: stateText(event?.consequence),
-      evidence: stateText(event?.evidence),
+      evidence: stateText(event?.evidence?.quote || event?.evidence),
     }
   }).filter((event) => typeof event === 'string' ? event : event.event)
 
   const rawForeshadow = source.foreshadow
   const foreshadow = Array.isArray(rawForeshadow)
     ? {
-        setups: rawForeshadow.filter((item) => !['fulfilled', 'payoff', 'resolved'].includes(item?.status)).map((item) => stateText(item?.description || item)).filter(Boolean),
-        payoffs: rawForeshadow.filter((item) => ['fulfilled', 'payoff', 'resolved'].includes(item?.status)).map((item) => stateText(item?.description || item)).filter(Boolean),
+        setups: evidencedStateList(rawForeshadow.filter((item) => !['fulfilled', 'payoff', 'resolved'].includes(item?.status))),
+        payoffs: evidencedStateList(rawForeshadow.filter((item) => ['fulfilled', 'payoff', 'resolved'].includes(item?.status))),
       }
     : {
-        setups: stateTextList(rawForeshadow?.setups),
-        payoffs: stateTextList(rawForeshadow?.payoffs),
+        setups: evidencedStateList(rawForeshadow?.setups),
+        payoffs: evidencedStateList(rawForeshadow?.payoffs),
       }
 
   return {
@@ -125,7 +134,7 @@ export function normalizeChapterStateSnapshot(value = {}) {
     relationshipChanges,
     timelineEvents,
     foreshadow,
-    openThreads: stateTextList(source.openThreads),
+    openThreads: evidencedStateList(source.openThreads),
   }
 }
 

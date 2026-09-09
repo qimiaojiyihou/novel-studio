@@ -77,10 +77,10 @@ test('fresh database migrates to the latest schema with foreign keys enabled', (
     assert.equal(database.prepare("SELECT COUNT(*) AS count FROM prompt_addons WHERE kind = 'built_in'").get().count, 32)
     assert.equal(database.prepare("SELECT current_version FROM prompt_templates WHERE id = 'builtin-chapter-card-v1'").get().current_version, 9)
     assert.equal(database.prepare("SELECT current_version FROM prompt_templates WHERE id = 'builtin-scene-plan-v1'").get().current_version, 11)
-    assert.equal(database.prepare("SELECT current_version FROM prompt_templates WHERE id = 'builtin-chapter-v1'").get().current_version, 18)
+    assert.equal(database.prepare("SELECT current_version FROM prompt_templates WHERE id = 'builtin-chapter-v1'").get().current_version, 20)
     assert.equal(database.prepare("SELECT current_version FROM prompt_templates WHERE id = 'builtin-chapter-state-extract-v1'").get().current_version, 6)
     assert.equal(database.prepare("SELECT current_version FROM prompt_templates WHERE id = 'builtin-continuity-audit-v1'").get().current_version, 2)
-    assert.equal(database.prepare("SELECT current_version FROM prompt_templates WHERE id = 'builtin-quality-review-v1'").get().current_version, 6)
+    assert.equal(database.prepare("SELECT current_version FROM prompt_templates WHERE id = 'builtin-quality-review-v1'").get().current_version, 8)
     assert.equal(database.prepare("SELECT COUNT(*) AS count FROM prompt_template_versions WHERE template_id = 'builtin-chapter-v1'").get().count, 2)
     assert.ok(database.prepare('PRAGMA table_info(model_profiles)').all().some((column) => column.name === 'settings_json'))
     assert.ok(database.prepare('PRAGMA table_info(model_profiles)').all().some((column) => column.name === 'capabilities_json'))
@@ -104,7 +104,7 @@ test('migrations are idempotent', () => {
 test('v12 preserves existing knowledge items and enables reviewable item candidates', () => {
   const database = createDatabase()
   try {
-    runMigrations(database, { now: () => '2026-08-24T00:00:00.000Z' })
+    runMigrations(database, { now: () => '2026-08-24T00:00:00.000Z', targetVersion: 12 })
     const now = '2026-08-24T00:00:00.000Z'
     database.prepare('INSERT INTO projects (id, title, genre, idea, style, created_at, updated_at, archived_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
       .run('project-v12', '迁移测试', '悬疑', '旧知识需要保留', '', now, now, '')
@@ -160,7 +160,7 @@ test('v10 upgrades existing prompt records while preserving v1 template versions
     runMigrations(database, { now: () => '2026-08-23T01:00:00.000Z' })
     assert.equal(getSchemaVersion(database), LATEST_SCHEMA_VERSION)
     assert.equal(database.prepare("SELECT COUNT(*) AS count FROM prompt_template_versions WHERE template_id = 'builtin-chapter-v1'").get().count, 2)
-    assert.equal(database.prepare("SELECT current_version FROM prompt_templates WHERE id = 'builtin-chapter-v1'").get().current_version, 18)
+    assert.equal(database.prepare("SELECT current_version FROM prompt_templates WHERE id = 'builtin-chapter-v1'").get().current_version, 20)
     assert.equal(database.prepare("SELECT COUNT(*) AS count FROM prompt_addons WHERE kind = 'built_in'").get().count, 32)
     assert.deepEqual(database.prepare('PRAGMA foreign_key_check').all(), [])
   } finally {
@@ -345,6 +345,57 @@ test('v19 to v20 adds atomic story change sets and cascades their complete histo
     assert.equal(database.prepare('SELECT COUNT(*) AS count FROM story_change_sets').get().count, 0)
     assert.equal(database.prepare('SELECT COUNT(*) AS count FROM story_change_items').get().count, 0)
     assert.equal(database.prepare('SELECT COUNT(*) AS count FROM story_change_snapshots').get().count, 0)
+    assert.deepEqual(database.prepare('PRAGMA foreign_key_check').all(), [])
+  } finally {
+    database.close()
+  }
+})
+
+test('v20 to v21 installs fixed Pack 1.2 without changing existing bindings', () => {
+  const database = createDatabase()
+  try {
+    const oldTime = '2026-08-26T09:00:00.000Z'
+    const newTime = '2026-08-28T09:00:00.000Z'
+    runMigrations(database, { now: () => oldTime, targetVersion: 20 })
+    const current = database.prepare(`
+      SELECT manifest_json, content_json, digest, min_app_version
+      FROM creative_pack_versions
+      WHERE pack_id = 'official.general-longform.zh-CN'
+      ORDER BY installed_at DESC LIMIT 1
+    `).get()
+    database.prepare(`
+      INSERT OR IGNORE INTO creative_pack_versions (
+        id, pack_id, version, min_app_version, digest, manifest_json, content_json, installed_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      'official.general-longform.zh-CN@1.1.0', 'official.general-longform.zh-CN', '1.1.0',
+      current.min_app_version, 'legacy-digest', current.manifest_json, current.content_json, oldTime,
+    )
+    database.prepare(`
+      INSERT INTO projects (id, title, genre, idea, style, created_at, updated_at)
+      VALUES ('project-v21', '自然正文', '文娱', '改善句群', '', ?, ?)
+    `).run(oldTime, oldTime)
+    database.prepare(`
+      INSERT INTO project_pack_bindings (id, project_id, pack_id, pack_version, bound_at, updated_at)
+      VALUES ('binding-v21', 'project-v21', 'official.general-longform.zh-CN', '1.1.0', ?, ?)
+    `).run(oldTime, oldTime)
+    database.prepare(`
+      UPDATE creative_packs SET current_version = '1.1.0' WHERE id = 'official.general-longform.zh-CN'
+    `).run()
+
+    runMigrations(database, { now: () => newTime, targetVersion: 21 })
+
+    assert.equal(getSchemaVersion(database), 21)
+    assert.equal(database.prepare(`
+      SELECT current_version FROM creative_packs WHERE id = 'official.general-longform.zh-CN'
+    `).get().current_version, '1.2.0')
+    assert.equal(database.prepare(`
+      SELECT pack_version FROM project_pack_bindings WHERE project_id = 'project-v21'
+    `).get().pack_version, '1.1.0')
+    assert.ok(database.prepare(`
+      SELECT digest FROM creative_pack_versions
+      WHERE pack_id = 'official.general-longform.zh-CN' AND version = '1.2.0'
+    `).get().digest)
     assert.deepEqual(database.prepare('PRAGMA foreign_key_check').all(), [])
   } finally {
     database.close()

@@ -9,7 +9,8 @@
       <div class="planning-header-meta">
         <span class="planning-save-state" :class="saveState"><i></i>{{ saveStateLabel }}</span>
         <span>{{ completionCount.completed }}/{{ completionCount.total }} 项已填写</span>
-        <button @click="$emit('open-settings')">规划模型 · {{ planningModelName }}</button>
+        <button type="button" @click="showCandidates">查看候选 · {{ center.candidates.length }}</button>
+        <button @click="$emit('open-settings')">{{ defaultExecutionMode === 'codex' ? '创作方式 · Codex' : `规划模型 · ${planningModelName}` }}</button>
       </div>
     </header>
 
@@ -427,7 +428,7 @@
         </div>
       </main>
 
-      <aside class="candidate-rail">
+      <aside ref="candidateRail" class="candidate-rail" tabindex="-1" aria-label="规划候选签批">
         <div class="candidate-heading">
           <div><span class="eyebrow">AI CANDIDATES</span><h2>候选签批</h2></div>
           <span class="candidate-count">{{ center.candidates.length }}</span>
@@ -499,6 +500,11 @@ const props = defineProps({
 
 const emit = defineEmits(['toast', 'open-settings', 'edit-project', 'chapter-updated', 'delete-chapter', 'codex-action', 'story-change'])
 const center = ref(null)
+const candidateRail = ref(null)
+function showCandidates() {
+  candidateRail.value?.scrollIntoView({ block: 'start', behavior: 'auto' })
+  candidateRail.value?.focus({ preventScroll: true })
+}
 const loadError = ref('')
 const saveState = ref('saved')
 const selectedCharacterId = ref('')

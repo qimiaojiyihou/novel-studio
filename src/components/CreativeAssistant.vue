@@ -9,10 +9,11 @@
       <div class="assistant-launch">
         <label><span>执行方式</span><select v-model="launch.executionMode"><option value="codex">Codex · ACP 优先</option><option value="app_model">应用模型路由</option></select></label>
         <small v-if="launch.executionMode === 'codex'" class="assistant-launch-note">Codex 模型在“模型与项目设置 → Codex 创作 Agent”中选择，并在 AgentRun 启动时锁定。</small>
-        <label><span>工作流</span><select v-model="launch.workflowId"><option value="chapter-creation">逐章创作</option><option value="project-initialization">项目初始化</option></select></label>
+        <label><span>工作流 · Creative Pack {{ creativePreferences?.version }}</span><select v-model="launch.workflowId"><option v-for="workflow in creativePreferences?.workflows || []" :key="workflow.id" :value="workflow.id">{{ workflow.name }}</option></select></label>
+        <details v-if="creativePreferences?.upgrade"><summary>预览升级到 1.3.0</summary><p>新增精简流程；场景按需展开，章末默认约束事件，字数偏差保留候选。现有正文、长章节卡和已启动运行保持原样。</p><p>涉及任务：{{ creativePreferences.upgrade.changedTasks.join('、') }}</p><button type="button" @click="upgradePack">确认升级创作规则</button></details>
         <label v-if="launch.executionMode === 'app_model'"><span>生成模型</span><select v-model="launch.modelProfileId"><option v-for="profile in enabledProfiles" :key="profile.id" :value="profile.id">{{ profile.name }}</option></select></label>
-        <label v-if="launch.executionMode === 'app_model'"><span>评审模型</span><select v-model="launch.reviewerProfileId"><option v-for="profile in enabledProfiles" :key="profile.id" :value="profile.id">{{ profile.name }}</option></select></label>
-        <label v-if="launch.workflowId === 'chapter-creation'"><span>正文目标字数</span><input v-model.number="launch.targetLength" type="number" min="800" max="12000" step="100" /></label>
+        <label v-if="launch.workflowId === 'chapter-creation'"><span>独立审稿</span><select v-model="launch.reviewerProfileId"><option value="">质量评审路由</option><option value="codex">Codex · 新会话</option><option v-for="profile in enabledProfiles" :key="profile.id" :value="profile.id">{{ profile.name }}</option></select></label>
+        <label v-if="launch.workflowId !== 'project-initialization'"><span>正文目标字数</span><input v-model.number="launch.targetLength" type="number" min="800" max="12000" step="100" /></label>
         <button class="primary-button" :disabled="busy || !projectId" @click="startRun">{{ busy ? '正在启动…' : '开始新的 AgentRun' }}</button>
       </div>
     </header>
@@ -46,6 +47,7 @@
 
         <div v-if="activeRun.actualBackend === 'codex_exec'" class="compatibility-banner">Codex 兼容模式：ACP 尚未产生输出即失败，本次改用只读 exec；工具能力暂不可用。</div>
         <div v-if="activeRun.sessionRecreated" class="compatibility-banner neutral">应用重启后已重建 ACP 会话，只使用已确认内容恢复上下文。</div>
+        <div v-if="activeRun.legacySnapshot" class="compatibility-banner">这是缺少完整冻结信息的旧版运行。请保留历史并开始新的升级运行，以免混用创作规则。</div>
 
         <section class="agent-timeline">
           <article v-for="step in activeRun.steps" :key="step.id" class="agent-step" :class="step.status">
@@ -61,8 +63,7 @@
 
         <section v-if="pendingCandidate" class="agent-candidate-card">
           <header><div><span class="settings-kicker">CANDIDATE</span><h3>{{ candidateLabel(pendingCandidate.artifactType) }}</h3></div><span><template v-if="pendingCandidate.artifactType === 'manuscript'">{{ manuscriptCount }} / {{ activeRun.modelRoutes?.targetLength || '—' }} 字 · </template>源摘要 {{ pendingCandidate.sourceDigest.slice(0, 10) }}</span></header>
-          <pre v-if="pendingCandidate.artifactType !== 'manuscript'">{{ prettyCandidate }}</pre>
-          <div v-else class="candidate-manuscript">{{ pendingCandidate.payload.manuscript }}</div>
+          <CreativeCandidateEditor v-if="candidateDraft" v-model="candidateDraft" />
           <div class="candidate-actions">
             <input v-model.trim="candidateReason" placeholder="可选：记录本次判断" />
             <button class="outline-button" :disabled="busy" @click="resolveCandidate(false)">拒绝并暂停</button>
@@ -83,6 +84,7 @@
 </template>
 
 <script setup>
+import CreativeCandidateEditor from './CreativeCandidateEditor.vue'
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { appService } from '../services/app-service.js'
 
@@ -98,10 +100,23 @@ const busy = ref(false)
 const candidateReason = ref('')
 const message = reactive({ state: 'idle', text: '' })
 const launch = reactive({ executionMode: 'codex', workflowId: 'chapter-creation', modelProfileId: '', reviewerProfileId: '', targetLength: 2000 })
+const creativePreferences = ref(null)
+async function loadPreferences() {
+  try {
+    creativePreferences.value = await appService.creativePreferences({ projectId: props.projectId })
+    launch.executionMode = creativePreferences.value.executionMode
+    launch.workflowId = creativePreferences.value.workflows.some(item => item.id === 'chapter-compact') ? 'chapter-compact' : 'chapter-creation'
+  } catch (error) { message.text = error.message; message.state = 'error' }
+}
+async function upgradePack() {
+  try { await appService.upgradeCreativePack({ projectId: props.projectId, confirmed: true, fromDigest: creativePreferences.value.upgrade.current.digest }); await loadPreferences() } catch (error) { message.text = error.message; message.state = 'error' }
+}
 let unsubscribe = null
 
 const enabledProfiles = computed(() => props.modelSettings.profiles?.filter((profile) => profile.enabled) || [])
 const pendingCandidate = computed(() => activeRun.value?.candidates?.find((candidate) => candidate.status === 'pending') || null)
+const candidateDraft = ref(null)
+watch(() => pendingCandidate.value?.id, () => { candidateDraft.value = pendingCandidate.value ? JSON.parse(JSON.stringify(pendingCandidate.value.payload)) : null })
 const prettyCandidate = computed(() => JSON.stringify(pendingCandidate.value?.payload || {}, null, 2))
 const manuscriptCount = computed(() => [...String(pendingCandidate.value?.payload?.manuscript || '')].filter((char) => /[\u3400-\u4dbf\u4e00-\u9fff]/u.test(char)).length)
 const qualityStep = computed(() => activeRun.value?.steps?.find((step) => step.action === 'quality_review' && step.status === 'completed'))
@@ -115,6 +130,7 @@ watch(enabledProfiles, (profiles) => {
 onMounted(() => {
   void loadRuns()
   unsubscribe = appService.onAgentEvent((event) => {
+    if (event?.projectId && event.projectId !== props.projectId) return
     if (!event?.agentRunId || (activeRun.value && event.agentRunId !== activeRun.value.id)) return
     void refreshActive(event.agentRunId)
   })
@@ -122,15 +138,20 @@ onMounted(() => {
 onBeforeUnmount(() => unsubscribe?.())
 
 async function loadRuns() {
-  if (!props.projectId) return
-  runs.value = await appService.listAgentRuns({ projectId: props.projectId })
+  const projectId=props.projectId
+  if (!projectId) return
+  await loadPreferences()
+  const loaded=await appService.listAgentRuns({ projectId })
+  if (projectId !== props.projectId) return
+  runs.value=loaded
   if (activeRun.value) await refreshActive(activeRun.value.id)
   else if (runs.value[0]) await selectRun(runs.value[0].id)
 }
 
 async function refreshActive(runId) {
+  const projectId = props.projectId
   const run = await appService.getAgentRun(runId)
-  if (!run) return
+  if (!run || run.projectId !== projectId || projectId !== props.projectId) return
   activeRun.value = run
   const index = runs.value.findIndex((item) => item.id === run.id)
   if (index >= 0) runs.value.splice(index, 1, run)
@@ -163,6 +184,7 @@ async function resolveCandidate(accept) {
   busy.value = true
   try {
     const payload = { runId: activeRun.value.id, candidateId: pendingCandidate.value.id, reason: candidateReason.value }
+    if (accept && candidateDraft.value) payload.editedPayload = candidateDraft.value
     const run = accept ? await appService.confirmAgentCandidate(payload) : await appService.rejectAgentCandidate(payload)
     activeRun.value = run
     candidateReason.value = ''
@@ -171,11 +193,19 @@ async function resolveCandidate(accept) {
 }
 
 async function pauseRun() { activeRun.value = await appService.pauseAgentRun(activeRun.value.id) }
-async function resumeRun() { activeRun.value = await appService.resumeAgentRun(activeRun.value.id) }
+async function resumeRun() {
+  if (activeRun.value.legacySnapshot && !globalThis.confirm('继续使用此运行锁定的历史能力包规则？旧运行缺少完整冻结信息；取消后可从正式内容开始新的升级运行。')) return
+  try { activeRun.value = await appService.resumeAgentRun({ runId: activeRun.value.id, legacyRuleChoice: 'continue' }) }
+  catch (error) { message.text = error.message; message.state = 'error' }
+}
 async function cancelRun() { activeRun.value = await appService.cancelAgentRun(activeRun.value.id) }
-async function retryStep(step) { activeRun.value = await appService.retryAgentStep({ runId: activeRun.value.id, stepId: step.id }) }
+async function retryStep(step) {
+  if (activeRun.value.legacySnapshot && !globalThis.confirm('继续锁定的历史能力包规则重试？取消后可从正式内容新建升级运行。')) return
+  try { activeRun.value = await appService.retryAgentStep({ runId: activeRun.value.id, stepId: step.id, legacyRuleChoice: 'continue' }) }
+  catch (error) { message.text = error.message; message.state = 'error' }
+}
 
-function workflowLabel(id) { return ({ 'project-initialization': '项目初始化', 'chapter-creation': '逐章创作', 'inline-action': '就地任务' }[id] || id) }
+function workflowLabel(id) { return ({ 'project-initialization': '项目初始化', 'chapter-creation': '完整章节流程', 'chapter-compact': '精简章节创作', 'inline-action': '就地任务' }[id] || id) }
 function backendName(value) { return { codex_acp: 'Codex ACP', codex_exec: 'Codex exec', app_model: '应用模型' }[value] || value }
 function backendLabel(run) { return run.actualBackend ? backendName(run.actualBackend) : run.executionMode === 'codex' ? 'Codex · 等待 ACP' : '应用模型路由' }
 function statusLabel(value) { return ({ pending: '待开始', waiting_approval: '等待审批', running: '执行中', waiting_confirmation: '等待确认', paused: '已暂停', interrupted: '已中断', completed: '已完成', confirmed: '已确认', rejected: '已拒绝', stale: '已过期', cancelled: '已取消', failed: '失败' }[value] || value) }

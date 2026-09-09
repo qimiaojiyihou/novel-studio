@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "status": "awaiting-user-approval",
+  "engineeringMocksAreCreativeEvidence": false,
+  "repetitionsPerCondition": 3,
+  "cases": [
+    { "id": "entertainment", "genre": "文娱", "task": "一名过气艺人第一次到夜市摆摊；用身份反差和人际互动推进，不把职业步骤写成流程报告。", "boundaryMode": "semantic" },
+    { "id": "suspense", "genre": "都市悬疑", "task": "档案员发现同一天的两份记录互相矛盾；本章只确认存在矛盾，不揭示幕后人物。", "boundaryMode": "semantic" },
+    { "id": "emotion", "genre": "人物情感", "task": "多年未见的兄妹在收拾旧屋时商量一件普通家具的去留；矛盾来自各自的打算，不靠直白总结关系。", "boundaryMode": "semantic" }
+  ],
+  "comparisons": [
+    { "id": "workflow", "controlledModel": "user-selected-current-model", "conditions": ["pinned-old-pack-and-full-workflow", "pack-1.3.0-compact-workflow"] },
+    { "id": "model", "controlledPack": "1.3.0", "controlledWorkflow": "chapter-compact", "conditions": ["user-selected-current-model", "gpt-6-astra"] }
+  ],
+  "requiredArtifacts": ["firstDraft", "revision", "promptSnapshot", "packDigest", "frozenModel", "actualBackend", "reviewerLineage", "callCount", "elapsedMs", "authorRetainedRatio", "editDistance", "instructionLeakage", "conflicts"],
+  "blindReview": {
+    "hide": ["model", "workflow", "automaticScores"],
+    "dimensions": ["继续阅读意愿", "人物鲜活度", "表达自然度", "创意处理", "事实一致性"],
+    "finalPassRequiresHumanReview": true
+  },
+  "note": "这是待执行的验收矩阵，不是已执行结果。运行前锁定具体旧包、对照模型、审稿模型和项目快照；记录首稿，不用修订稿替代首稿分数。"
+}

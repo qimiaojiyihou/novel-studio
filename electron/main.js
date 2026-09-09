@@ -1,8 +1,22 @@
-import { app, BrowserWindow, dialog, ipcMain } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu } from 'electron'
+import { applicationMenuTemplate } from './application-menu.js'
+import { CREATIVE_BUILD_ID } from './build-info.js'
+import { CreativeInterface, CreativeMutationQueue } from './creative-interface.js'
+import { readCreativeSnapshot } from './creative-snapshot.js'
+import { startCreativeServer } from './creative-server.js'
+import { backup } from 'node:sqlite'
 import path from 'node:path'
 import fs from 'node:fs'
 import { spawn } from 'node:child_process'
-import { randomBytes } from 'node:crypto'
+import { randomBytes, createHash } from 'node:crypto'
+import { createCreativePackRepository, OFFICIAL_PACK_ID } from './creative-pack.js'
+import { ChapterFinalizer, createFinalizationRepository } from './chapter-finalization.js'
+import { createChapterAmendmentRepository } from './chapter-amendment.js'
+import { createManualFinalizationRepository } from './chapter-manual-finalization.js'
+import { contextDependencyDigest, recordCreativeDependencies, invalidateCreativeDependencies } from './creative-context.js'
+import { buildContextDelta } from './context-reuse.js'
+import { createAuthoringRepository } from './authoring-repository.js'
+import { TEXT_PATCH_SCHEMA, assertProtectedText } from './manuscript-patches.js'
 import { fileURLToPath } from 'node:url'
 import {
   archiveProject,
@@ -14,6 +28,7 @@ import {
   cancelPendingAgentCandidates,
   createChapter,
   createAgentCandidate,
+  saveAgentDiscussion,
   createAgentRun,
   createInlineAgentRun,
   createApprovalRequest,
@@ -154,6 +169,12 @@ const activeBenchmarkTasks = new Map()
 const activeBenchmarkControls = new Map()
 let codexGateway = null
 let agentRuntime = null
+let chapterFinalizer = null
+let creativeInterface = null
+let creativeServer = null
+const creativeMutationQueue = new CreativeMutationQueue()
+const creativeHandlers = new Map()
+const nativeIpcMain = ipcMain
 const codexSessionModelApprovalProjects = new Set()
 
 const modelGateway = createModelGateway({
@@ -184,6 +205,7 @@ function agentRepositoryApi() {
     updateRun: updateAgentRun,
     updateStep: updateAgentStep,
     createCandidate: createAgentCandidate,
+    saveDiscussion: saveAgentDiscussion,
     resolveCandidate: resolveAgentCandidate,
     markCandidateStale: markAgentCandidateStale,
     cancelPendingCandidates: cancelPendingAgentCandidates,
@@ -211,7 +233,8 @@ function mirrorForRun(run) {
     planningCenter: loadPlanningCenter(run.projectId),
     knowledgeCenter: loadKnowledgeCenter(run.projectId),
     creativePack: getAgentRunPack(run.id),
-    skillSourceDirectory: path.join(__dirname, '..', 'skills', 'novel-studio-creator'),
+    // fs.cpSync does not copy ASAR directories; packaged mirror inputs must be physical resources.
+    skillSourceDirectory: path.join(app.isPackaged ? process.resourcesPath : path.join(__dirname, '..'), 'skills', 'novel-studio-creator'),
   })
 }
 
@@ -424,14 +447,19 @@ async function prepareCodexPrompt({ run, step, extra = {} }) {
   const chapter = workspace.chapters.find((item) => item.id === run.chapterId) || workspace.chapters[0]
   const planningCenter = loadPlanningCenter(run.projectId)
   const knowledgeCenter = loadKnowledgeCenter(run.projectId)
-  const promptContext = resolvePromptContext({
+  const promptContext = run.frozenContext?.prompts?.[step.task] || resolvePromptContext({
     projectId: run.projectId,
     chapterId: run.chapterId,
     task: step.task,
   })
+  const lockedPack = getAgentRunPack(run.id)
+  if (lockedPack) promptContext.creativePack = { ...run.creativePack, prompt: lockedPack.prompts?.[step.task], manifest: lockedPack.manifest }
   const longContext = buildGenerationContext({
     projectId: run.projectId,
     chapterId: run.chapterId,
+    creativePackVersion: run.creativePack?.version,
+    chapterStateMode: run.modelRoutes?.chapterStateMode,
+    instruction: step.input?.instruction || '',
     styleText: promptContext?.style?.mergedText,
     task: step.task,
   })
@@ -515,9 +543,9 @@ async function prepareCodexPrompt({ run, step, extra = {} }) {
     ? `只修复以下已选质量问题，保留未涉及的事实、事件顺序、人物状态和章节结尾合同：\n${selectedRepairIssues.map((issue) => `- ${issue.category || issue.criterion}：${issue.repairInstruction || issue.criterion}`).join('\n')}`
     : ''
   const lengthInstruction = lengthRange && step.task === 'chapter'
-    ? `本章正文目标为 ${lengthRange.target} 个纯中文字符（不计标点与空白），验收范围 ${lengthRange.minimum}–${lengthRange.maximum}。必须完整展开已确认场景的行动、阻力、转折和状态变化，不得以提纲、概述或提前收束代替篇幅。`
+    ? `本章正文目标约 ${lengthRange.target} 个纯中文字符（不计标点与空白）。篇幅为编辑建议；按人物行动自然展开，不为凑字数重复解释，不因篇幅偏差自行重写。`
     : lengthRange && step.task === 'quality_review'
-      ? `本章正文目标为 ${lengthRange.target} 个纯中文字符，合格范围 ${lengthRange.minimum}–${lengthRange.maximum}；将篇幅是否达标纳入规划遵循与文字质量判断。`
+      ? `本章正文目标约 ${lengthRange.target} 个纯中文字符；篇幅偏差单列为编辑建议，不据此判断文学质量或要求整章重写。`
       : ''
   const inlineRevisionInstruction = inlineRevision ? [
     '这是同一就地 Codex 对话中的候选修改。',
@@ -526,7 +554,30 @@ async function prepareCodexPrompt({ run, step, extra = {} }) {
     JSON.stringify(revisionCandidate.payload || {}, null, 2).slice(0, 100000),
     '请返回修改后的完整候选，保持当前任务的输出 Schema；不要只返回差异、解释或修改建议。未被作者点名的有效内容应尽量保留。',
   ].join('\n') : ''
-  const compiled = compilePrompt({
+  const compactRevisionInstruction = inlineRevision ? [
+    '这是同一创作对话中的后续修改；上一版候选已经在当前会话历史中，不再重复发送。',
+    `作者的修改要求：${inlineRevision.instruction}`,
+    '返回修改后的完整候选并遵守当前输出 Schema。未被作者点名的有效内容应尽量保留。',
+  ].join('\n') : ''
+  const baseInstructionParts = [step.task === 'quality_review'
+    ? '独立评审当前 AgentRun 的正文候选；隐藏自动分数之外的模型身份，只返回质量报告。'
+    : step.task === 'story_change'
+      ? '分析根设定对全书已确认内容的影响，只返回符合 StoryChangeSetCandidate Schema 的 JSON 变更集；不修改真实项目。'
+    : step.candidateType === 'foundation_bundle'
+      ? '初始化当前项目。严格按受保护 Foundation Bundle Schema 只返回一个 JSON 对象；只生成候选，不修改真实项目。'
+      : step.candidateType === 'planning_document_bundle'
+        ? `一次补全当前规划页的所有请求字段。${planningBundleContract}只生成一个整页候选，不修改真实项目。`
+        : step.candidateType === 'planning_entity_bundle'
+          ? `一次补全当前规划卡的所有请求字段。${planningBundleContract}只生成一个整卡候选，不修改真实项目。`
+          : step.candidateType === 'planning_chapter_bundle'
+            ? `一次补全当前章节规划的所有请求字段。${planningBundleContract}只生成一个整章规划候选，不修改真实项目。`
+            : '在受控项目镜像中完成当前创作步骤；只生成候选，不修改真实项目。',
+  rendererDraftContext
+    ? `当前任务是在尚未保存的项目资料表单中生成“${target.fieldLabel || target.fieldKey}”。必须按待保存题材“${rendererDraftContext.genre || '未指定'}”创作；只输出字段最终内容，不要说明任务、流程、候选机制或是否写入项目。`
+    : '',
+  inlineRevision ? '' : inlineAction?.instruction || '',
+  qualityRepairInstruction, lengthInstruction, repairInstruction].filter(Boolean)
+  const promptInput = {
     task: step.task,
     intent,
     project: promptProject,
@@ -539,6 +590,7 @@ async function prepareCodexPrompt({ run, step, extra = {} }) {
     modelProfile: { id: 'codex-agent', provider: 'codex', name: 'Codex Agent', model: codexRunSettings.model },
     agentRunId: run.id,
     agentStepId: step.id,
+    chapterStateMode: run.modelRoutes?.chapterStateMode,
     workflow: { id: run.workflowId },
     creativeExecution: inlineAction ? {
       projectDefault: workspace.project.default_execution_mode,
@@ -563,25 +615,24 @@ async function prepareCodexPrompt({ run, step, extra = {} }) {
       currentValue: '', nearbyContext: JSON.stringify({ genre: workspace.project.genre, idea: workspace.project.idea }),
       boundaries: '同时生成故事前提、阅读承诺、核心冲突、主角、关键世界硬规则和总纲；字段必须具体、可判定且能转化为人物行动。',
     } : inlineAction ? inlinePlanningInput({ step, workspace, planningCenter, chapter }) : undefined,
-    instruction: [step.task === 'quality_review'
-      ? '独立评审当前 AgentRun 的正文候选；隐藏自动分数之外的模型身份，只返回质量报告。'
-      : step.task === 'story_change'
-        ? '分析根设定对全书已确认内容的影响，只返回符合 StoryChangeSetCandidate Schema 的 JSON 变更集；不修改真实项目。'
-      : step.candidateType === 'foundation_bundle'
-        ? '初始化当前项目。严格按受保护 Foundation Bundle Schema 只返回一个 JSON 对象；只生成候选，不修改真实项目。'
-        : step.candidateType === 'planning_document_bundle'
-          ? `一次补全当前规划页的所有请求字段。${planningBundleContract}只生成一个整页候选，不修改真实项目。`
-        : step.candidateType === 'planning_entity_bundle'
-          ? `一次补全当前规划卡的所有请求字段。${planningBundleContract}只生成一个整卡候选，不修改真实项目。`
-        : step.candidateType === 'planning_chapter_bundle'
-          ? `一次补全当前章节规划的所有请求字段。${planningBundleContract}只生成一个整章规划候选，不修改真实项目。`
-        : '在受控项目镜像中完成当前创作步骤；只生成候选，不修改真实项目。',
-    rendererDraftContext
-      ? `当前任务是在尚未保存的项目资料表单中生成“${target.fieldLabel || target.fieldKey}”。必须按待保存题材“${rendererDraftContext.genre || '未指定'}”创作；只输出字段最终内容，不要说明任务、流程、候选机制或是否写入项目。`
-      : '',
-    inlineRevision ? '' : inlineAction?.instruction || '', inlineRevisionInstruction,
-    qualityRepairInstruction, lengthInstruction, repairInstruction].filter(Boolean).join('\n'),
-  })
+    instruction: [...baseInstructionParts, inlineRevisionInstruction].filter(Boolean).join('\n'),
+  }
+  const compiled = compilePrompt(promptInput)
+  const previousStep = [...(run.steps || [])]
+    .filter((candidateStep) => Number(candidateStep.position) < Number(step.position) && candidateStep.promptSnapshot?.contextSources?.length)
+    .sort((left, right) => Number(right.position) - Number(left.position))[0]
+  const conversationScopeKey = inlineAction?.conversationScope?.reusable ? inlineAction.conversationScope.key : ''
+  const deltaContext = !rendererDraftContext && conversationScopeKey ? buildContextDelta({
+    currentContext: effectiveLongContext,
+    previousSnapshot: previousStep?.promptSnapshot,
+    conversationScopeKey,
+    previousStepId: previousStep?.id || '',
+  }) : null
+  const continuationCompiled = deltaContext ? compilePrompt({
+    ...promptInput,
+    longContext: deltaContext,
+    instruction: [...baseInstructionParts, compactRevisionInstruction].filter(Boolean).join('\n'),
+  }) : null
   const displayTitle = codexTaskDisplayTitle({
     project: promptProject,
     chapter,
@@ -589,6 +640,34 @@ async function prepareCodexPrompt({ run, step, extra = {} }) {
     run,
     step,
   })
+  const executionMessages = inlineAction?.conversationMode === 'discuss' ? [
+    { role: 'system', content: '本轮只讨论、解释或提出方案，不生成替换候选。材料仅供讨论，未确认内容不是正式事实。返回 JSON {"text":"答复"}。' },
+    { role: 'user', content: `正式上下文：${JSON.stringify(effectiveLongContext)}\n讨论材料：${JSON.stringify(revisionCandidate?.payload || {})}\n问题：${inlineAction.instruction}` },
+  ] : inlineAction?.patchSource && inlineAction.modificationScope?.kind !== 'whole' ? [
+    { role: 'system', content: `只修改作者要求涉及的局部，其他原文逐字保留。from/to 使用 UTF-16 偏移，before 必须与原文一致。遵守选区与保护段落；不扩大到整章。返回结构：${JSON.stringify(TEXT_PATCH_SCHEMA)}` },
+    { role: 'user', content: `作者要求：${inlineAction.instruction}\n正式约束：${JSON.stringify(effectiveLongContext)}\n范围：${JSON.stringify(inlineAction.modificationScope)}\nsourceDigest：${inlineAction.patchSource.digest}\n保护范围：${JSON.stringify(inlineAction.patchSource.protections)}\n原文：\n${inlineAction.patchSource.text}` },
+  ] : compiled.messages
+  const continuationMessages = !deltaContext ? null : inlineAction?.conversationMode === 'discuss' ? [
+    { role: 'system', content: '本轮只讨论、解释或提出方案，不生成替换候选。沿用当前会话中的上一候选和未变化正式事实。返回 JSON {"text":"答复"}。' },
+    { role: 'user', content: `正式上下文增量：${JSON.stringify(deltaContext)}\n问题：${inlineAction.instruction}` },
+  ] : inlineAction?.patchSource && inlineAction.modificationScope?.kind !== 'whole' ? [
+    { role: 'system', content: `只修改作者要求涉及的局部，其他原文逐字保留。from/to 使用 UTF-16 偏移，before 必须与原文一致。遵守选区与保护段落；不扩大到整章。返回结构：${JSON.stringify(TEXT_PATCH_SCHEMA)}` },
+    { role: 'user', content: `作者要求：${inlineAction.instruction}\n正式约束增量：${JSON.stringify(deltaContext)}\n范围：${JSON.stringify(inlineAction.modificationScope)}\nsourceDigest：${inlineAction.patchSource.digest}\n保护范围：${JSON.stringify(inlineAction.patchSource.protections)}\n原文：\n${inlineAction.patchSource.text}` },
+  ] : continuationCompiled?.messages || null
+  compiled.snapshot.messages = executionMessages
+  compiled.snapshot.promptHash = createHash('sha256').update(JSON.stringify(executionMessages)).digest('hex')
+  compiled.snapshot.modificationScope = inlineAction?.modificationScope || null
+  compiled.snapshot.conversationMode = inlineAction?.conversationMode || 'modify'
+  compiled.snapshot.outputSchema = inlineAction?.conversationMode === 'discuss' ? { type: 'object', required: ['text'], properties: { text: { type: 'string' } } }
+    : inlineAction?.patchSource && inlineAction.modificationScope?.kind !== 'whole' ? TEXT_PATCH_SCHEMA : outputSchemaForTask(lockedPack, step.task, step.candidateType, target)
+  compiled.snapshot.reviewerLineage = run.modelRoutes?.finalizationId ? { finalizationId: run.modelRoutes.finalizationId, independentContext: true, parentRunId: run.parentRunId || null } : null
+  compiled.snapshot.estimatedChars = executionMessages.reduce((sum, item) => sum + item.content.length, 0)
+  compiled.snapshot.conversationScopeKey = conversationScopeKey
+  compiled.snapshot.contextReuseEligible = Boolean(continuationMessages)
+  compiled.snapshot.estimatedContinuationChars = continuationMessages?.reduce((sum, item) => sum + item.content.length, 0) || 0
+  compiled.snapshot.continuationPromptHash = continuationMessages
+    ? createHash('sha256').update(JSON.stringify(continuationMessages)).digest('hex')
+    : ''
   const generationRecord = startGenerationRecord({
     taskId: `codex-${run.id}-${step.id}-${Date.now()}`,
     projectId: run.projectId,
@@ -607,6 +686,7 @@ async function prepareCodexPrompt({ run, step, extra = {} }) {
       target: target || undefined,
       promptProfile: target?.promptProfile || '',
       codexDisplayTitle: displayTitle,
+      conversationScopeKey: conversationScopeKey || undefined,
     },
     intent,
     parentGenerationId: revisionCandidate?.evidence?.generationRecordId || selectedSourceGeneration?.id || null,
@@ -616,21 +696,11 @@ async function prepareCodexPrompt({ run, step, extra = {} }) {
     retryOfId: extra.structuredRepair?.retryOfGenerationId || null,
   })
   return {
-    messages: compiled.messages,
-    outputSchema: (() => {
-      const schema = outputSchemaForTask(getAgentRunPack(run.id), step.task, step.candidateType, target)
-      if (step.task !== 'chapter' || !lengthRange || !schema?.properties?.manuscript) return schema
-      return {
-        ...schema,
-        properties: {
-          ...schema.properties,
-          manuscript: {
-            ...schema.properties.manuscript,
-            minLength: lengthRange.minimum,
-          },
-        },
-      }
-    })(),
+    messages: executionMessages,
+    continuationMessages,
+    outputSchema: inlineAction?.conversationMode === 'discuss' ? { type: 'object', required: ['text'], properties: { text: { type: 'string' } } }
+      : inlineAction?.patchSource && inlineAction.modificationScope?.kind !== 'whole' ? TEXT_PATCH_SCHEMA
+        : outputSchemaForTask(getAgentRunPack(run.id), step.task, step.candidateType, target),
     model: codexRunSettings.model,
     reasoningEffort: codexRunSettings.reasoningEffort,
     fastMode: Boolean(codexRunSettings.fastMode),
@@ -655,23 +725,38 @@ async function completeCodexGeneration({ prepared, result, error, status, attemp
       createdAt: event.createdAt || '',
     })),
     executionBackend: result?.backend || 'codex_acp',
+    executionSnapshot: {
+      backend: result?.backend || 'codex_acp',
+      model: result?.modelSnapshot || null,
+      fallbackReason: result?.fallbackReason || '',
+      contextReuse: result?.contextReuse || 'full',
+      usage: result?.usage || {},
+    },
   })
 }
 
-async function runAgentAppModel({ run, step, eventContext, extra }) {
+async function runAgentAppModel({ run, step, eventContext, extra, signal }) {
+  const taskId=`agent-${run.id}-${step.id}-${Date.now()}`
+  const cancel=() => { void modelGateway.cancel(taskId) }
+  signal?.addEventListener('abort',cancel,{once:true})
+  try {
+  if (signal?.aborted) throw new Error('创作任务已取消')
   if (step.task === 'quality_review') {
-    const generationRecordId = extra.sourceCandidate?.evidence?.generationRecordId
+    const generationRecordId = extra.sourceCandidate?.evidence?.generationRecordId || step.input?.target?.sourceGenerationId
     if (!generationRecordId) throw new Error('应用模型质量评审缺少正文生成记录')
     const report = await reviewGenerationQuality(eventContext, {
       generationRecordId,
       reviewerProfileId: run.modelRoutes?.reviewerProfileId || '',
-      taskId: `agent-${run.id}-${step.id}`,
+      taskId,
+      agentRunId: run.id,
+      agentStepId: step.id,
+      instruction: step.input?.instruction || '',
     })
     return {
       review: report.modelReview,
       generationRecordId: report.reviewerGenerationRecordId || '',
       qualityReportId: report.id,
-      execution: 'app_model',
+      execution: report.execution || 'app_model',
     }
   }
   const repairInstruction = extra.structuredRepair
@@ -679,7 +764,7 @@ async function runAgentAppModel({ run, step, eventContext, extra }) {
     : ''
   const lengthRange = manuscriptLengthRange(run.modelRoutes?.targetLength)
   const lengthInstruction = step.task === 'chapter' && lengthRange
-    ? `正文目标为 ${lengthRange.target} 个纯中文字符（不计标点与空白），必须落在 ${lengthRange.minimum}–${lengthRange.maximum} 之间，并完整展开每个已确认场景。`
+    ? `正文目标约 ${lengthRange.target} 个纯中文字符（不计标点与空白）。按人物行动自然展开；篇幅偏差留给作者编辑，不为凑字数重复说明或自行循环重写。`
     : ''
   const inlineAction = run.workflowId === 'inline-action' ? step.input || {} : null
   const target = inlineAction?.target || null
@@ -694,8 +779,8 @@ async function runAgentAppModel({ run, step, eventContext, extra }) {
   const inlinePlanning = inlineAction
     ? inlinePlanningInput({ step, workspace, planningCenter: loadPlanningCenter(run.projectId), chapter: inlineChapter })
     : undefined
-  return runGenerationTask(eventContext, {
-    taskId: `agent-${run.id}-${step.id}-${Date.now()}`,
+  return await runGenerationTask(eventContext, {
+    taskId,
     task: step.task,
     projectId: run.projectId,
     chapterId: run.chapterId,
@@ -724,6 +809,7 @@ async function runAgentAppModel({ run, step, eventContext, extra }) {
     retryOfId: extra.structuredRepair?.retryOfGenerationId || null,
     attemptCount: extra.structuredRepair?.attempt || 1,
   })
+  } finally { signal?.removeEventListener('abort',cancel) }
 }
 
 async function applyAgentCandidate({ run, candidate, applyOptions = {} }) {
@@ -838,6 +924,7 @@ async function applyAgentCandidate({ run, candidate, applyOptions = {} }) {
       id: run.chapterId,
       card: {
         ...candidate.payload,
+        boundaryMode: candidate.payload.boundaryMode || (run.creativePack?.version === '1.3.0' ? 'semantic' : 'exact'),
         targetLength: manuscriptLengthRange(run.modelRoutes?.targetLength)?.target || 2000,
       },
     })
@@ -854,6 +941,9 @@ async function applyAgentCandidate({ run, candidate, applyOptions = {} }) {
     const manuscript = inlineIntent === 'continue'
       ? String(chapter?.manuscript || '').slice(0, offset) + generated + String(chapter?.manuscript || '').slice(offset)
       : generated
+    const protectedRanges = createAuthoringRepository(openDatabase()).protections({ projectId: run.projectId, chapterId: run.chapterId })
+      .filter(item => item.source_digest === createHash('sha256').update(String(chapter?.manuscript || '')).digest('hex'))
+    assertProtectedText(manuscript, protectedRanges)
     if (chapter?.manuscript !== manuscript) {
       createRevision({ chapterId: run.chapterId, content: chapter?.manuscript || '', source: 'before-agent-accept' })
       updateChapter({ id: run.chapterId, manuscript })
@@ -868,6 +958,9 @@ async function applyAgentCandidate({ run, candidate, applyOptions = {} }) {
     const to = Math.max(from, Math.min(Number(inlineTarget.selectionTo), source.length))
     const replacement = String(candidate.payload?.text || '')
     const manuscript = source.slice(0, from) + replacement + source.slice(to)
+    const protectedRanges = createAuthoringRepository(openDatabase()).protections({ projectId: run.projectId, chapterId: run.chapterId })
+      .filter(item => item.source_digest === createHash('sha256').update(source).digest('hex'))
+    assertProtectedText(manuscript, protectedRanges)
     createRevision({ chapterId: run.chapterId, content: source, source: 'before-agent-selection-accept' })
     updateChapter({ id: run.chapterId, manuscript })
     return
@@ -943,6 +1036,45 @@ function initializeCodexIntegration() {
     refreshMirror: async (run) => mirrorForRun(run),
     prepareCodexPrompt,
     completeCodexGeneration,
+    runIndependentReview: async ({ run, step, sourceCandidate, eventContext, signal }) => {
+      const profileId = run.modelRoutes?.reviewerProfileId || loadModelSettings().routes?.quality_review || ''
+      const useCodex = profileId === 'codex'
+      if (!useCodex && !loadModelSettings().profiles.some(profile => profile.id === profileId && profile.enabled)) throw new Error('请为独立审稿选择质量评审路由或 Codex 新会话')
+      let child = step.output?.reviewRunId ? getAgentRun(step.output.reviewRunId) : null
+      if (!child) {
+        child = createInlineAgentRun({ projectId: run.projectId, chapterId: run.chapterId, task: 'quality_review', intent: 'analysis', executionMode: useCodex ? 'codex' : 'app_model',
+          target: { kind: 'quality_review', targetId: run.chapterId, fieldKey: step.id, fieldLabel: '独立上下文审稿', sourceGenerationId: sourceCandidate.evidence?.generationRecordId },
+          instruction: '独立审稿：仅依据原文及正式事实判断，不继承主笔解释。引用原文证据、原因、影响范围和最小修订建议；保护人物声音、节奏和笑点。',
+          modelRoutes: { ...run.modelRoutes, modelProfileId: useCodex ? '' : profileId, reviewerProfileId: useCodex ? '' : profileId },
+        })
+        // A review is a separate run/session, but uses its parent's immutable pack and templates.
+        openDatabase().prepare('UPDATE agent_runs SET parent_run_id=?, creative_pack_id=?, creative_pack_version=?, creative_pack_digest=?, frozen_context_json=? WHERE id=?')
+          .run(run.id, run.creativePack.id, run.creativePack.version, run.creativePack.digest, JSON.stringify(run.frozenContext || {}), child.id)
+        updateAgentStep(step.id, { output: { reviewRunId: child.id } })
+        child = getAgentRun(child.id)
+      }
+      const abort = () => { void agentRuntime.pause(child.id) }
+      signal.addEventListener('abort', abort, { once: true })
+      try {
+        if (signal.aborted) throw new Error('独立审稿已中断')
+        let candidate = child.candidates.find(item => item.status === 'pending')
+        if (!candidate) {
+          if (['failed','paused'].includes(child.status)) {
+            const failedStep = child.steps.find(item => ['failed','interrupted'].includes(item.status))
+            if (failedStep) await agentRuntime.retryStep({ runId: child.id, stepId: failedStep.id }, eventContext)
+          }
+          await agentRuntime.advance(child.id, eventContext)
+          child = getAgentRun(child.id)
+          candidate = child.candidates.find(item => item.status === 'pending')
+        }
+        if (!candidate) throw new Error(child.error || '独立审稿尚未返回有效报告')
+        return { result: { review: candidate.payload, backend: child.actualBackend, generationRecordId: candidate.evidence?.generationRecordId,
+          qualityReportId: child.steps.find(item => item.id === candidate.stepId)?.qualityReportId, reviewRunId: child.id }, payload: candidate.payload }
+      } finally {
+        signal.removeEventListener('abort', abort)
+        await codexGateway.closeSession(child.id)
+      }
+    },
     persistQualityReview: async ({ run, sourceCandidate, result, review }) => {
       const sourceGenerationId = sourceCandidate.evidence?.generationRecordId || ''
       const source = getGenerationRecord(sourceGenerationId)
@@ -962,10 +1094,10 @@ function initializeCodexIntegration() {
         projectId: run.projectId,
         chapterId: run.chapterId,
         generationRecordId: source.id,
-        reviewerProfileId: '',
+        reviewerProfileId: run.modelRoutes?.reviewerProfileId === 'codex' ? '' : run.modelRoutes?.reviewerProfileId || '',
         deterministicChecks,
         modelReview: review,
-        execution: realCodexBackends.has(sourceBackend) && realCodexBackends.has(reviewerBackend) ? 'remote' : 'mock',
+        execution: qualityEvidenceExecution(source, realCodexBackends.has(reviewerBackend) ? 'remote' : reviewerBackend),
         repaired: source.intent === 'repair',
       })
       return report.id
@@ -980,14 +1112,99 @@ function initializeCodexIntegration() {
           intent: 'draft',
         })
       : qualityPreflight({ projectId: run.projectId, chapterId: run.chapterId, intent: 'draft' }),
-    applyCandidate: applyAgentCandidate,
+    applyCandidate: async (input) => {
+      await applyAgentCandidate(input)
+      invalidateCreativeDependencies(openDatabase(), input.run.projectId, { excludeArtifactId: input.candidate.id })
+    },
     onCandidateCreated: async ({ run, step, candidate }) => {
+      const record = candidate.evidence?.generationRecordId ? getGenerationRecord(candidate.evidence.generationRecordId) : null
+      const context = { sources: record?.promptSnapshot?.contextSources }
+      if (context.sources) recordCreativeDependencies(openDatabase(), { projectId: run.projectId, artifactKind: 'candidate', artifactId: candidate.id, sources: context.sources })
+      if (context.sources && run.modelRoutes?.finalizationId) recordCreativeDependencies(openDatabase(), { projectId: run.projectId, artifactKind: 'finalization', artifactId: run.modelRoutes.finalizationId, sources: context.sources })
       if (candidate.artifactType !== 'story_change_set') return
       const changeSetId = step.input?.target?.targetId || ''
       attachStoryChangeAnalysis({ changeSetId, analysis: candidate.payload, agentRunId: run.id })
     },
-    currentSourceDigest: async (run) => mirrorForRun(run).sourceDigest,
+    currentSourceDigest: async (run) => {
+      if (run.modelRoutes?.creativeRequestId) return readCreativeSnapshot(openDatabase(),run.projectId).sourceDigest
+      if (run.creativePack?.version !== '1.3.0') return mirrorForRun(run).sourceDigest
+      const step = run.steps?.find(item => item.id === run.currentStepId) || run.steps?.at(-1)
+      const context = buildGenerationContext({ projectId: run.projectId, chapterId: run.chapterId, instruction: step?.input?.instruction || '', creativePackVersion: run.creativePack.version,
+        task: step?.task, chapterStateMode: run.modelRoutes?.chapterStateMode })
+      // The current manuscript/target is a required dependency even if no paragraph matched retrieval.
+      const workspace = loadWorkspaceSnapshot(run.projectId)
+      const chapter = workspace.chapters.find(item => item.id === run.chapterId)
+      const planning = step?.input?.target ? inlinePlanningInput({ step, workspace, chapter: chapter || workspace.chapters[0], planningCenter: loadPlanningCenter(run.projectId) }) : null
+      return createHash('sha256').update(JSON.stringify({ context: contextDependencyDigest(context), manuscript: chapter?.manuscript, target: step?.input?.target?.targetId,
+        planning, draftDigest: step?.input?.target?.draftDigest })).digest('hex')
+    },
     onEvent: (payload) => publishCodexEvent('agent:event', payload),
+  })
+  const finalizationRepository = createFinalizationRepository(openDatabase())
+  chapterFinalizer = new ChapterFinalizer({
+    repository: finalizationRepository,
+    onEvent: (record) => publishCodexEvent('chapter:finalize-event', record),
+    execute: async (task, record) => {
+      const isReview = task === 'quality_review'
+      const key = isReview ? 'review_run_id' : 'state_run_id'
+      let run = record[key] ? getAgentRun(record[key]) : null
+      if (record.reviewer.executionMode === 'app_model') {
+        const profile = loadModelSettings().profiles.find(item => item.id === record.reviewer.profileId && item.enabled)
+        if (!profile || profile.model !== record.reviewer.model || profile.provider !== record.reviewer.provider
+          || JSON.stringify(profile.settings) !== JSON.stringify(record.reviewer.settings)) throw new Error('锁定的审稿配置已变化，请选择当前审稿模型并重新检查。')
+      }
+      const priorCandidate = run?.candidates.find(item => item.status === 'pending')
+      if (run && !priorCandidate && (['failed', 'cancelled'].includes(run.status) || run.steps.some(step => step.status === 'interrupted'))) {
+        const attempts = openDatabase().prepare("SELECT COUNT(*) AS count FROM agent_runs r JOIN agent_steps s ON s.run_id = r.id WHERE json_extract(r.model_routes_json, '$.finalizationId') = ? AND s.task = ?").get(record.id, task).count
+        if (attempts >= 3) throw new Error('本次独立任务已尝试三次。请取消本次定稿，检查配置或修改稿件后重新开始。')
+        await agentRuntime.cancel(run.id)
+        run = null
+      }
+      if (!run) {
+        const source = startGenerationRecord({ projectId: record.project_id, chapterId: record.chapter_id,
+          task: 'chapter', intent: 'analysis', executionBackend: 'author', model: { name: '作者锁定稿' },
+          request: { finalizationId: record.id, sourceDigest: record.source_digest, revisionId: record.revision_id } })
+        finishGenerationRecord({ id: source.id, status: 'completed', output: record.manuscript })
+        run = createInlineAgentRun({ projectId: record.project_id, chapterId: record.chapter_id, task,
+          executionMode: record.reviewer.executionMode, intent: 'analysis',
+          target: { kind: isReview ? 'quality_review' : 'chapter_state', targetId: record.chapter_id,
+            fieldKey: record.id, fieldLabel: isReview ? '独立定稿审稿' : '定稿章后交接', sourceGenerationId: source.id },
+          instruction: isReview
+            ? '这是独立审稿，不继承主笔对话或生成解释。每个问题引用原文证据，说明原因、影响范围和最小修复建议；同时检查修订是否损害信息、节奏、人物声音和笑点。'
+            : '仅依据当前正文提取章后状态。facts、characterStates、relationshipChanges、timelineEvents、openThreads 和伏笔的每一项均返回对象，带 evidence 字符串，逐字引用本章证据；没有证据的项目留空。summary 是下一章可用的简短交接，不包含讨论和未确认候选。',
+          modelRoutes: { modelProfileId: record.reviewer.profileId || '', reviewerProfileId: record.reviewer.profileId || '',
+            ...(record.checks.creativeRequestId ? { creativeRequestId:record.checks.creativeRequestId } : {}),
+            codexModel: record.reviewer.model || '', codexReasoningEffort: record.reviewer.reasoningEffort || '',
+            codexFastMode: Boolean(record.reviewer.fastMode), codexAuthMethod: record.reviewer.authMethod || 'chatgpt', finalizationId: record.id,
+            chapterStateMode: isReview ? undefined : record.checks.chapterStateMode },
+        })
+        finalizationRepository.patch(record.id, { [key]: run.id })
+        const writer = openDatabase().prepare("SELECT run_id FROM agent_candidates WHERE project_id=? AND chapter_id=? AND status='accepted' AND artifact_type='manuscript' AND json_extract(payload_json, '$.manuscript')=? ORDER BY rowid DESC LIMIT 1")
+          .get(record.project_id, record.chapter_id, record.manuscript)
+        if (writer) openDatabase().prepare('UPDATE agent_runs SET parent_run_id=? WHERE id=?').run(writer.run_id, run.id)
+      }
+      let candidate = run.candidates.find(item => item.status === 'pending')
+      if (!candidate) {
+        if (run.status === 'failed' || run.steps.some(step => step.status === 'interrupted')) {
+          throw new Error('独立任务中断；请在创作助手中检查并重试该任务，再恢复定稿。')
+        }
+        await agentRuntime.advance(run.id)
+        run = getAgentRun(run.id)
+        candidate = run.candidates.find(item => item.status === 'pending')
+      }
+      if (!candidate) throw new Error(run.error || '独立任务尚未生成有效候选，请在创作助手中继续任务。')
+      await codexGateway.closeSession(run.id)
+      if (isReview && !run.steps.some(step => step.qualityReportId)) {
+        const sourceId = run.steps[0]?.input?.target?.sourceGenerationId
+        if (sourceId) {
+          const report = createQualityReport({ projectId: run.projectId, chapterId: run.chapterId, generationRecordId: sourceId,
+            reviewerProfileId: record.reviewer.profileId || '', modelReview: candidate.payload,
+            deterministicChecks: [], contextSources: getGenerationRecord(candidate.evidence?.generationRecordId)?.promptSnapshot?.contextSources || [], execution: candidate.evidence?.executionBackend === 'mock' ? 'mock' : 'remote' })
+          updateAgentStep(candidate.stepId, { qualityReportId: report.id })
+        }
+      }
+      return candidate.payload
+    },
   })
 }
 
@@ -997,9 +1214,12 @@ function runtimeInfo() {
     resourcesPath: process.resourcesPath,
   })
   return {
+    buildId: CREATIVE_BUILD_ID,
+    uiEntry: process.env.VITE_DEV_SERVER_URL ? 'development' : 'built',
     mode: goServiceStatus === 'ready' ? 'go-service' : 'embedded',
     goServiceStatus,
     database: getDatabaseInfo(),
+    creativeInterface: creativeServer ? { protocolVersion:1, url:creativeServer.url, serverFile:creativeServer.serverFile } : null,
     editor: 'codemirror-6',
     generation: {
       streaming: true,
@@ -1033,6 +1253,7 @@ function serviceBinaryCandidates() {
 }
 
 function startGoService() {
+  if (process.env.NOVEL_STUDIO_NO_GO === '1') { setGoServiceStatus('embedded-fallback'); return }
   const candidate = serviceBinaryCandidates().find((filePath) => fs.existsSync(filePath))
   if (!candidate) {
     setGoServiceStatus('embedded-fallback')
@@ -1154,18 +1375,21 @@ async function runGenerationTask(event, payload = {}, { retryOfId = '' } = {}) {
   const chapterScopedTasks = new Set(['chapter', 'chapter_card', 'scene_plan', 'rewrite', 'chapter_state_extract', 'continuity_audit', 'quality_review'])
   const promptChapterId = payload.chapterId || (chapterScopedTasks.has(payload.task) ? chapter?.id : '')
   const promptVolumeId = payload.planning?.scopeType === 'volume' ? payload.planning.scopeId : ''
-  const promptContext = workspace.project ? resolvePromptContext({
+  const frozenRun = payload.agentRunId ? getAgentRun(payload.agentRunId) : null
+  const promptContext = frozenRun?.frozenContext?.prompts?.[payload.task] || (workspace.project ? resolvePromptContext({
     projectId: workspace.project.id,
     chapterId: promptChapterId,
     volumeId: promptVolumeId,
     task: payload.task,
-  }) : null
+  }) : null)
   const longContext = workspace.project ? buildGenerationContext({
     projectId: workspace.project.id,
     chapterId: chapter?.id,
     instruction: payload.instruction,
     styleText: promptContext?.style?.mergedText,
     task: payload.task,
+    creativePackVersion: frozenRun?.creativePack?.version,
+    chapterStateMode: frozenRun?.modelRoutes?.chapterStateMode,
   }) : null
   const modelSettings = loadModelSettings()
   const routedModelProfileId = modelSettings.routes[payload.task]
@@ -1203,6 +1427,7 @@ async function runGenerationTask(event, payload = {}, { retryOfId = '' } = {}) {
   } : longContext
   const generationInput = {
     ...payload,
+    chapterStateMode: frozenRun?.modelRoutes?.chapterStateMode,
     intent,
     cursorOffset,
     manuscriptPrefix: intent === 'continue' ? manuscript.slice(0, cursorOffset) : '',
@@ -1218,6 +1443,7 @@ async function runGenerationTask(event, payload = {}, { retryOfId = '' } = {}) {
     apiKey,
   }
   const compiledPrompt = compilePrompt(generationInput)
+  compiledPrompt.snapshot.reviewerLineage = frozenRun?.modelRoutes?.finalizationId ? { finalizationId: frozenRun.modelRoutes.finalizationId, independentContext: true } : null
   const generationRecord = startGenerationRecord({
     taskId,
     projectId: workspace.project.id,
@@ -1243,6 +1469,9 @@ async function runGenerationTask(event, payload = {}, { retryOfId = '' } = {}) {
         taskId,
         onEvent: (generationEvent) => {
           if (generationEvent.type !== 'delta' && recordEvents.length < 60) recordEvents.push(compactGenerationEvent(generationEvent))
+          if (payload.agentRunId) appendAgentEvent({ agentRunId:payload.agentRunId, agentStepId:payload.agentStepId,
+            type:generationEvent.type === 'delta' ? 'text_delta' : generationEvent.type,
+            summary:generationEvent.type, payload:generationEvent.type === 'delta' ? {text:generationEvent.delta} : compactGenerationEvent(generationEvent) })
           if (event?.sender && !event.sender.isDestroyed()) event.sender.send('generation:event', generationEvent)
         },
         onPrepared: (prepared) => { generationParameters = prepared.parameters },
@@ -1256,6 +1485,7 @@ async function runGenerationTask(event, payload = {}, { retryOfId = '' } = {}) {
       output: generationOutput(result),
       attemptCount: result.attemptCount || 1,
       events: recordEvents,
+      executionSnapshot: { backend: result.execution || 'app_model', model: result.model || modelProfile?.model || null },
     })
     return { ...result, generationRecordId: generationRecord.id, intent, cursorOffset }
   } catch (error) {
@@ -1328,6 +1558,9 @@ async function reviewGenerationQuality(event, payload = {}) {
     modelProfileId: payload.reviewerProfileId || '',
     parentGenerationId: source.id,
     deterministicChecks,
+    agentRunId: payload.agentRunId,
+    agentStepId: payload.agentStepId,
+    instruction: payload.instruction,
     sourceGeneration: {
       id: source.id,
       task: source.task,
@@ -1344,6 +1577,7 @@ async function reviewGenerationQuality(event, payload = {}) {
     reviewerProfileId: result.model?.profileId || payload.reviewerProfileId || '',
     deterministicChecks,
     modelReview: result.review,
+    contextSources: getGenerationRecord(result.generationRecordId)?.promptSnapshot?.contextSources || [],
     execution: qualityEvidenceExecution(source, result.execution),
     repaired: source.intent === 'repair',
   })
@@ -1845,8 +2079,86 @@ async function importProjectFile() {
   }
 }
 
+function registerAppHandler(channel, handler) {
+  creativeHandlers.set(channel, handler)
+  ipcMain.handle(channel, (event, payload) => {
+    const mutations = /:(start|start-inline|continue-inline|pause|resume|cancel|finish-inline|confirm-candidate|reject-candidate|retry-step|resolve|create|update|delete|document-save|entity-update|finalize-start|finalize-confirm|amendment-confirm|manual-confirm|restore|protect|save-sample)$/
+    if (!mutations.test(channel)) return handler(event, payload)
+    const value = payload && typeof payload === 'object' ? payload : {}
+    let projectId = value.projectId || ''
+    const id = value.runId || value.chapterId || value.id || (typeof payload === 'string' ? payload : '')
+    if (!projectId && id) {
+      for (const table of ['agent_runs','chapters','planning_entities','chapter_finalizations','bridge_action_requests','agent_candidates']) {
+        const row = openDatabase().prepare(`SELECT project_id FROM ${table} WHERE id=?`).get(id)
+        if (row) { projectId=row.project_id; break }
+      }
+    }
+    return creativeMutationQueue.run(projectId, async () => {
+      // The UI shares write serialization with project-bound clients. A live
+      // external run should be continued rather than duplicated from the UI.
+      if (['agent:start','agent:start-inline'].includes(channel) && creativeInterface
+        && openDatabase().prepare("SELECT 1 FROM agent_runs WHERE project_id=? AND json_extract(model_routes_json,'$.creativeRequestId') IS NOT NULL AND status NOT IN ('completed','cancelled','failed','stale')").get(projectId)) {
+        creativeInterface.assertTargetAvailable(projectId, value)
+      }
+      return handler(event, payload)
+    })
+  })
+}
+
+async function initializeCreativeInterface() {
+  const db = openDatabase(), directory=path.join(app.getPath('userData'),'creative-interface')
+  if (!db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='creative_clients'").get()) {
+    const backups = path.join(app.getPath('userData'),'backups')
+    fs.mkdirSync(backups,{ recursive:true,mode:0o700 })
+    const backupFile=path.join(backups,`before-dual-book-${Date.now()}.sqlite`)
+    await backup(db,backupFile)
+    fs.chmodSync(backupFile,0o600)
+  }
+  creativeInterface = new CreativeInterface({ database:db,buildId:CREATIVE_BUILD_ID,queue:creativeMutationQueue,
+    invoke:(channel,payload) => {
+      const handler=creativeHandlers.get(channel)
+      if (!handler) throw new Error('创作操作尚未注册')
+      return handler(null,payload)
+    },
+    snapshot:projectId => readCreativeSnapshot(db,projectId),
+    stageCandidate:input => {
+      const defaults=loadCodexSettings()
+      return agentRuntime.stageExternalCandidate({ ...input,modelRoutes:{ codexModel:defaults.model,
+        codexReasoningEffort:defaults.reasoningEffort,codexFastMode:defaults.fastMode,codexAuthMethod:defaults.authMethod } })
+    },
+    onChange:payload => publishCodexEvent('creative:changed',payload),
+  })
+  creativeServer = await startCreativeServer({ api:creativeInterface,directory,databasePath:getDatabaseInfo().path,buildId:CREATIVE_BUILD_ID })
+}
+
 function registerIpc() {
+  // Preserve the existing handlers as the only implementation of creative actions.
+  const ipcMain = { handle:registerAppHandler, on:nativeIpcMain.on.bind(nativeIpcMain) }
+  ipcMain.handle('creative:preferences', (_event, payload) => {
+    const db = openDatabase(), repo = createCreativePackRepository(db), binding = repo.getProjectBinding(payload.projectId)
+    const project = db.prepare('SELECT creative_preferences_json, default_execution_mode FROM projects WHERE id=?').get(payload.projectId)
+    if (!project || !binding) throw new Error('项目或能力包绑定不存在')
+    return { preferences: JSON.parse(project.creative_preferences_json), executionMode: project.default_execution_mode,
+      version: binding.version, workflows: binding.content.workflows.map(item => ({ id: item.id, name: item.name })),
+      upgrade: binding.packId === OFFICIAL_PACK_ID && binding.version !== '1.3.0' ? repo.upgradePreview(payload.projectId, OFFICIAL_PACK_ID, '1.3.0') : null }
+  })
+  ipcMain.handle('creative:upgrade', (_event, payload) => {
+    const db = openDatabase(), repo = createCreativePackRepository(db), binding = repo.getProjectBinding(payload.projectId)
+    if (!payload.confirmed || binding?.digest !== payload.fromDigest) throw new Error('能力包绑定已变化，请重新预览并确认升级')
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      repo.bindProject(payload.projectId, OFFICIAL_PACK_ID, '1.3.0')
+      db.prepare('UPDATE projects SET creative_preferences_json=? WHERE id=?').run(JSON.stringify({ mode: 'compact', boundaryMode: 'semantic' }), payload.projectId)
+      db.exec('COMMIT')
+    } catch (error) { db.exec('ROLLBACK'); throw error }
+    return { version: '1.3.0' }
+  })
+  ipcMain.handle('authoring:samples', (_event, payload) => createAuthoringRepository(openDatabase()).listSamples(payload))
+  ipcMain.handle('authoring:save-sample', (_event, payload) => createAuthoringRepository(openDatabase()).saveSample(payload))
+  ipcMain.handle('authoring:protections', (_event, payload) => createAuthoringRepository(openDatabase()).protections(payload))
+  ipcMain.handle('authoring:protect', (_event, payload) => createAuthoringRepository(openDatabase()).protect(payload))
   ipcMain.handle('workspace:load', (_event, projectId) => loadWorkspace(projectId))
+  ipcMain.handle('workspace:snapshot', (_event, projectId) => loadWorkspaceSnapshot(projectId))
   ipcMain.handle('projects:list', listProjects)
   ipcMain.handle('project:create', (_event, input) => createProject(input))
   ipcMain.handle('project:update', (_event, patch) => updateProject(patch))
@@ -1942,12 +2254,15 @@ function registerIpc() {
     return codexGateway.inspectRuntime()
   })
   ipcMain.handle('codex:cancel-auth', async () => codexGateway.restartAdapter({ suppressErrors: true }))
-  ipcMain.handle('codex:test', async () => {
+  const inspectCodexModels = async (payload = {}) => {
     const diagnosticDirectory = path.join(app.getPath('userData'), 'codex-diagnostics')
     fs.mkdirSync(diagnosticDirectory, { recursive: true, mode: 0o700 })
-    const status = await codexGateway.testConnection({ cwd: diagnosticDirectory })
-    return { ok: true, status, message: 'ACP 初始化、协议协商与最小会话创建成功；未调用模型或写入项目。' }
-  })
+    const status = await codexGateway.testConnection({ cwd: diagnosticDirectory,
+      model: String(payload.model || ''), reasoningEffort: String(payload.reasoningEffort || ''), fastMode: Boolean(payload.fastMode) })
+    return { ok: true, status, message: '模型目录与配置已回读，诊断连接已释放；未发送创作请求。' }
+  }
+  ipcMain.handle('codex:test', (_event, payload) => inspectCodexModels(payload))
+  ipcMain.handle('codex:models', (_event, payload) => inspectCodexModels(payload))
   ipcMain.handle('codex:restart-adapter', () => codexGateway.restartAdapter())
   ipcMain.handle('codex:open-project', async (_event, projectId) => {
     const workspace = codexBookWorkspaceForProject(String(projectId || ''))
@@ -1967,6 +2282,7 @@ function registerIpc() {
     return agentRuntime.start({
       ...payload,
       modelRoutes: {
+        ...(payload._creativeRequestId ? { creativeRequestId:payload._creativeRequestId } : {}),
         modelProfileId: payload.modelProfileId || '',
         reviewerProfileId: payload.reviewerProfileId || '',
       targetLength: Math.max(800, Math.min(12000, Math.round(Number(payload.targetLength) || 2000))),
@@ -1982,6 +2298,7 @@ function registerIpc() {
     return agentRuntime.startInline({
       ...payload,
       modelRoutes: {
+        ...(payload._creativeRequestId ? { creativeRequestId:payload._creativeRequestId } : {}),
         modelProfileId: payload.modelProfileId || '',
         planning_field: payload.modelProfileId || '',
         appModelName: payload.modelProfileName || '',
@@ -1994,9 +2311,85 @@ function registerIpc() {
     }, event)
   })
   ipcMain.handle('agent:continue-inline', (event, payload = {}) => agentRuntime.continueInline(payload, event))
+  ipcMain.handle('chapter:finalize-start', async (_event, payload = {}) => {
+    const settings = loadModelSettings()
+    const requested = payload.reviewer || {}
+    const executionMode = requested.executionMode === 'codex' ? 'codex' : 'app_model'
+    const profileId = requested.profileId || settings.routes?.quality_review || ''
+    const profile = settings.profiles.find(item => item.id === profileId && item.enabled)
+    if (executionMode === 'app_model' && !profile) throw new Error('请先在模型设置中选择质量评审模型，或选择 Codex 独立审稿')
+    const codex = loadCodexSettings()
+    const reviewer = executionMode === 'codex'
+      ? { executionMode, model: requested.model || codex.model, reasoningEffort: requested.reasoningEffort || codex.reasoningEffort, fastMode: codex.fastMode,
+          authMethod: codex.authMethod, label: 'Codex · 独立上下文审稿（相同模型时并非跨模型评审）' }
+      : { executionMode, profileId, model: profile.model, provider: profile.provider, settings: profile.settings,
+          label: `${profile.name} · 独立上下文审稿` }
+    const replaceId = String(payload.replaceFinalizationId || '')
+    if (replaceId) {
+      const previous = chapterFinalizer.repository.get(replaceId)
+      if (!previous || previous.project_id !== payload.projectId || previous.chapter_id !== payload.chapterId) {
+        throw new Error('要替换的定稿任务不属于当前章节')
+      }
+      if (!['completed', 'cancelled', 'stale'].includes(previous.status)) {
+        chapterFinalizer.repository.patch(previous.id, { status: 'cancelled', error: '已切换独立审稿方式' })
+        for (const runId of [previous.review_run_id, previous.state_run_id].filter(Boolean)) await agentRuntime.cancel(runId)
+      }
+    }
+    const record = chapterFinalizer.start({ projectId: payload.projectId, chapterId: payload.chapterId, reviewer,
+      targetLength: payload.targetLength, freshStart: Boolean(payload.freshStart), deferReview: Boolean(payload.deferReview) })
+    if (payload._creativeRequestId && !record.reused) {
+      chapterFinalizer.repository.patch(record.id,{ checks_json:JSON.stringify({ ...record.checks,creativeRequestId:payload._creativeRequestId }) })
+      return chapterFinalizer.repository.get(record.id)
+    }
+    return record
+  })
+  ipcMain.handle('chapter:finalize-get', (_event, payload = {}) => {
+    const record = payload.id ? chapterFinalizer.repository.get(payload.id) : chapterFinalizer.repository.latest(payload.chapterId)
+    if (record) invalidateCreativeDependencies(openDatabase(), record.project_id)
+    return record ? chapterFinalizer.repository.get(record.id) : null
+  })
+  ipcMain.handle('chapter:amendment-preview', (_event, payload = {}) => createChapterAmendmentRepository(openDatabase()).preview(payload))
+  ipcMain.handle('chapter:manual-preview', (_event, payload = {}) => createManualFinalizationRepository(openDatabase()).preview(payload))
+  ipcMain.handle('chapter:manual-confirm', (_event, payload = {}) => {
+    creativeInterface?.assertTargetAvailable(payload.projectId, { chapterId: payload.chapterId })
+    const result = createManualFinalizationRepository(openDatabase()).confirm(payload)
+    publishCodexEvent('creative:changed', { projectId: payload.projectId, operation: 'finalization.manual' })
+    return result
+  })
+  ipcMain.handle('chapter:amendment-confirm', (_event, payload = {}) => {
+    creativeInterface?.assertTargetAvailable(payload.projectId, { chapterId: payload.chapterId })
+    const result = createChapterAmendmentRepository(openDatabase()).confirm(payload)
+    publishCodexEvent('creative:changed', { projectId: payload.projectId, operation: 'finalization.correct' })
+    return result
+  })
+  ipcMain.handle('chapter:finalize-confirm', async (_event, payload = {}) => {
+    let record = chapterFinalizer.repository.get(payload.id)
+    if (!record) throw new Error('定稿记录不存在')
+    invalidateCreativeDependencies(openDatabase(), record.project_id)
+    record = chapterFinalizer.repository.get(payload.id)
+    if (payload.action === 'cancel') {
+      chapterFinalizer.repository.patch(record.id, { status: 'cancelled' })
+      for (const runId of [record.review_run_id, record.state_run_id].filter(Boolean)) await agentRuntime.cancel(runId)
+      return chapterFinalizer.repository.get(record.id)
+    }
+    if (payload.action === 'accept-state') {
+      return chapterFinalizer.repository.confirm(record.id)
+    }
+    if (payload.action === 'correct-state') {
+      return chapterFinalizer.repository.correctState(record.id, { sourceDigest: payload.sourceDigest,
+        stateDigest: payload.stateDigest, corrections: payload.corrections, reason: payload.reason })
+    }
+    if (!['accept-review', 'start-review', 'resume'].includes(payload.action)) throw new Error('请选择明确的定稿操作')
+    void chapterFinalizer.advance(record.id, { acceptReview: payload.action === 'accept-review', reason: String(payload.reason || '') })
+    return chapterFinalizer.repository.get(record.id)
+  })
   ipcMain.handle('agent:finish-inline', (_event, runId) => agentRuntime.finishInline(runId))
   ipcMain.handle('agent:list', (_event, payload) => listAgentRuns(payload))
-  ipcMain.handle('agent:get', (_event, runId) => getAgentRun(runId))
+  ipcMain.handle('agent:get', (_event, runId) => {
+    const run = getAgentRun(runId)
+    if (run) invalidateCreativeDependencies(openDatabase(), run.projectId)
+    return getAgentRun(runId)
+  })
   ipcMain.handle('agent:pause', (_event, runId) => agentRuntime.pause(runId))
   ipcMain.handle('agent:resume', (event, runId) => agentRuntime.resume(runId, event))
   ipcMain.handle('agent:cancel', (_event, runId) => agentRuntime.cancel(runId))
@@ -2138,10 +2531,22 @@ function createWindow() {
   }
 }
 
-app.whenReady().then(() => {
+// Both development and packaged smoke tests must use a separate database.
+// Never silently ignore an explicit test directory in a packaged application.
+if (process.env.NOVEL_STUDIO_TEST_USER_DATA) {
+  const directory = path.resolve(process.env.NOVEL_STUDIO_TEST_USER_DATA)
+  if (!fs.existsSync(directory) || !fs.statSync(directory).isDirectory()) throw new Error('测试数据目录需要预先建立')
+  app.setPath('userData', directory)
+}
+if (!app.requestSingleInstanceLock()) app.quit()
+app.on('second-instance', () => { if (mainWindow) { mainWindow.show(); mainWindow.focus() } })
+app.whenReady().then(async () => {
+  if (!app.hasSingleInstanceLock()) return
+  Menu.setApplicationMenu(Menu.buildFromTemplate(applicationMenuTemplate()))
   openDatabase()
   initializeCodexIntegration()
   registerIpc()
+  await initializeCreativeInterface()
   startGoService()
   createWindow()
   app.on('activate', () => {
@@ -2157,6 +2562,7 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', () => {
+  void creativeServer?.close()
   stopGoService()
   expirePendingApprovalRequests()
   void codexGateway?.shutdown()

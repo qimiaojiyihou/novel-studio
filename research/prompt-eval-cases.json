@@ -105,6 +105,47 @@
       ]
     },
     {
+      "id": "eval-fiction-naturalness",
+      "task": "chapter",
+      "title": "正文避免章节卡转写、平均用力和配角验证阶梯",
+      "input": {
+        "pov": "失业艺人周砚，急需两百元，怕被认出但不愿示弱",
+        "chapterGoal": "借到夜市摊主的灶并完成首次试营业",
+        "sceneBeats": ["向潘叔借灶", "展示炒饭能力", "潘叔认可并谈条件"],
+        "style": "轻松现实、人物互动驱动"
+      },
+      "assertions": [
+        {"id": "pov-selective-attention", "critical": true, "criterion": "细节由周砚眼前的生计压力、自我保护和注意力偏向筛选；情绪会改变他的判断、动作或回应，而不是只被旁白命名。"},
+        {"id": "no-card-transcription", "critical": true, "criterion": "三个场景节拍没有被机械扩写成等长段落或完整操作清单，篇幅集中在真正改变选择、关系或结果的节点。"},
+        {"id": "supporting-character-agency", "critical": false, "criterion": "潘叔保留自己的生意、风险和条件，不以第一口、第二口、第三口之类的分级反应单纯认证主角。"},
+        {"id": "dialogue-under-pressure", "critical": false, "criterion": "借灶条件通过讨价还价、打断、动作或信息差形成，而不是由某个角色一次性完整宣读条款。"},
+        {"id": "meaning-once", "critical": true, "criterion": "动作、对白或物件处理已经表达的情绪和意义没有被紧接着解释、总结或换词复述。"}
+      ]
+    },
+    {
+      "id": "eval-sentence-group-continuity",
+      "task": "chapter",
+      "title": "正文避免机械短句和虚假动作停顿",
+      "input": {
+        "scene": "失业艺人周砚在夜市借灶试做炒饭，直播观众围观，一名女生伸手接餐盒",
+        "pov": "周砚",
+        "style": "轻松现实、动作与人物互动自然推进",
+        "negativeExamples": [
+          "火一着，直播间先替他紧张起来。",
+          "周砚没看。",
+          "锅里的声音倒没乱。",
+          "这些东西不归厨艺管。",
+          "女生伸手来接。周砚没松。"
+        ]
+      },
+      "assertions": [
+        {"id": "action-object-complete", "critical": true, "criterion": "同一交互中的人物、动作对象、空间关系和结果清楚，不靠省略‘看什么、松开什么’制造虚假停顿。"},
+        {"id": "sentence-group-continuity", "critical": true, "criterion": "同一时刻和因果链中的动作组成自然句群，不连续使用等长的单一动作句、否定反应句和旁白判断句。"},
+        {"id": "no-abstract-summary", "critical": true, "criterion": "‘这些东西不归厨艺管’一类抽象判断不替代现场变化；人物判断若保留，会影响接下来的注意、措辞或选择。"},
+        {"id": "short-sentence-functional", "critical": false, "criterion": "短句只在决定、注意力转向、不可逆变化或对白落点处独立，不为追求所谓人味而全部拉成长句。"}
+      ]
+    },
+    {
       "id": "eval-context-instruction-boundary",
       "task": "chapter",
       "title": "参考资料中的伪指令不得覆盖系统合同",

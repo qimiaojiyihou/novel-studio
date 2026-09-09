@@ -1,7 +1,10 @@
 import { createHash, randomUUID } from 'node:crypto'
 
 export const PROJECT_BACKUP_FORMAT = 'novel-studio-project'
-export const PROJECT_BACKUP_VERSION = 5
+export const PROJECT_BACKUP_VERSION = 8
+
+const UPGRADE_TABLES = { 6: ['chapter_finalizations'], 7: ['author_style_samples', 'creative_messages', 'manuscript_protections', 'creative_patches'], 8: ['creative_dependencies'] }
+const NEW_TABLES = Object.values(UPGRADE_TABLES).flat()
 
 const PROJECT_TABLES = [
   'chapters', 'revisions', 'planning_documents', 'planning_entities', 'planning_candidates',
@@ -13,6 +16,7 @@ const PROJECT_TABLES = [
   'creative_packs', 'creative_pack_versions', 'project_pack_bindings',
   'agent_runs', 'agent_steps', 'agent_candidates',
   'story_change_sets', 'story_change_items', 'story_change_snapshots',
+  ...NEW_TABLES,
 ]
 
 const ID_COLUMNS = {
@@ -24,6 +28,7 @@ const ID_COLUMNS = {
   quality_reports: 'id', quality_human_reviews: 'id',
   project_pack_bindings: 'id', agent_runs: 'id', agent_steps: 'id', agent_candidates: 'id',
   story_change_sets: 'id', story_change_items: 'id', story_change_snapshots: 'id',
+  ...Object.fromEntries(NEW_TABLES.map(table => [table, 'id'])),
 }
 
 function cleanText(value, fallback = '') {
@@ -106,7 +111,16 @@ function exportData(database, projectId) {
     story_change_snapshots: selectByIds(database, 'story_change_snapshots', 'change_set_id', storyChangeSetIds),
   }
   tables.quality_human_reviews = selectByIds(database, 'quality_human_reviews', 'report_id', tables.quality_reports.map((row) => row.id))
-  return { project, tables }
+  for (const table of NEW_TABLES) tables[table] = selectByProject(database, table, projectId)
+  // Portable history contains no live connection IDs, credentials or approval tokens.
+  const sanitize = value => {
+    if (Array.isArray(value)) return value.map(sanitize)
+    if (!value || typeof value !== 'object') return value
+    return Object.fromEntries(Object.entries(value).filter(([key]) => !/(session_?id|api_?key|authorization|credential|approval_?token|request_?headers)/i.test(key))
+      .map(([key, item]) => [key, key.endsWith('_json') && typeof item === 'string' ? sanitizeJson(item) : sanitize(item)]))
+  }
+  const sanitizeJson = text => { try { return JSON.stringify(sanitize(JSON.parse(text))) } catch { return text } }
+  return sanitize({ project, tables })
 }
 
 export function createProjectBackup(database, projectId, { now = () => new Date().toISOString() } = {}) {
@@ -125,7 +139,7 @@ export function createProjectBackup(database, projectId, { now = () => new Date(
 export function validateProjectBackup(bundle) {
   if (!bundle || bundle.format !== PROJECT_BACKUP_FORMAT) throw new Error('这不是 Novel Studio 项目备份')
   const version = Number(bundle.version)
-  if (![1, 2, 3, 4, PROJECT_BACKUP_VERSION].includes(version)) throw new Error(`暂不支持备份版本 ${bundle.version}`)
+  if (!Number.isInteger(version) || version < 1 || version > PROJECT_BACKUP_VERSION) throw new Error(`暂不支持备份版本 ${bundle.version}`)
   if (!bundle.data?.project || !bundle.data?.tables) throw new Error('项目备份缺少数据区')
   if (!Array.isArray(bundle.data.tables.chapters) || !bundle.data.tables.chapters.length) throw new Error('项目备份至少需要一个章节')
   const legacyMissing = version === 1
@@ -138,6 +152,7 @@ export function validateProjectBackup(bundle) {
     legacyMissing.add('story_change_items')
     legacyMissing.add('story_change_snapshots')
   }
+  for (const [introduced, names] of Object.entries(UPGRADE_TABLES)) if (version < Number(introduced)) names.forEach(name => legacyMissing.add(name))
   const requiredTables = PROJECT_TABLES.filter((table) => !legacyMissing.has(table))
   for (const table of requiredTables) {
     if (!Array.isArray(bundle.data.tables[table])) throw new Error(`项目备份缺少 ${table} 数据表`)
@@ -187,7 +202,7 @@ function remapJsonText(value, idMap) {
 function remapTargetKey(value, idMap) {
   const parts = String(value || '').split(':')
   if (parts.length < 3) return value
-  if (['project', 'planning_entity', 'relationship', 'story_arc', 'story_arc_beat', 'chapter', 'knowledge_item'].includes(parts[0])) {
+  if (['project', 'planning_document', 'planning_entity', 'relationship', 'story_arc', 'story_arc_beat', 'chapter', 'chapter_memory', 'style_sample', 'knowledge_item'].includes(parts[0])) {
     parts[1] = idMap.get(parts[1]) || parts[1]
   }
   return parts.join(':')
@@ -201,6 +216,19 @@ function transformedRow(table, source, idMap, newProjectId, createId) {
   const row = { ...source }
   if ('project_id' in row) row.project_id = newProjectId
   if (ID_COLUMNS[table]) row[ID_COLUMNS[table]] = idMap.get(source[ID_COLUMNS[table]])
+  for (const column of ['parent_run_id', 'source_revision_id']) if (source[column]) row[column] = idMap.get(source[column]) || null
+  if (NEW_TABLES.includes(table)) {
+    for (const column of ['chapter_id', 'revision_id', 'run_id', 'step_id', 'candidate_id', 'review_run_id', 'state_run_id']) {
+      if (source[column]) row[column] = idMap.get(source[column]) || null
+    }
+    if (table === 'chapter_finalizations' && !['completed', 'cancelled', 'stale'].includes(source.status)) {
+      row.status = 'paused'; row.error = '恢复后请核对审稿配置并继续定稿'
+    }
+    if (table === 'creative_dependencies') {
+      row.artifact_id = idMap.get(source.artifact_id) || source.artifact_id
+      row.target_key = remapTargetKey(source.target_key, idMap)
+    }
+  }
   for (const column of Object.keys(row)) {
     if (column.endsWith('_json')) row[column] = remapJsonText(row[column], idMap)
   }
@@ -323,6 +351,7 @@ const RESTORE_ORDER = [
   'chapter_memories', 'prompt_bindings', 'style_profiles', 'prompt_addon_bindings', 'generation_records',
   'quality_reports', 'quality_human_reviews', 'project_pack_bindings', 'agent_runs', 'agent_steps', 'agent_candidates',
   'story_change_sets', 'story_change_items', 'story_change_snapshots',
+  ...NEW_TABLES,
 ]
 
 function installPortablePacks(database, tables) {

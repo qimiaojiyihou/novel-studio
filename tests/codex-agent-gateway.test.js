@@ -5,7 +5,7 @@ import path from 'node:path'
 import { test } from 'node:test'
 import { CodexAgentGateway, safeToolLocations } from '../electron/codex-agent-gateway.js'
 
-function createFakeGateway({ promptBehavior, repository, onGlobalEvent, shouldAutoApprove, onNewSession } = {}) {
+function createFakeGateway({ promptBehavior, repository, onGlobalEvent, shouldAutoApprove, onNewSession, sessionOptions = [] } = {}) {
   let handlers
   let newSessionCount = 0
   const newSessionRequests = []
@@ -20,7 +20,7 @@ function createFakeGateway({ promptBehavior, repository, onGlobalEvent, shouldAu
     newSession: async (request) => {
       onNewSession?.(request)
       newSessionRequests.push(request)
-      return { sessionId: `session-${++newSessionCount}` }
+      return { sessionId: `session-${++newSessionCount}`, configOptions: structuredClone(sessionOptions) }
     },
     resumeSession: async () => ({}),
     loadSession: async () => ({}),
@@ -52,11 +52,47 @@ function createFakeGateway({ promptBehavior, repository, onGlobalEvent, shouldAu
   })
   return {
     gateway,
+    connection,
     getNewSessionCount: () => newSessionCount,
     getNewSessionRequests: () => newSessionRequests,
     getPromptRequests: () => promptRequests,
   }
 }
+
+test('model diagnostics read GPT6 capabilities and release the session without a creative prompt', async () => {
+  const options = [{ id: 'model', type: 'select', currentValue: 'old', options: [{ value: 'old' }, { value: 'gpt-6-astra', name: 'GPT-6 Astra' }] },
+    { id: 'reasoning_effort', type: 'select', currentValue: 'high', options: [{ value: 'high' }, { value: 'xhigh' }] },
+    { id: 'fast-mode', type: 'select', currentValue: 'off', options: [{ value: 'off' }, { value: 'on' }] }]
+  const { gateway, connection, getPromptRequests } = createFakeGateway({ sessionOptions: options })
+  let closed = 0
+  connection.closeSession = async () => { closed++ }
+  connection.setSessionConfigOption = async ({ configId, value }) => {
+    options.find(item => item.id === configId).currentValue = value
+    return { configOptions: structuredClone(options) }
+  }
+  try {
+    const result = await gateway.testConnection({ cwd: os.tmpdir(), model: 'gpt-6-astra', reasoningEffort: 'xhigh', fastMode: false })
+    assert.equal(result.selected.model, 'gpt-6-astra')
+    assert.equal(result.selected.reasoningEffort, 'xhigh')
+    assert.equal(result.selected.fastMode, false)
+    assert.equal(result.models.find(model => model.value === 'gpt-6-astra').status, 'available')
+    assert.equal(closed, 1)
+    assert.equal(getPromptRequests().length, 0)
+  } finally { await gateway.shutdown() }
+})
+
+test('requested model readback mismatch stops before prompt and never falls back', async () => {
+  const options = [{ id: 'model', type: 'select', currentValue: 'old', options: [{ value: 'old' }, { value: 'gpt-6-astra' }] }]
+  const { gateway, connection, getPromptRequests } = createFakeGateway({ sessionOptions: options })
+  connection.setSessionConfigOption = async () => ({ configOptions: options })
+  let fallbacks = 0
+  gateway.runExecFallback = async () => { fallbacks++; throw new Error('unexpected fallback') }
+  try {
+    await assert.rejects(gateway.prompt({ agentRunId: 'model-test', agentStepId: 'step', messages: [], settings: { mirrorRoot: os.tmpdir(), model: 'gpt-6-astra' } }), /回读不匹配/)
+    assert.equal(getPromptRequests().length, 0)
+    assert.equal(fallbacks, 0)
+  } finally { await gateway.shutdown() }
+})
 
 test('ACP gateway reuses one session for all steps in an AgentRun', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'novel-studio-acp-test-'))
@@ -112,12 +148,96 @@ test('ACP groups book tasks by a stable workspace while isolating each AgentRun 
       mcpServers: [],
     })
     assert.equal(fs.existsSync(path.join(workspaceRoot, '.novel-studio-codex-registered')), true)
-    assert.match(getPromptRequests()[0].prompt[0].text, /^目标读者\n\n/)
+    assert.match(getPromptRequests()[0].prompt[0].text, /^system:\n生成目标读者候选\n\n目标读者\n\n/)
     assert.doesNotMatch(getPromptRequests()[0].prompt[0].text, /Novel Studio 任务：/)
     assert.match(getPromptRequests()[0].prompt[0].text, new RegExp(mirrorRoot.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
   } finally {
     await gateway.shutdown()
     fs.rmSync(base, { recursive: true, force: true })
+  }
+})
+
+test('ACP uses compact continuation messages only for an already-live AgentRun session', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'novel-studio-acp-context-reuse-'))
+  const firstGateway = createFakeGateway()
+  try {
+    const first = await firstGateway.gateway.prompt({
+      agentRunId: 'run-compact', agentStepId: 'step-1',
+      messages: [{ role: 'user', content: '完整上下文第一轮' }],
+      continuationMessages: [{ role: 'user', content: '不应使用的增量' }],
+      settings: { mirrorRoot: root },
+    })
+    const second = await firstGateway.gateway.prompt({
+      agentRunId: 'run-compact', agentStepId: 'step-2',
+      messages: [{ role: 'user', content: '完整上下文第二轮' }],
+      continuationMessages: [{ role: 'user', content: '只发送变化内容' }],
+      settings: { mirrorRoot: root },
+    })
+    assert.match(firstGateway.getPromptRequests()[0].prompt[0].text, /完整上下文第一轮/)
+    assert.doesNotMatch(firstGateway.getPromptRequests()[0].prompt[0].text, /不应使用的增量/)
+    assert.match(firstGateway.getPromptRequests()[1].prompt[0].text, /只发送变化内容/)
+    assert.doesNotMatch(firstGateway.getPromptRequests()[1].prompt[0].text, /完整上下文第二轮/)
+    assert.equal(first.contextReuse, 'full')
+    assert.equal(second.contextReuse, 'delta')
+  } finally {
+    await firstGateway.gateway.shutdown()
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('resumed sessions and exec fallback receive the full prompt instead of a context delta', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'novel-studio-acp-context-safe-'))
+  const persisted = createFakeGateway({
+    repository: { getRun: () => ({ session: { sessionId: 'persisted-session', status: 'active' } }) },
+  })
+  try {
+    const resumed = await persisted.gateway.prompt({
+      agentRunId: 'run-persisted', agentStepId: 'step-2',
+      messages: [{ role: 'user', content: '恢复时完整上下文' }],
+      continuationMessages: [{ role: 'user', content: '恢复时不应只发增量' }],
+      settings: { mirrorRoot: root },
+    })
+    assert.match(persisted.getPromptRequests()[0].prompt[0].text, /恢复时完整上下文/)
+    assert.doesNotMatch(persisted.getPromptRequests()[0].prompt[0].text, /恢复时不应只发增量/)
+    assert.equal(resumed.contextReuse, 'full')
+  } finally { await persisted.gateway.shutdown() }
+
+  let promptRound = 0
+  const fallback = createFakeGateway({
+    promptBehavior: async ({ handlers, request }) => {
+      promptRound += 1
+      if (promptRound === 1) {
+        await handlers.sessionUpdate({
+          sessionId: request.sessionId,
+          update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: '{"goal":"第一轮"}' } },
+        })
+        return { stopReason: 'end_turn' }
+      }
+      throw new Error('transport closed')
+    },
+  })
+  let fallbackPrompt = ''
+  fallback.gateway.runExecFallback = async (request) => {
+    fallbackPrompt = request.prompt
+    return { backend: 'codex_exec', fallbackReason: request.fallbackReason, outputStarted: true }
+  }
+  try {
+    await fallback.gateway.prompt({
+      agentRunId: 'run-fallback-full', agentStepId: 'step-1', messages: [{ role: 'user', content: '第一轮完整' }],
+      settings: { mirrorRoot: root },
+    })
+    const result = await fallback.gateway.prompt({
+      agentRunId: 'run-fallback-full', agentStepId: 'step-2',
+      messages: [{ role: 'user', content: '回退必须使用完整上下文' }],
+      continuationMessages: [{ role: 'user', content: 'ACP 本可使用增量' }],
+      settings: { mirrorRoot: root },
+    })
+    assert.match(fallbackPrompt, /回退必须使用完整上下文/)
+    assert.doesNotMatch(fallbackPrompt, /ACP 本可使用增量/)
+    assert.equal(result.contextReuse, 'full')
+  } finally {
+    await fallback.gateway.shutdown()
+    fs.rmSync(root, { recursive: true, force: true })
   }
 })
 

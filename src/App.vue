@@ -1,16 +1,17 @@
 <template>
   <div class="app-shell">
+    <a class="skip-link" href="#workspace-main">跳到创作区</a>
     <header class="topbar">
       <div class="brand-lockup">
         <div class="brand-mark">NS</div>
         <div>
           <div class="brand-name">Novel Studio</div>
-          <div class="brand-subtitle">a quiet room for unfinished stories</div>
+          <div class="brand-subtitle">让未完成的故事继续生长</div>
         </div>
       </div>
       <div class="topbar-project">
-        <span class="eyebrow">CURRENT PROJECT</span>
-        <strong>{{ project.title || '未命名小说' }}</strong>
+        <span class="eyebrow">当前作品</span>
+        <strong :title="project.title">{{ project.title || '未命名小说' }}</strong>
         <span class="dot-separator">·</span>
         <span>{{ project.genre || '未设置题材' }}</span>
       </div>
@@ -19,18 +20,19 @@
           <span class="status-dot"></span>{{ runtimeLabel }}
         </span>
         <span class="save-label" :class="saveState">{{ saveLabel }}</span>
-        <button v-if="inlineRunId" class="inline-run-top-button" :class="inlineRunStatus" title="打开当前 Codex 就地任务" @click="inlinePanelOpen = true">CX</button>
-        <button class="story-change-top-button" :class="storyChangeRunStatus" title="设定联动修改与历史" @click="openStoryChangeHistory">Δ</button>
-        <button class="quality-top-button" title="创作质量中心" @click="qualityCenterOpen = true">QC</button>
-        <button class="icon-button history-button" title="生成记录" @click="openGenerationHistory">↺</button>
-        <button class="icon-button" title="模型与项目设置" @click="openSettings">⋯</button>
+        <button v-if="externalChange" type="button" class="topbar-tool" @click="refreshExternalWorkspace">本书任务有更新</button>
+        <button v-if="inlineRunId" class="topbar-tool inline-run-top-button" :class="inlineRunStatus" title="打开当前 Codex 就地任务" @click="inlinePanelOpen = true"><AppIcon name="codex" :size="15" /><span>Codex</span></button>
+        <button class="topbar-tool story-change-top-button" :class="storyChangeRunStatus" title="设定联动修改与历史" @click="openStoryChangeHistory"><AppIcon name="change" :size="15" /><span>联动</span></button>
+        <button class="topbar-tool quality-top-button" title="创作质量中心" @click="qualityCenterOpen = true"><AppIcon name="quality" :size="15" /><span>质检</span></button>
+        <button class="icon-button history-button" aria-label="生成记录" title="生成记录" @click="openGenerationHistory"><AppIcon name="history" :size="18" /></button>
+        <button class="icon-button" aria-label="模型与项目设置" title="模型与项目设置" @click="openSettings"><AppIcon name="settings" :size="18" /></button>
       </div>
     </header>
 
-    <main class="workspace-grid" :class="{ 'sidebar-collapsed': sidebarCollapsed }" v-if="workspaceReady">
+    <main id="workspace-main" class="workspace-grid" :class="{ 'sidebar-collapsed': sidebarCollapsed, 'focus-mode': writingFocus && workspaceView === 'writing', 'lens-hidden': !lensVisible }" v-if="workspaceReady">
       <aside id="workspace-sidebar" class="structure-panel panel-dark" :class="{ collapsed: sidebarCollapsed }">
         <div class="panel-heading">
-          <span class="eyebrow">WORKSPACE</span>
+          <span class="eyebrow">作品工作台</span>
           <div class="panel-heading-actions">
             <button class="quiet-button add-chapter-button" title="添加章节" :disabled="taskIsRunning()" @click="openNewChapter">＋</button>
             <button
@@ -85,14 +87,14 @@
         </div>
 
         <nav class="side-nav" aria-label="项目导航">
-          <button class="nav-item" :class="{ active: workspaceView === 'writing' }" @click="setWorkspaceView('writing')"><span class="nav-glyph">◈</span>正在创作</button>
-          <button class="nav-item" :class="{ active: workspaceView === 'assistant' }" @click="setWorkspaceView('assistant')"><span class="nav-glyph">✦</span>创作助手</button>
-          <button class="nav-item" :class="{ active: workspaceView === 'foundation' }" @click="setWorkspaceView('foundation')"><span class="nav-glyph">⌁</span>故事基础</button>
-          <button class="nav-item" :class="{ active: workspaceView === 'characters' }" @click="setWorkspaceView('characters')"><span class="nav-glyph">◎</span>人物与关系</button>
-          <button class="nav-item" :class="{ active: workspaceView === 'world' }" @click="setWorkspaceView('world')"><span class="nav-glyph">◍</span>世界观</button>
-          <button class="nav-item" :class="{ active: workspaceView === 'outline' }" @click="setWorkspaceView('outline')"><span class="nav-glyph">▤</span>结构规划</button>
-          <button class="nav-item" :class="{ active: workspaceView === 'knowledge' }" @click="setWorkspaceView('knowledge')"><span class="nav-glyph">⌁</span>知识与连续性</button>
-          <button class="nav-item" :class="{ active: workspaceView === 'prompts' }" @click="setWorkspaceView('prompts')"><span class="nav-glyph">¶</span>提示词与文风</button>
+          <button class="nav-item" :class="{ active: workspaceView === 'writing' }" title="正在创作" aria-label="正在创作" @click="setWorkspaceView('writing')"><span class="nav-glyph"><AppIcon name="writing" /></span><span>正在创作</span></button>
+          <button class="nav-item" :class="{ active: workspaceView === 'assistant' }" title="创作助手" aria-label="创作助手" @click="setWorkspaceView('assistant')"><span class="nav-glyph"><AppIcon name="assistant" /></span><span>创作助手</span></button>
+          <button class="nav-item" :class="{ active: workspaceView === 'foundation' }" title="故事基础" aria-label="故事基础" @click="setWorkspaceView('foundation')"><span class="nav-glyph"><AppIcon name="foundation" /></span><span>故事基础</span></button>
+          <button class="nav-item" :class="{ active: workspaceView === 'characters' }" title="人物与关系" aria-label="人物与关系" @click="setWorkspaceView('characters')"><span class="nav-glyph"><AppIcon name="characters" /></span><span>人物与关系</span></button>
+          <button class="nav-item" :class="{ active: workspaceView === 'world' }" title="世界观" aria-label="世界观" @click="setWorkspaceView('world')"><span class="nav-glyph"><AppIcon name="world" /></span><span>世界观</span></button>
+          <button class="nav-item" :class="{ active: workspaceView === 'outline' }" title="结构规划" aria-label="结构规划" @click="setWorkspaceView('outline')"><span class="nav-glyph"><AppIcon name="outline" /></span><span>结构规划</span></button>
+          <button class="nav-item" :class="{ active: workspaceView === 'knowledge' }" title="知识与连续性" aria-label="知识与连续性" @click="setWorkspaceView('knowledge')"><span class="nav-glyph"><AppIcon name="knowledge" /></span><span>知识与连续性</span></button>
+          <button class="nav-item" :class="{ active: workspaceView === 'prompts' }" title="提示词与文风" aria-label="提示词与文风" @click="setWorkspaceView('prompts')"><span class="nav-glyph"><AppIcon name="prompts" /></span><span>提示词与文风</span></button>
         </nav>
 
         <div class="chapter-section">
@@ -111,7 +113,7 @@
                 <span class="chapter-number">{{ String(chapter.chapter_no).padStart(2, '0') }}</span>
                 <span class="chapter-copy">
                   <strong>{{ chapter.title }}</strong>
-                  <small>{{ chapter.status === 'draft' ? '草稿' : chapter.status }}</small>
+                  <small>{{ chapter.status === 'completed' ? (chapter.finalization_manual ? '已定稿·人工' : chapter.finalization_correction ? '已定稿·已校正' : '已定稿') : chapter.finalized_version_id ? '修订待定稿' : chapter.status === 'draft' ? '草稿' : chapter.status }}</small>
                 </span>
                 <span class="chapter-state" :class="chapter.status"></span>
               </button>
@@ -128,55 +130,85 @@
         </div>
 
         <div class="panel-footer">
-          <div class="storage-note"><span class="storage-icon">⌂</span><span>项目保存在本机</span></div>
+          <div class="storage-note"><span class="storage-icon"><AppIcon name="database" :size="15" /></span><span>项目保存在本机</span></div>
           <div class="storage-note muted"><span>SQLite · schema v{{ runtime.database?.schemaVersion || 1 }} · 外键{{ runtime.database?.foreignKeys ? '已启用' : '待检查' }}</span></div>
+          <div class="storage-note muted"><span>{{ runtime.buildId }} · {{ runtime.uiEntry === 'development' ? '开发界面' : '构建界面' }}</span></div>
         </div>
       </aside>
 
       <template v-if="workspaceView === 'writing'">
       <section class="editor-panel">
         <div class="editor-heading">
-          <div>
+          <div class="editor-heading-copy">
             <div class="eyebrow copper">CHAPTER {{ String(activeChapter.chapter_no).padStart(2, '0') }}</div>
-            <div class="chapter-title-line"><input v-model="activeChapter.title" class="chapter-title-input" @blur="saveChapterTitle" /><button type="button" title="修改章节标题并检查全书影响" @click="startChapterTitleChange">联动修改</button></div>
+            <div class="chapter-title-line"><input v-model="activeChapter.title" class="chapter-title-input" aria-label="章节标题" @blur="saveChapterTitle" /></div>
             <div class="chapter-subline">
               <span>{{ countChinese(editorText) }} 中文字</span>
               <span class="dot-separator">·</span>
               <span>{{ activeTab === 'manuscript' ? '正文编辑' : activeTab === 'card' ? '章节卡' : '场景计划' }}</span>
+              <button class="chapter-finalization-status" @click="openFinalization">{{ activeChapter.status === 'completed' && !isDirty ? (activeChapter.finalization_manual ? '已定稿·人工' : activeChapter.finalization_correction ? '已定稿·已校正' : '已确认定稿') : activeChapter.finalized_version_id ? '修订待定稿' : '待检查 / 待定稿' }}</button>
+              <button v-if="activeChapter.finalized_version_id && !activeChapter.finalization_manual" class="chapter-linked-edit" @click="openFinalization">定稿后校正</button>
+              <span v-if="activeChapter.finalization_manual" class="chapter-manual-handoff-note">未审稿 · 交接未更新</span>
+              <span class="chapter-title-actions">
+                <CreativeExecutionControl
+                  compact
+                  class="chapter-title-generation"
+                  :default-mode="defaultExecutionMode"
+                  :app-model-label="modelName('planning_field')"
+                  action-label="生成章节名"
+                  :disabled="taskIsRunning()"
+                  @execute="generateChapterTitle"
+                  @edit-default="openEditProject(project)"
+                />
+                <button class="chapter-linked-edit" type="button" title="修改章节标题并检查对全书的影响" @click="startChapterTitleChange"><AppIcon name="change" :size="13" /><span>联动改名</span></button>
+              </span>
             </div>
           </div>
+          <div class="editor-view-actions" aria-label="创作区布局">
+            <button type="button" class="outline-button" :aria-pressed="writingFocus" @click="writingFocus = !writingFocus"><AppIcon name="focus" :size="16" />{{ writingFocus ? '退出专注' : '专注写作' }}</button>
+            <button v-if="!writingFocus" type="button" class="outline-button" :aria-expanded="lensVisible" aria-controls="writing-lens" @click="lensOpen = !lensVisible"><AppIcon name="panel" :size="16" />写作镜头</button>
+          </div>
           <div class="editor-heading-actions">
-            <button class="outline-button" @click="openVersionHistory">版本历史</button>
-            <button class="outline-button" @click="saveManuscript">保存版本</button>
-            <button v-if="runningTask" class="cancel-generation-button" :disabled="generationCancelPending" @click="cancelGeneration">
-              {{ generationCancelPending ? '正在取消…' : '取消生成' }}
-            </button>
-            <select v-model="generationIntent" class="generation-intent" :disabled="taskIsRunning()">
-              <option v-if="!editorText.trim()" value="draft">生成首稿</option>
-              <option v-if="editorText.trim()" value="continue">从光标续写</option>
-              <option v-if="editorText.trim()" value="rewrite">整章重写</option>
-            </select>
-            <CreativeExecutionControl
-              :default-mode="defaultExecutionMode"
-              :app-model-label="modelName('chapter')"
-              :action-label="generationIntentLabel"
-              :busy="isTaskRunning('chapter')"
-              :disabled="taskIsRunning()"
-              @execute="runCreativeTask('chapter', $event)"
-              @edit-default="openEditProject(project)"
-            />
+            <div class="editor-version-actions" aria-label="版本操作">
+              <button class="outline-button" @click="openVersionHistory">版本历史</button>
+              <button class="outline-button" @click="saveManuscript">保存版本</button>
+              <button class="outline-button finalize-chapter-button" @click="openFinalization"><AppIcon name="quality" :size="15" />完成本章</button>
+              <button v-if="runningTask" class="cancel-generation-button" :disabled="generationCancelPending" @click="cancelGeneration">
+                {{ generationCancelPending ? '正在取消…' : '取消生成' }}
+              </button>
+            </div>
+            <div class="editor-generation-actions" aria-label="正文生成">
+              <select v-model="generationIntent" class="generation-intent" aria-label="正文生成方式" :disabled="taskIsRunning()">
+                <option v-if="!editorText.trim()" value="draft">生成首稿</option>
+                <option v-if="editorText.trim()" value="continue">从光标续写</option>
+                <option v-if="editorText.trim()" value="rewrite">整章重写</option>
+              </select>
+              <CreativeExecutionControl
+                :default-mode="defaultExecutionMode"
+                :app-model-label="modelName('chapter')"
+                :action-label="generationIntentLabel"
+                :busy="isTaskRunning('chapter')"
+                :disabled="taskIsRunning()"
+                @execute="runCreativeTask('chapter', $event)"
+                @edit-default="openEditProject(project)"
+              />
+            </div>
           </div>
         </div>
 
-        <div class="editor-tabs" role="tablist">
-          <button :class="{ active: activeTab === 'manuscript' }" @click="activeTab = 'manuscript'">正文</button>
-          <button :class="{ active: activeTab === 'card' }" @click="activeTab = 'card'">章节卡</button>
-          <button :class="{ active: activeTab === 'scene' }" @click="activeTab = 'scene'">场景计划</button>
+        <div class="editor-tabs" role="tablist" aria-label="章节内容" @keydown="navigateEditorTabs">
+          <button id="editor-tab-manuscript" role="tab" :aria-selected="activeTab === 'manuscript'" :tabindex="activeTab === 'manuscript' ? 0 : -1" aria-controls="chapter-editor-content" :class="{ active: activeTab === 'manuscript' }" @click="activeTab = 'manuscript'">正文</button>
+          <button id="editor-tab-card" role="tab" :aria-selected="activeTab === 'card'" :tabindex="activeTab === 'card' ? 0 : -1" aria-controls="chapter-editor-content" :class="{ active: activeTab === 'card' }" @click="activeTab = 'card'">章节卡</button>
+          <button id="editor-tab-scene" role="tab" :aria-selected="activeTab === 'scene'" :tabindex="activeTab === 'scene' ? 0 : -1" aria-controls="chapter-editor-content" :class="{ active: activeTab === 'scene' }" @click="activeTab = 'scene'">场景计划</button>
           <span class="tab-spacer"></span>
-          <span class="editor-mode">CodeMirror 6 · prose</span>
+          <span class="editor-mode">{{ saveState === 'saving' ? '正在保存' : '编辑内容自动保存' }}</span>
         </div>
 
-        <div class="editor-body" @mousedown.self="closeSelectionTools">
+        <details v-if="activeTab === 'manuscript'" class="manuscript-local-checks">
+          <summary>本地检查 · {{ liveManuscriptChecks.findings.length ? `${liveManuscriptChecks.findings.length} 项编辑提示` : '未发现格式异常' }} <small>不调用模型，不判断文学质量</small></summary>
+          <p v-for="(finding, index) in liveManuscriptChecks.findings" :key="index">{{ finding.reason }} <q v-if="finding.evidence">{{ finding.evidence }}</q></p>
+        </details>
+        <div id="chapter-editor-content" class="editor-body" role="tabpanel" :aria-labelledby="`editor-tab-${activeTab}`" @mousedown.self="closeSelectionTools">
           <NovelEditor
             v-if="activeTab === 'manuscript'"
             ref="novelEditorRef"
@@ -184,6 +216,10 @@
             @selection-change="handleSelection"
           />
           <div v-else-if="activeTab === 'card'" class="artifact-view card-view">
+            <details class="formal-card-edit"><summary>手动编辑章节卡</summary>
+              <CreativeCandidateEditor :model-value="formalCardDraft" description="修改暂存在表单中，点击保存章节卡后生效" @update:model-value="formalCardDraft = $event" />
+              <button class="outline-button" @click="saveFormalCard">保存章节卡</button>
+            </details>
             <div class="artifact-header"><span class="eyebrow copper">CHAPTER CONTRACT</span><span class="artifact-state">{{ activeChapter.card?.goal ? '已生成' : '待生成' }}</span></div>
             <h2>{{ activeChapter.card?.goal || '还没有章节卡' }}</h2>
             <div class="artifact-grid">
@@ -237,10 +273,10 @@
         </div>
       </section>
 
-      <aside class="context-panel">
+      <aside v-show="lensVisible && !writingFocus" id="writing-lens" class="context-panel" aria-label="本章写作镜头">
         <div class="context-heading">
           <div><span class="eyebrow">WRITING LENS</span><h2>本章写作镜头</h2></div>
-          <span class="lens-symbol">◌</span>
+          <button class="icon-button" type="button" aria-label="收起写作镜头" title="收起写作镜头" @click="lensOpen = false">×</button>
         </div>
 
         <section class="context-section focus-section">
@@ -336,12 +372,14 @@
       @route-change="changeTaskRoute"
     />
     <ApprovalDrawer :project-id="project.id" />
+    <ChapterFinalization v-if="finalizationOpen" :project-id="project.id" :chapter-id="activeChapter.id" :settings="modelSettings" @close="finalizationOpen = false" @completed="reloadAfterFinalization" />
     <InlineCodexPanel
       :visible="inlinePanelOpen"
       :run-id="inlineRunId"
       :current-draft-digest="inlineCurrentDraftDigest"
       :current-draft-value="inlineCurrentDraftValue"
       :source-manuscript="inlineSourceManuscript"
+      :current-chapter-card="activeChapter?.card || {}"
       @close="inlinePanelOpen = false"
       @accepted="handleInlineAccepted"
       @rejected="handleInlineRejected"
@@ -517,12 +555,14 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import DiffReview from './components/DiffReview.vue'
+import AppIcon from './components/AppIcon.vue'
 import ApprovalDrawer from './components/ApprovalDrawer.vue'
 import CreativeAssistant from './components/CreativeAssistant.vue'
 import CreativeExecutionControl from './components/CreativeExecutionControl.vue'
 import GenerationHistory from './components/GenerationHistory.vue'
 import KnowledgeCenter from './components/KnowledgeCenter.vue'
 import InlineCodexPanel from './components/InlineCodexPanel.vue'
+import ChapterFinalization from './components/ChapterFinalization.vue'
 import StoryChangePanel from './components/StoryChangePanel.vue'
 import ModelSettings from './components/ModelSettings.vue'
 import NovelEditor from './components/NovelEditor.vue'
@@ -531,6 +571,8 @@ import QualityCenter from './components/QualityCenter.vue'
 import { composeGenerationCandidate } from './utils/generation-intents.js'
 import { creativeRoutePresentation, draftDigest, projectExecutionMode } from './utils/inline-creative.js'
 import ScenePlanEditor from './components/ScenePlanEditor.vue'
+import CreativeCandidateEditor from './components/CreativeCandidateEditor.vue'
+import { checkManuscript } from '../electron/manuscript-checks.js'
 import PlanningCenter from './components/PlanningCenter.vue'
 import ProjectTransfer from './components/ProjectTransfer.vue'
 import PromptCenter from './components/PromptCenter.vue'
@@ -550,6 +592,19 @@ const activeChapterId = ref('')
 const editorText = ref('')
 const activeTab = ref('manuscript')
 const workspaceView = ref('writing')
+const writingFocus = ref(false)
+const lensOpen = ref(null)
+const viewportWidth = ref(window.innerWidth)
+const lensVisible = computed(() => lensOpen.value ?? viewportWidth.value >= 1280)
+function updateViewport() { viewportWidth.value = window.innerWidth }
+function navigateEditorTabs(event) {
+  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+  event.preventDefault()
+  const tabs = ['manuscript', 'card', 'scene']
+  const index = event.key === 'Home' ? 0 : event.key === 'End' ? 2 : (tabs.indexOf(activeTab.value) + (event.key === 'ArrowRight' ? 1 : 2)) % 3
+  activeTab.value = tabs[index]
+  document.getElementById(`editor-tab-${tabs[index]}`)?.focus()
+}
 const planningCenterRef = ref(null)
 const knowledgeCenterRef = ref(null)
 const novelEditorRef = ref(null)
@@ -566,6 +621,20 @@ const toast = ref('')
 const loadError = ref('')
 const settingsOpen = ref(false)
 const qualityCenterOpen = ref(false)
+const finalizationOpen = ref(false)
+async function openFinalization() {
+  try {
+    await saveManuscript({ createRevision: false })
+    if (isDirty.value) await saveManuscript({ createRevision: false })
+    if (!isDirty.value) finalizationOpen.value = true
+  } catch { /* saving already reports its error */ }
+}
+async function reloadAfterFinalization(record) {
+  const loaded = await appService.loadWorkspace(project.id)
+  const chapter = loaded.chapters.find(item => item.id === activeChapter.value.id)
+  if (chapter) replaceChapter(chapter)
+  showToast(record?.checks?.manualFinalization ? '本章已人工定稿；本次未审稿，交接未更新' : '本章已定稿，交接记录已确认')
+}
 const inlinePanelOpen = ref(false)
 const inlineRunId = ref('')
 const inlineRunStatus = ref('')
@@ -624,6 +693,8 @@ let autosaveTimer = null
 let savePromise = null
 let closeRequestCleanup = null
 let runtimeInfoCleanup = null
+let creativeChangeCleanup = null
+const externalChange = ref(false)
 let closeInProgress = false
 let activeGeneration = null
 let confirmationRunner = null
@@ -632,6 +703,23 @@ const inlineBindings = new Map()
 
 const activeChapter = computed(() => chapters.value.find((chapter) => chapter.id === activeChapterId.value) || chapters.value[0])
 const chapterTargetLength = computed(() => Math.max(800, Math.min(12000, Math.round(Number(activeChapter.value?.card?.targetLength) || 2000))))
+const liveManuscriptChecks = computed(() => checkManuscript(editorText.value, { targetLength: chapterTargetLength.value }))
+const formalCardDraft = ref({})
+let formalCardSource = ''
+watch(() => [activeChapter.value?.id, activeChapter.value?.card], () => {
+  formalCardSource = JSON.stringify(activeChapter.value?.card || {})
+  formalCardDraft.value = { goal: '', protagonistGoal: '', resistance: '', turningPoint: '', payoff: '', cost: '', ending: '', ...JSON.parse(formalCardSource) }
+}, { immediate: true })
+async function saveFormalCard() {
+  try {
+    const chapterId = activeChapter.value.id
+    const snapshot = await appService.loadWorkspace(project.id)
+    const current = snapshot.chapters.find(chapter => chapter.id === chapterId)
+    if (JSON.stringify(current?.card || {}) !== formalCardSource) throw new Error('章节卡已在其他位置修改，请重新打开后比较再保存')
+    replaceChapter(await appService.updateChapter({ id: chapterId, card: formalCardDraft.value }))
+    showToast('章节卡已保存')
+  } catch (error) { showToast(error.message) }
+}
 const chapterProgress = computed(() => Math.min(100, Math.round((countChinese(editorText.value) / chapterTargetLength.value) * 100)))
 const activeProjects = computed(() => projects.value.filter((item) => !item.archived && !item.archived_at))
 const archivedProjects = computed(() => projects.value.filter((item) => item.archived || item.archived_at))
@@ -644,7 +732,7 @@ const saveLabel = computed(() => {
   if (saveState.value === 'dirty') return '有未保存修改'
   if (saveState.value === 'saving') return '正在保存…'
   if (saveState.value === 'error') return '保存失败，请重试'
-  return lastSavedAt.value ? `已保存 ${formatRelativeTime(lastSavedAt.value)}` : '已保存'
+  return lastSavedAt.value ? formatRelativeTime(lastSavedAt.value) : '已保存'
 })
 const selectionToolsStyle = computed(() => ({
   left: `${selectionTools.left || 50}%`,
@@ -699,8 +787,12 @@ function applyWorkspace(loaded) {
 }
 
 onMounted(async () => {
+  window.addEventListener('resize', updateViewport)
   closeRequestCleanup = appService.onCloseRequest(handleCloseRequest)
   runtimeInfoCleanup = appService.onRuntimeInfo((info) => Object.assign(runtime, info))
+  creativeChangeCleanup = appService.onCreativeChange(event => {
+    if (event.projectId === project.id) externalChange.value = true
+  })
   window.addEventListener('beforeunload', handleBrowserBeforeUnload)
   try {
     const loaded = await appService.loadWorkspace()
@@ -728,6 +820,22 @@ async function refreshWorkspaceFromAgent() {
   showToast('Agent 候选已确认并写入项目')
 }
 
+watch(() => project.id, () => { externalChange.value = false })
+async function refreshExternalWorkspace() {
+  if (isDirty.value || saveState.value === 'saving') {
+    showToast('当前编辑稿有待保存修改，请先核对并保存，再读取任务更新')
+    return
+  }
+  const projectId = project.id, chapterId = activeChapterId.value, view = workspaceView.value
+  const loaded = await appService.loadWorkspaceSnapshot(projectId)
+  if (project.id !== projectId || isDirty.value) return
+  applyWorkspace(loaded)
+  if (loaded.chapters.some(chapter => chapter.id === chapterId)) activeChapterId.value = chapterId
+  workspaceView.value = view
+  externalChange.value = false
+  showToast('已读取本书创作任务的最新结果')
+}
+
 watch(activeChapter, (chapter) => {
   if (!chapter) return
   editorText.value = chapter.manuscript || ''
@@ -749,11 +857,13 @@ watch(editorText, (value) => {
 })
 
 onBeforeUnmount(() => {
+  window.removeEventListener('resize', updateViewport)
   if (autosaveTimer) window.clearTimeout(autosaveTimer)
   if (scenePlanSaveTimer) window.clearTimeout(scenePlanSaveTimer)
   void activeGeneration?.cancel()
   closeRequestCleanup?.()
   runtimeInfoCleanup?.()
+  creativeChangeCleanup?.()
   window.removeEventListener('beforeunload', handleBrowserBeforeUnload)
 })
 
@@ -1280,6 +1390,43 @@ async function startChapterTitleChange() {
   }
 }
 
+async function generateChapterTitle(mode = defaultExecutionMode.value) {
+  if (!activeChapter.value) return
+  try {
+    if (isDirty.value) await saveManuscript({ createRevision: false, source: 'before-chapter-title-generation' })
+    await saveChapterTitle()
+    const chapter = activeChapter.value
+    await startInlineCodex({
+      request: {
+        projectId: project.id,
+        chapterId: chapter.id,
+        task: 'planning_field',
+        intent: 'draft',
+        executionMode: mode === 'app_model' ? 'app_model' : 'codex',
+        modelProfileId: mode === 'app_model' ? modelSettings.routes?.planning_field || '' : '',
+        modelProfileName: mode === 'app_model' ? modelName('planning_field') : '',
+        target: {
+          kind: 'chapter_field',
+          targetId: chapter.id,
+          fieldKey: 'title',
+          fieldLabel: '章节名',
+          promptProfile: 'chapter_title',
+          scopeType: 'chapter',
+          scopeId: chapter.id,
+        },
+        instruction: [
+          '结合本章已确认的章节卡、场景计划和当前正文，为这一章生成具有连载点击吸引力的章节名。',
+          '先在内部各拟一个“身份反差”“现场冲突”“人物口吻”“悬念问题”方向的标题，再按具体性、好奇缺口、题材契合、人物声音和不泄底五项比较，只输出得分最高的一项。',
+          '“金额＋动作＋时长”一类内容纪要不是合格章节名，例如“二百块借灶一小时”应当淘汰；也不要使用“新的开始”“暗流涌动”等可套用到任何章节的空泛标题。',
+          '标题必须来自本章真实内容，不夸大不存在的冲突或回报。通常 6—18 个中文字符，可使用一个逗号、问号或叹号；不要带“第几章”、书名号、解释、评分或备选列表。',
+        ].join('\n'),
+      },
+    })
+  } catch (error) {
+    showToast(`生成章节名失败：${error.message}`)
+  }
+}
+
 async function saveManuscript({ createRevision = true, source = 'manual-save', forceRevision = false } = {}) {
   if (!activeChapter.value) return false
   if (!isDirty.value && !forceRevision) return true
@@ -1293,13 +1440,13 @@ async function saveManuscript({ createRevision = true, source = 'manual-save', f
     try {
       const chapterId = activeChapter.value.id
       const content = editorText.value
-      const updated = await appService.updateChapter({ id: chapterId, manuscript: content, status: 'draft' })
+      const updated = await appService.updateChapter({ id: chapterId, manuscript: content, expectedManuscript:activeChapter.value.manuscript || '' })
       replaceChapter(updated)
       if (createRevision || forceRevision) {
         await appService.createRevision({ chapterId, content, source })
       }
       lastSavedAt.value = new Date().toISOString()
-      isDirty.value = false
+      isDirty.value = activeChapter.value?.id === chapterId && editorText.value !== content
       saveState.value = 'saved'
       return true
     } catch (error) {
@@ -1546,9 +1693,13 @@ function handleInlineRejected({ run }) {
 
 function handleInlineRunUpdated(run) {
   if (!run) return
+  if (run.id !== inlineRunId.value && inlineBindings.has(inlineRunId.value)) {
+    inlineBindings.set(run.id, inlineBindings.get(inlineRunId.value))
+  }
+  inlineRunId.value = run.id
   inlineRunStatus.value = run.status
   inlineRun.value = run
-  if (['completed', 'cancelled'].includes(run.status)) inlineBindings.delete(run.id)
+  if (run.status === 'cancelled') inlineBindings.delete(run.id)
 }
 
 async function runGeneration(task) {

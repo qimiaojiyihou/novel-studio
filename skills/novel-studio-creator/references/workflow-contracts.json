@@ -1,8 +1,8 @@
 {
   "creativePack": {
     "id": "official.general-longform.zh-CN",
-    "version": "1.1.0",
-    "digest": "c00b4a6998ed9b39653aa76d3adfe8d78d3977d198453f2a264809d982af2d90"
+    "version": "1.3.0",
+    "digest": "0530fb02c55035791d5ff221318fd3aefc55de630f1409b900eb761fa8d2cb62"
   },
   "schemas": {
     "foundationBundle": {
@@ -400,6 +400,49 @@
           "action": "checkpoint",
           "dependsOn": [
             "chapter-state"
+          ]
+        }
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "id": "chapter-compact",
+      "name": "精简逐章创作（场景按需）",
+      "steps": [
+        {
+          "id": "preflight",
+          "action": "preflight"
+        },
+        {
+          "id": "chapter-card",
+          "action": "generate",
+          "task": "chapter_card",
+          "candidateType": "chapter_card",
+          "dependsOn": [
+            "preflight"
+          ]
+        },
+        {
+          "id": "confirm-card",
+          "action": "checkpoint",
+          "dependsOn": [
+            "chapter-card"
+          ]
+        },
+        {
+          "id": "chapter-draft",
+          "action": "generate",
+          "task": "chapter",
+          "candidateType": "manuscript",
+          "dependsOn": [
+            "confirm-card"
+          ]
+        },
+        {
+          "id": "confirm-draft",
+          "action": "checkpoint",
+          "dependsOn": [
+            "chapter-draft"
           ]
         }
       ]

@@ -5,6 +5,15 @@ import { sealCreativePack, validateCreativePack } from '../electron/creative-pac
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const source = path.join(root, 'creative-packs', 'general-longform')
+const historical = path.join(root, 'creative-packs', 'historical')
+if (process.argv.includes('--freeze-history')) {
+  fs.mkdirSync(historical, { recursive: true })
+  for (const version of ['1.0.0', '1.1.0', '1.2.0']) {
+    const name = `general-longform-${version}.nspack.json`
+    const target = path.join(historical, name)
+    if (!fs.existsSync(target)) fs.copyFileSync(path.join(root, 'creative-packs', 'dist', name), target)
+  }
+}
 
 function readJson(relativePath) {
   return JSON.parse(fs.readFileSync(path.join(source, relativePath), 'utf8'))
@@ -25,6 +34,7 @@ const pack = sealCreativePack({
   workflows: [
     readJson('workflows/project-initialization.json'),
     readJson('workflows/chapter-creation.json'),
+    readJson('workflows/chapter-compact.json'),
     readJson('workflows/story-change-propagation.json'),
   ],
   evaluations: [readJson('evaluations/urban-suspense-three-chapter.json')],
@@ -36,6 +46,7 @@ const pack = sealCreativePack({
 validateCreativePack(pack, { appVersion: '0.1.0' })
 const outputDirectory = path.join(root, 'creative-packs', 'dist')
 fs.mkdirSync(outputDirectory, { recursive: true })
+for (const name of fs.readdirSync(historical)) fs.copyFileSync(path.join(historical, name), path.join(outputDirectory, name))
 const outputPath = path.join(outputDirectory, `general-longform-${manifest.version}.nspack.json`)
 fs.writeFileSync(outputPath, JSON.stringify(pack, null, 2) + '\n')
 

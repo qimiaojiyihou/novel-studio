@@ -38,10 +38,15 @@ export function createWorkspaceRepository(database, {
   createId = (prefix) => `${prefix}-${randomUUID()}`,
 } = {}) {
   const projectById = database.prepare('SELECT * FROM projects WHERE id = ?')
-  const chapterById = database.prepare('SELECT * FROM chapters WHERE id = ?')
+  const chapterSelection = `SELECT c.*,
+    (SELECT f.id FROM chapter_finalizations f WHERE f.chapter_id=c.id AND f.completed_at<>'' ORDER BY f.completed_at DESC,f.rowid DESC LIMIT 1) AS finalized_version_id,
+    (SELECT json_extract(f.checks_json,'$.authorAmendment.type') FROM chapter_finalizations f WHERE f.chapter_id=c.id AND f.completed_at<>'' ORDER BY f.completed_at DESC,f.rowid DESC LIMIT 1) AS finalization_correction,
+    (SELECT json_extract(f.checks_json,'$.manualFinalization.type') FROM chapter_finalizations f WHERE f.chapter_id=c.id AND f.completed_at<>'' ORDER BY f.completed_at DESC,f.rowid DESC LIMIT 1) AS finalization_manual
+    FROM chapters c`
+  const chapterById = database.prepare(`${chapterSelection} WHERE c.id = ?`)
 
   function listChapters(projectId) {
-    return database.prepare('SELECT * FROM chapters WHERE project_id = ? ORDER BY chapter_no').all(projectId).map(mapChapter)
+    return database.prepare(`${chapterSelection} WHERE c.project_id = ? ORDER BY c.chapter_no`).all(projectId).map(mapChapter)
   }
 
   function renumberChapters(projectId, orderedIds) {
@@ -196,6 +201,9 @@ export function createWorkspaceRepository(database, {
     const chapterId = patch.id
     const current = chapterById.get(chapterId)
     if (!current) throw new Error('章节不存在')
+    if (typeof patch.manuscript === 'string' && Object.hasOwn(patch,'expectedManuscript') && current.manuscript !== patch.expectedManuscript) {
+      throw new Error('正文已被另一创作任务更新，当前编辑稿已保留，请比较最新正文后再保存')
+    }
     const updates = []
     const values = []
     let nextVolumeId = null

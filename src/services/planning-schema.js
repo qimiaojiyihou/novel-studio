@@ -45,6 +45,10 @@ export const entityFields = {
     { key: 'secret', label: '秘密与知情范围', hint: '他隐瞒什么、知道什么', placeholder: '秘密何时可能暴露，谁已经接近真相', type: 'textarea' },
     { key: 'arc', label: '人物弧', hint: '从开局状态到结局状态', placeholder: '信念、关系或行动方式如何改变', type: 'textarea', wide: true },
     { key: 'voice', label: '说话与行为辨识度', hint: '语言节奏、习惯动作和回避方式', placeholder: '让人物不依赖名字也能被认出', type: 'textarea' },
+    { key: 'speechPurpose', label: '说话目的', hint: '可选：此人说话常在争取或掩饰什么', type: 'textarea', optional: true },
+    { key: 'socialMask', label: '社交面具', hint: '可选：对外形象与真实顾虑的距离', type: 'textarea', optional: true },
+    { key: 'languageHabits', label: '语言习惯', hint: '可选：惯用词、停顿、回避与改口', type: 'textarea', optional: true },
+    { key: 'speechTaboos', label: '语言禁区', hint: '可选：哪些事不主动说、对谁不说', type: 'textarea', optional: true },
     { key: 'relationships', label: '关键关系', hint: '对象、表面关系、真实张力', placeholder: '每行写一段关系及其当前变化方向', type: 'textarea', wide: true },
   ],
   world: [

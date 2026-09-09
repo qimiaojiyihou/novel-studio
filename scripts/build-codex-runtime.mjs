@@ -31,6 +31,8 @@ for (const required of [adapterPackagePath, adapterEntryPath, adapterLicensePath
 const adapterPackage = JSON.parse(fs.readFileSync(adapterPackagePath, 'utf8'))
 const cliPackage = JSON.parse(fs.readFileSync(cliPackagePath, 'utf8'))
 if (adapterPackage.version !== '1.6.2') throw new Error(`codex-acp version drift: ${adapterPackage.version}`)
+const pinnedCliVersion = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).dependencies['@openai/codex']
+if (cliPackage.version !== pinnedCliVersion) throw new Error(`Codex CLI version drift: ${cliPackage.version} (expected ${pinnedCliVersion})`)
 
 const outputRoot = path.join(root, 'resources', 'codex-runtime', targetKey)
 fs.rmSync(outputRoot, { recursive: true, force: true })
@@ -52,9 +54,8 @@ const manifest = {
   adapterVersion: adapterPackage.version,
   cliVersion: cliPackage.version,
   capabilities: {
-    // Codex CLI 0.148.0 validates structure through the protected prompt and
-    // Novel Studio's post-run validator; this release has no exec flag for it.
-    execOutputSchema: false,
+    // Fixed CLI 0.153.4 declares --output-schema; post-run validation still applies.
+    execOutputSchema: true,
   },
   files: { adapter: digest(packagedAdapter), cli: digest(packagedCli) },
 }

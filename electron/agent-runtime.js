@@ -1,6 +1,8 @@
 import { validateChapterCard, validateScenePlan } from './creative-quality.js'
 import { CodexCancelledError } from './codex-agent-gateway.js'
 import { cleanPlanningFieldText } from './generated-text.js'
+import { checkManuscript } from './manuscript-checks.js'
+import { applyTextPatches, assertProtectedText } from './manuscript-patches.js'
 import { normalizePlanningChapterBundleCandidate, normalizePlanningDocumentBundleCandidate, normalizePlanningEntityBundleCandidate } from './planning-bundle.js'
 
 function firstFailed(checks = []) {
@@ -86,13 +88,6 @@ function validateCandidate(task, payload, { targetLength = 0, candidateType = ''
   if (task === 'chapter' && !String(payload?.manuscript || '').trim()) {
     throw Object.assign(new Error('正文候选为空'), { name: 'StructuredOutputError' })
   }
-  if (task === 'chapter') {
-    const range = manuscriptLengthRange(targetLength)
-    const count = manuscriptCharacterCount(payload?.manuscript)
-    if (range && (count < range.minimum || count > range.maximum)) {
-      throw Object.assign(new Error(`正文纯中文字符数为 ${count}，目标 ${range.target}，必须落在 ${range.minimum}–${range.maximum} 之间`), { name: 'StructuredOutputError' })
-    }
-  }
   if (['chapter_state_extract', 'quality_review'].includes(task) && (!payload || typeof payload !== 'object' || Array.isArray(payload))) {
     throw Object.assign(new Error('结构化候选不是 JSON 对象'), { name: 'StructuredOutputError' })
   }
@@ -115,6 +110,36 @@ function validateCandidate(task, payload, { targetLength = 0, candidateType = ''
   return payload
 }
 
+const CHAPTER_CARD_EDITABLE_FIELDS = Object.freeze([
+  'goal', 'protagonistGoal', 'resistance', 'turningPoint', 'payoff', 'cost', 'ending',
+])
+
+function boundedAuthorText(value, limit = 20000) {
+  return String(value ?? '').trim().slice(0, limit)
+}
+
+function normalizeChapterCardAuthorEdit(payload, originalPayload = {}) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw new Error('章节卡手动修改内容不是有效对象')
+  }
+  const normalized = {}
+  if (['semantic', 'exact'].includes(payload.boundaryMode ?? originalPayload?.boundaryMode)) normalized.boundaryMode = payload.boundaryMode ?? originalPayload.boundaryMode
+  for (const field of CHAPTER_CARD_EDITABLE_FIELDS) normalized[field] = boundedAuthorText(payload[field])
+  normalized.requiredScenes = Array.isArray(payload.requiredScenes)
+    ? payload.requiredScenes.slice(0, 20).map((scene) => ({
+      id: boundedAuthorText(scene?.id, 120),
+      title: boundedAuthorText(scene?.title, 500),
+      goal: boundedAuthorText(scene?.goal),
+      result: boundedAuthorText(scene?.result),
+    }))
+    : []
+  const volumeId = boundedAuthorText(payload.volumeId ?? originalPayload?.volumeId, 200)
+  if (volumeId) normalized.volumeId = volumeId
+  const targetLength = Number(payload.targetLength ?? originalPayload?.targetLength)
+  if (Number.isFinite(targetLength) && targetLength > 0) normalized.targetLength = Math.max(1, Math.min(12000, Math.round(targetLength)))
+  return validateCandidate('chapter_card', normalized)
+}
+
 export class AgentRuntime {
   constructor({
     repository,
@@ -124,6 +149,7 @@ export class AgentRuntime {
     prepareCodexPrompt,
     completeCodexGeneration = async () => {},
     persistQualityReview = async () => '',
+    runIndependentReview = null,
     runAppModel,
     runPreflight,
     applyCandidate,
@@ -138,6 +164,7 @@ export class AgentRuntime {
     this.prepareCodexPrompt = prepareCodexPrompt
     this.completeCodexGeneration = completeCodexGeneration
     this.persistQualityReview = persistQualityReview
+    this.runIndependentReview = runIndependentReview
     this.runAppModel = runAppModel
     this.runPreflight = runPreflight
     this.applyCandidate = applyCandidate
@@ -159,8 +186,35 @@ export class AgentRuntime {
     return this._startRun(run, eventContext)
   }
 
+  async stageExternalCandidate(input) {
+    // External authors submit a candidate without starting another model turn.
+    // Use the same frozen run, validation, source checks and acceptance path.
+    await input.verifySource()
+    const run = this.repository.createInlineRun({ ...input, executionMode:'codex', freshStart:true,
+      modelRoutes:{ ...input.modelRoutes,creativeRequestId:input.journalId, externalAuthor:true } })
+    const step = run.steps[0]
+    try {
+      const sourceDigest = await this.currentSourceDigest(run)
+      const payload = validateCandidate(step.task, candidatePayload(step.task,{ structuredOutput:input.payload },{
+        candidateType:step.candidateType,target:step.input.target,fieldLabel:step.input.target.fieldLabel,
+      }),{ candidateType:step.candidateType })
+      await input.verifySource()
+      const candidate = this.repository.createCandidate({ runId:run.id,stepId:step.id,projectId:run.projectId,chapterId:run.chapterId,
+        artifactType:step.candidateType,sourceDigest,payload,evidence:{ executionBackend:'external_author',externalSourceDigest:input.sourceDigest } })
+      this.repository.updateStep(step.id,{ status:'completed',output:{ candidateId:candidate.id },completedAt:new Date().toISOString() })
+      this.repository.updateRun(run.id,{ status:'waiting_confirmation',currentStepId:step.id,actualBackend:'external_author' })
+      this._emit(run.id,'candidate_created',{ candidate,stepId:step.id })
+      return this.repository.getRun(run.id)
+    } catch(error) {
+      this.repository.updateRun(run.id,{ status:'failed',error:error.message })
+      throw error
+    }
+  }
+
   async continueInline(input, eventContext = null) {
+    this._approveLegacy(input.runId, input.legacyRuleChoice)
     const run = this.repository.appendInlineRevision(input)
+    this.repository.updateRun(run.id, { connectionReleasedAt: '' })
     const mirror = await this.refreshMirror(run)
     this._emit(run.id, 'inline_revision_started', {
       stepId: run.currentStepId,
@@ -190,6 +244,7 @@ export class AgentRuntime {
     let run = this.repository.getRun(runId)
     if (!run) throw new Error('AgentRun 不存在')
     if (['cancelled', 'completed'].includes(run.status)) return run
+    this._approveLegacy(runId)
     let mirror = knownMirror
     if (run.executionMode === 'codex' && !mirror) mirror = await this.refreshMirror(run)
     this.repository.updateRun(runId, { status: 'running', error: '' })
@@ -256,9 +311,21 @@ export class AgentRuntime {
     const controller = new AbortController()
     this.controllers.set(run.id, controller)
     try {
+      const sourceDigest = run.creativePack?.version === '1.3.0' || run.modelRoutes?.creativeRequestId ? await this.currentSourceDigest(run) : mirror?.sourceDigest || await this.currentSourceDigest(run)
+      if (step.input?.conversationMode === 'discuss') {
+        const result = await this._executeTask({ run, step, mirror, eventContext, signal: controller.signal, extra: {} })
+        const text = String(result.structuredOutput?.text || result.content || result.text || '')
+        this.repository.saveDiscussion?.({ runId: run.id, stepId: step.id, text })
+        this.repository.updateStep(step.id, { status: 'completed', output: { discussion: text }, completedAt: new Date().toISOString() })
+        this._emit(run.id, 'discussion_completed', { stepId: step.id, text })
+        return
+      }
       const { result, payload } = await this._runStructuredTask({
         run, step, mirror, eventContext, signal: controller.signal, startedAt,
-        validate: (execution) => step.candidateType === 'foundation_bundle'
+        validate: (execution) => step.input?.patchSource && step.input.modificationScope?.kind !== 'whole'
+          ? applyTextPatches(step.input.patchSource.text, execution.structuredOutput || {}, {
+              digest: step.input.patchSource.digest, scope: step.input.modificationScope, protections: step.input.patchSource.protections })
+          : step.candidateType === 'foundation_bundle'
           ? validateFoundationBundle(foundationBundlePayload(execution))
           : validateCandidate(step.task, candidatePayload(step.task, execution, {
               fieldLabel: step.input?.target?.fieldLabel || '',
@@ -269,7 +336,7 @@ export class AgentRuntime {
               candidateType: step.candidateType,
             }),
       })
-      const sourceDigest = mirror?.sourceDigest || await this.currentSourceDigest(run)
+      if (step.task === 'chapter' && step.input?.patchSource) assertProtectedText(payload.manuscript, step.input.patchSource.protections)
       const candidate = this.repository.createCandidate({
         runId: run.id,
         stepId: step.id,
@@ -283,6 +350,8 @@ export class AgentRuntime {
           sessionId: result.sessionId || '',
           fallbackReason: result.fallbackReason || '',
           generationRecordId: result.generationRecordId || '',
+          modelSnapshot: result.modelSnapshot || null,
+          localCheck: step.task === 'chapter' ? checkManuscript(payload.manuscript, { targetLength: run.modelRoutes?.targetLength }) : null,
         },
       })
       await this.onCandidateCreated({ run, step, candidate, result })
@@ -301,6 +370,7 @@ export class AgentRuntime {
       this._emit(run.id, 'candidate_created', { stepId: step.id, candidate })
     } catch (error) {
       if (error instanceof CodexCancelledError || controller.signal.aborted) {
+        if (this.repository.getRun(run.id)?.status === 'cancelled') return
         this.repository.updateStep(step.id, { status: 'interrupted', interruptedAt: new Date().toISOString(), error: error.message })
         this.repository.updateRun(run.id, { status: 'paused', error: error.message })
         return
@@ -322,8 +392,11 @@ export class AgentRuntime {
     const startedAt = new Date().toISOString()
     const controller = new AbortController()
     this.controllers.set(run.id, controller)
+    if (this.runIndependentReview) this.repository.updateStep(step.id, { status: 'running', attemptCount: Number(step.attemptCount || 0) + 1, startedAt })
     try {
-      const { result, payload: review } = await this._runStructuredTask({
+      const { result, payload: review } = this.runIndependentReview
+        ? await this.runIndependentReview({ run, step, sourceCandidate, eventContext, signal: controller.signal })
+        : await this._runStructuredTask({
         run, step, mirror, eventContext, signal: controller.signal, startedAt,
         extra: { sourceCandidate },
         validate: (execution) => validateCandidate('quality_review', candidatePayload('quality_review', execution)),
@@ -336,27 +409,28 @@ export class AgentRuntime {
         review,
       }) || ''
       this.repository.updateStep(step.id, {
-        status: 'completed', output: { review, sourceCandidateId: sourceCandidate.id },
+        status: 'completed', output: { review, sourceCandidateId: sourceCandidate.id, ...(result.reviewRunId ? { reviewRunId: result.reviewRunId } : {}) },
         generationRecordId: result.generationRecordId || '',
         qualityReportId,
         executionBackend: result.backend || result.execution || 'app_model',
         outputStarted: Boolean(result.outputStarted || result.content || result.review),
         completedAt: new Date().toISOString(),
       })
-      this.repository.updateRun(run.id, {
-        actualBackend: result.backend || result.execution || 'app_model',
-        fallbackReason: result.fallbackReason || '',
+      if (!this.runIndependentReview) this.repository.updateRun(run.id, {
+        actualBackend: result.backend || result.execution || 'app_model', fallbackReason: result.fallbackReason || '',
       })
       this._emit(run.id, 'quality_review_completed', { stepId: step.id, review })
     } catch (error) {
       if (error instanceof CodexCancelledError || controller.signal.aborted) {
+        if (this.repository.getRun(run.id)?.status === 'cancelled') return
         this.repository.updateStep(step.id, { status: 'interrupted', interruptedAt: new Date().toISOString(), error: error.message })
         this.repository.updateRun(run.id, { status: 'paused', error: error.message })
         return
       }
       this.repository.updateStep(step.id, {
         status: 'failed', error: error.message, outputStarted: Boolean(error.codexPartialResult?.outputStarted),
-        output: error.codexPartialResult ? { partialEvidence: true, content: String(error.codexPartialResult.content || '').slice(0, 64 * 1024) } : {},
+        output: { ...this.repository.getRun(run.id)?.steps.find(item => item.id === step.id)?.output,
+          ...(error.codexPartialResult ? { partialEvidence: true, content: String(error.codexPartialResult.content || '').slice(0, 64 * 1024) } : {}) },
         completedAt: new Date().toISOString(),
       })
       throw error
@@ -380,6 +454,7 @@ export class AgentRuntime {
           return { result, payload: validate(result) }
         } catch (error) {
           error.generationRecordId ||= result.generationRecordId || ''
+          error.codexPartialResult ||= result
           throw error
         }
       } catch (error) {
@@ -389,7 +464,15 @@ export class AgentRuntime {
           reason: error.message,
           retryOfGenerationId: error.generationRecordId || error.codexPartialResult?.generationRecordId || '',
         }
-        this._emit(run.id, 'structured_retry', { stepId: step.id, attempt: attempt + 1, error: error.message })
+        const retryEvent = { stepId: step.id, attempt: attempt + 1, error: error.message }
+        this.repository.appendEvent?.({
+          agentRunId: run.id,
+          agentStepId: step.id,
+          type: 'structured_retry',
+          summary: `结构校准：开始第 ${attempt + 1}/3 次生成`,
+          payload: retryEvent,
+        })
+        this._emit(run.id, 'structured_retry', retryEvent)
       }
     }
     throw new Error('结构修复重试已达到三次上限')
@@ -397,7 +480,9 @@ export class AgentRuntime {
 
   async _executeTask({ run, step, mirror, eventContext, signal, extra = {} }) {
     if (run.executionMode !== 'codex') {
-      return this.runAppModel({ run, step, eventContext, signal, extra })
+      const result=await this.runAppModel({ run, step, eventContext, signal, extra })
+      if (signal.aborted || result?.cancelled) throw new CodexCancelledError()
+      return result
     }
     const prepared = await this.prepareCodexPrompt({ run, step, mirror, extra })
     try {
@@ -405,6 +490,7 @@ export class AgentRuntime {
         agentRunId: run.id,
         agentStepId: step.id,
         messages: prepared.messages,
+        continuationMessages: prepared.continuationMessages || null,
         outputSchema: prepared.outputSchema,
         signal,
         onEvent: (event) => this._emit(run.id, 'codex_event', event),
@@ -420,6 +506,7 @@ export class AgentRuntime {
           authMethod: prepared.authMethod || '',
         },
       })
+      if (signal.aborted) throw new CodexCancelledError()
       await this.completeCodexGeneration({ prepared, result, status: 'completed', attempt: extra.structuredRepair?.attempt || 1 })
       if (prepared.generationRecordId) result.generationRecordId = prepared.generationRecordId
       return result
@@ -439,12 +526,30 @@ export class AgentRuntime {
   async confirmCandidate(input, eventContext = null) {
     const run = this.repository.getRun(input.runId)
     if (!run) throw new Error('AgentRun 不存在')
-    const candidate = run.candidates.find((item) => item.id === input.candidateId)
+    let candidate = run.candidates.find((item) => item.id === input.candidateId)
+    const hasAuthorEdit = input.editedPayload !== undefined
+    const editingAcceptedChapterCard = Boolean(input.accept && hasAuthorEdit && candidate?.status === 'accepted')
     const candidateCanResolve = input.accept
-      ? candidate?.status === 'pending'
+      ? candidate?.status === 'pending' || editingAcceptedChapterCard
       : ['pending', 'stale'].includes(candidate?.status)
     if (!candidate || !candidateCanResolve) throw new Error('候选不存在或已经处理')
     const sourceStep = run.steps.find((item) => item.id === candidate.stepId)
+    const editedPayload = hasAuthorEdit ? candidate.artifactType === 'chapter_card'
+      ? normalizeChapterCardAuthorEdit(input.editedPayload, candidate.payload)
+      : candidate.artifactType === 'foundation_bundle' ? validateFoundationBundle(input.editedPayload)
+      : validateCandidate(sourceStep.task, candidatePayload(sourceStep.task, { structuredOutput: input.editedPayload }, {
+          candidateType: candidate.artifactType, target: sourceStep.input?.target,
+        }), { candidateType: candidate.artifactType }) : null
+    const authorEditEvidence = hasAuthorEdit ? {
+      ...(candidate.evidence || {}),
+      authorEdit: {
+        editedAt: new Date().toISOString(),
+        originalPayload: candidate.evidence?.authorEdit?.originalPayload || candidate.payload,
+        previousPayload: candidate.payload,
+      },
+    } : candidate.evidence
+    let effectiveCandidate = editedPayload ? { ...candidate, payload: editedPayload, evidence: authorEditEvidence } : candidate
+    if (input.accept && candidate.artifactType === 'manuscript') assertProtectedText(effectiveCandidate.payload.manuscript, sourceStep?.input?.patchSource?.protections || [])
     if (input.accept && candidate.artifactType === 'renderer_draft'
       && String(input.currentDraftDigest || '') !== String(sourceStep?.input?.target?.draftDigest || '')) {
       this.repository.markCandidateStale?.(candidate.id, '编辑器草稿已变化，候选已过期')
@@ -452,10 +557,17 @@ export class AgentRuntime {
       throw new Error('当前表单已经修改，候选已标记为过期；可以比较或复制后重新生成')
     }
     if (input.accept) {
-      const currentDigest = await this.currentSourceDigest(run)
-      if (currentDigest !== candidate.sourceDigest) {
+      const currentDigest = await this.currentSourceDigest({ ...run, currentStepId: sourceStep.id })
+      const expected = editingAcceptedChapterCard ? candidate.evidence?.appliedSourceDigest : candidate.sourceDigest
+      if (currentDigest !== expected) {
         this.repository.markCandidateStale?.(candidate.id, '项目源内容已变化，候选已过期')
         throw new Error('项目内容已变化，候选已标记为过期，请重新生成')
+      }
+      if (editingAcceptedChapterCard) {
+        candidate = this.repository.createCandidate({ runId: run.id, stepId: sourceStep.id, projectId: run.projectId,
+          chapterId: run.chapterId, artifactType: candidate.artifactType, sourceDigest: currentDigest,
+          payload: editedPayload, evidence: { ...authorEditEvidence, parentCandidateId: candidate.id, authorRevision: true } })
+        effectiveCandidate = candidate
       }
     }
     let projectWriteApproval = null
@@ -471,6 +583,7 @@ export class AgentRuntime {
           candidateId: candidate.id,
           artifactType: candidate.artifactType,
           sourceDigest: candidate.sourceDigest,
+          authorEdited: hasAuthorEdit,
           applyOptions: input.applyOptions && typeof input.applyOptions === 'object' ? input.applyOptions : {},
         },
       })
@@ -479,7 +592,7 @@ export class AgentRuntime {
     try {
       if (input.accept) await this.applyCandidate({
         run,
-        candidate,
+        candidate: effectiveCandidate,
         reason: input.reason || '',
         applyOptions: input.applyOptions && typeof input.applyOptions === 'object' ? input.applyOptions : {},
       })
@@ -488,7 +601,14 @@ export class AgentRuntime {
       if (projectWriteApproval) this.repository.completeApproval?.(projectWriteApproval.id, { error: error.message })
       throw error
     }
-    this.repository.resolveCandidate({ id: candidate.id, accept: Boolean(input.accept), reason: input.reason || '' })
+    const resolvedEvidence = input.accept ? { ...effectiveCandidate.evidence, appliedSourceDigest: await this.currentSourceDigest({ ...run, currentStepId: sourceStep.id }) } : effectiveCandidate.evidence
+    this.repository.resolveCandidate({
+      id: candidate.id,
+      accept: Boolean(input.accept),
+      reason: input.reason || '',
+      evidence: resolvedEvidence,
+      ...(hasAuthorEdit ? { payload: effectiveCandidate.payload } : {}),
+    })
     const refreshed = this.repository.getRun(run.id)
     const refreshedSourceStep = refreshed.steps.find((item) => item.id === candidate.stepId)
     const checkpoint = refreshed.steps.find((item) => item.position > refreshedSourceStep.position && item.action === 'checkpoint' && item.status === 'waiting_confirmation')
@@ -521,7 +641,9 @@ export class AgentRuntime {
     return this.repository.updateRun(runId, { status: 'paused' })
   }
 
-  async resume(runId, eventContext = null) {
+  async resume(input, eventContext = null) {
+    const runId = typeof input === 'string' ? input : input.runId
+    this._approveLegacy(runId, input?.legacyRuleChoice)
     const run = this.repository.getRun(runId)
     if (!run) throw new Error('AgentRun 不存在')
     if (run.steps.some((step) => step.status === 'interrupted')) throw new Error('当前步骤已中断，请先重试该步骤')
@@ -552,21 +674,31 @@ export class AgentRuntime {
     await this.codexGateway?.closeSession?.(runId)
     this.repository.appendEvent?.({
       agentRunId: runId,
-      type: 'inline_conversation_finished',
-      summary: '作者结束了本次就地 Codex 对话',
+      type: 'inline_connection_released',
+      summary: '作者释放连接，保留创作对话及续接资格',
       payload: { reason: 'author_finished_inline_conversation' },
     })
     const completed = this.repository.updateRun(runId, {
       status: 'completed',
       currentStepId: '',
       completedAt: new Date().toISOString(),
+      connectionReleasedAt: new Date().toISOString(),
       error: '',
     })
     this._emit(runId, 'run_completed', { run: completed, reason: 'author_finished_inline_conversation' })
     return completed
   }
 
-  retryStep({ runId, stepId }, eventContext = null) {
+  _approveLegacy(runId, choice) {
+    const run = this.repository.getRun(runId)
+    if (!run?.legacySnapshot || run.modelRoutes?.legacyRuleChoice === 'continue') return
+    if (choice !== 'continue') throw new Error('此旧运行缺少完整冻结信息。请明确选择继续锁定的旧版规则，或基于正式内容开始新的升级运行。')
+    this.repository.updateRun(runId, { modelRoutes: { ...run.modelRoutes, legacyRuleChoice: 'continue' } })
+    this._emit(runId, 'legacy_rules_confirmed', { packVersion: run.creativePack?.version })
+  }
+
+  retryStep({ runId, stepId, legacyRuleChoice }, eventContext = null) {
+    this._approveLegacy(runId, legacyRuleChoice)
     const run = this.repository.getRun(runId)
     const step = run?.steps.find((item) => item.id === stepId)
     if (!step) throw new Error('AgentStep 不存在')
@@ -579,13 +711,17 @@ export class AgentRuntime {
   }
 
   _failRun(runId, error) {
+    const current = this.repository.getRun(runId)
+    if (['cancelled', 'completed'].includes(current?.status)) return current
     if (error instanceof CodexCancelledError) return this.repository.updateRun(runId, { status: 'paused', error: error.message })
     this._emit(runId, 'run_failed', { error: error.message })
     return this.repository.updateRun(runId, { status: 'failed', error: error.message })
   }
 
   _emit(agentRunId, type, payload = {}) {
-    const event = { agentRunId, type, payload, createdAt: new Date().toISOString() }
+    const event = { agentRunId, projectId:this.repository.getRun(agentRunId)?.projectId || '', type, payload, createdAt: new Date().toISOString() }
+    if (type !== 'codex_event') this.repository.appendEvent?.({ agentRunId, agentStepId:payload.stepId || '', type, summary:type,
+      payload:{ stepId:payload.stepId || '', candidateId:payload.candidate?.id || '', error:payload.error || '' } })
     this.onEvent(event)
     return event
   }

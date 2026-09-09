@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { DatabaseSync } from 'node:sqlite'
+import { createHash } from 'node:crypto'
 import { runMigrations } from '../electron/database-migrations.js'
 import { createQualityRepository } from '../electron/quality-repository.js'
 import { createWorkspaceRepository } from '../electron/workspace-repository.js'
@@ -42,6 +43,7 @@ test('quality reports preserve automatic and human verdicts', () => {
   const report = repository.createReport({
     generationRecordId: 'generation-1', deterministicChecks: [{ id: 'critical', critical: true, passed: true }],
     reviewerProfileId: 'model-1', modelReview: { scores, issues: [], summary: '首稿达到自动门槛' }, execution: 'remote',
+    contextSources: [{ targetKey: 'project:project-1:identity', digest: createHash('sha256').update(JSON.stringify({ title: '项目', genre: '悬疑', idea: '追查病历' })).digest('hex') }],
   })
   assert.equal(report.sameModelReview, true)
   assert.equal(report.aggregate.automaticPassed, true)
@@ -53,6 +55,12 @@ test('quality reports preserve automatic and human verdicts', () => {
   const reviewed = repository.addHumanReview({ reportId: report.id, scores, notes: '盲评通过' })
   assert.equal(reviewed.aggregate.finalPassed, true)
   assert.equal(reviewed.aggregate.verdict, 'pass_first_try')
+  database.prepare("UPDATE projects SET style='更自然' WHERE id='project-1'").run()
+  assert.equal(repository.getReport(report.id).aggregate.finalPassed, true)
+  database.prepare("UPDATE projects SET idea='改变核心设定' WHERE id='project-1'").run()
+  assert.ok(repository.getReport(report.id).aggregate.stale)
+  assert.equal(Boolean(repository.getReport(report.id).aggregate.finalPassed), false)
+  assert.equal(repository.addHumanReview({ reportId: report.id, scores, notes: '评分不能使来源过期的报告恢复有效' }).aggregate.finalPassed, false)
   database.close()
 })
 

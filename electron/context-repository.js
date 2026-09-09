@@ -1,3 +1,6 @@
+import { buildCreativeContext } from './creative-context.js'
+import { COMPACT_HANDOFF_MODE } from './chapter-handoff.js'
+
 const PROFILE_DEFAULTS = Object.freeze({
   maxContextChars: 32000,
   recentChapterCount: 3,
@@ -176,6 +179,7 @@ export function createContextRepository(database, { now = () => new Date().toISO
     try {
       for (const chapter of chapters) {
         const current = existing.get(chapter.id)
+        if (current?.confirmed) continue // Saving prose marks review pending; never replaces an accepted handoff.
         if (!force && current?.source_updated_at === chapter.updated_at) continue
         const summary = summaryFor(chapter, profile.chapterSummaryChars)
         const keywords = termsFor(`${chapter.title}\n${summary}`)
@@ -309,9 +313,12 @@ export function createContextRepository(database, { now = () => new Date().toISO
   }
 
   function buildGenerationContext(input = {}) {
+    if (input.task === 'chapter_state_extract' && input.chapterStateMode === COMPACT_HANDOFF_MODE) return buildCreativeContext(database, input)
     const projectId = String(input.projectId || '')
     const project = assertProject(projectId)
     const profile = ensureProfile(projectId)
+    const pack = database.prepare('SELECT pack_version FROM project_pack_bindings WHERE project_id = ?').get(projectId)
+    if (input.creativePackVersion === '1.3.0' || (!input.creativePackVersion && pack?.pack_version === '1.3.0')) return buildCreativeContext(database, { ...input, budget: profile.maxContextChars })
     const memories = syncChapterMemories(projectId)
     const chapters = database.prepare('SELECT * FROM chapters WHERE project_id = ? ORDER BY chapter_no').all(projectId)
     const chapter = chapters.find((item) => item.id === input.chapterId) || chapters[0]

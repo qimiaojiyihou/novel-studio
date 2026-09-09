@@ -108,6 +108,63 @@ test('Agent runtime generates candidates without changing accepted project conte
   database.close()
 })
 
+test('author-edited chapter cards are validated, persisted and remain editable after acceptance', async () => {
+  const { database, repository, runtime } = setup()
+  const started = await runtime.startInline({
+    projectId: 'project-1',
+    chapterId: 'chapter-1',
+    task: 'chapter_card',
+    executionMode: 'app_model',
+    target: { kind: 'chapter_card', targetId: 'chapter-1', fieldLabel: '章节卡' },
+  })
+  const waiting = await waitFor(() => {
+    const current = repository.getRun(started.id)
+    return current.status === 'waiting_confirmation' ? current : null
+  })
+  const candidate = waiting.candidates[0]
+  const edited = {
+    ...candidate.payload,
+    goal: '在闭馆前拿到被修改的登录日志',
+    requiredScenes: [{ id: 'S1', title: '档案室', goal: '复制登录日志', result: '拿到日志但被保安认出' }],
+  }
+  await assert.rejects(() => runtime.confirmCandidate({
+    runId: waiting.id,
+    candidateId: candidate.id,
+    accept: true,
+    editedPayload: { ...edited, resistance: '' },
+  }), /主要阻力/)
+  assert.equal(repository.getRun(waiting.id).candidates[0].status, 'pending')
+  assert.deepEqual(JSON.parse(database.prepare("SELECT card_json FROM chapters WHERE id = 'chapter-1'").get().card_json), {})
+
+  let run = await runtime.confirmCandidate({
+    runId: waiting.id,
+    candidateId: candidate.id,
+    accept: true,
+    editedPayload: edited,
+  })
+  let saved = run.candidates.find((item) => item.id === candidate.id)
+  assert.equal(saved.status, 'accepted')
+  assert.equal(saved.payload.goal, edited.goal)
+  assert.equal(saved.evidence.authorEdit.originalPayload.goal, candidate.payload.goal)
+  assert.equal(JSON.parse(database.prepare("SELECT card_json FROM chapters WHERE id = 'chapter-1'").get().card_json).goal, edited.goal)
+
+  const secondEdit = { ...saved.payload, payoff: '日志时间证明公司通知晚于解约决定' }
+  run = await runtime.confirmCandidate({
+    runId: waiting.id,
+    candidateId: candidate.id,
+    accept: true,
+    editedPayload: secondEdit,
+    reason: '作者补充回报',
+  })
+  assert.equal(run.candidates.find(item => item.id === candidate.id).payload.payoff, edited.payoff)
+  saved = run.candidates.find((item) => item.evidence.parentCandidateId === candidate.id)
+  assert.equal(saved.status, 'accepted')
+  assert.equal(saved.payload.payoff, secondEdit.payoff)
+  assert.equal(saved.evidence.authorEdit.originalPayload.goal, candidate.payload.goal)
+  assert.equal(JSON.parse(database.prepare("SELECT card_json FROM chapters WHERE id = 'chapter-1'").get().card_json).payoff, secondEdit.payoff)
+  database.close()
+})
+
 test('project initialization produces one structured foundation candidate before any write', async () => {
   const { database, repository, runtime } = setup()
   const started = await runtime.start({
@@ -156,21 +213,22 @@ test('structured candidates retry with a repair request and keep one Agent step 
   assert.equal(generationStep.attemptCount, 2)
   assert.equal(generationStep.generationRecordId, '')
   assert.equal(run.candidates.filter((candidate) => candidate.artifactType === 'chapter_card').length, 1)
+  const retryEvent = run.events.find((event) => event.type === 'structured_retry')
+  assert.equal(retryEvent.agentStepId, generationStep.id)
+  assert.equal(retryEvent.payload.attempt, 2)
   database.close()
 })
 
-test('chapter candidates must satisfy the AgentRun manuscript length contract', () => {
+test('chapter length is an editorial finding, not a structural retry', () => {
   assert.deepEqual(manuscriptLengthRange(3000), { target: 3000, minimum: 2700, maximum: 3600 })
   assert.equal(manuscriptCharacterCount('一段正文。\n\n第二段。'), 7)
-  assert.throws(
-    () => validateCandidate('chapter', { manuscript: '太短。' }, { targetLength: 3000 }),
-    /目标 3000，必须落在 2700–3600 之间/,
-  )
+  assert.equal(validateCandidate('chapter', { manuscript: '太短。' }, { targetLength: 3000 }).manuscript, '太短。')
   assert.equal(validateCandidate('chapter', { manuscript: '字'.repeat(3000) }, { targetLength: 3000 }).manuscript.length, 3000)
 })
 
 test('quality review links its persisted report to the Agent step', async () => {
   const updates = []
+  const events = []
   const run = {
     id: 'run-quality', projectId: 'project-1', chapterId: 'chapter-1', executionMode: 'app_model',
     candidates: [{ id: 'candidate-1', artifactType: 'manuscript', status: 'pending', payload: { manuscript: '正文' }, evidence: {} }],
@@ -178,6 +236,7 @@ test('quality review links its persisted report to the Agent step', async () => 
   const step = { id: 'step-quality', task: 'quality_review', attemptCount: 0 }
   const runtime = new AgentRuntime({
     repository: {
+      getRun: () => run,
       updateStep: (id, input) => { updates.push({ id, input }); return input },
       updateRun: () => run,
     },
@@ -188,10 +247,12 @@ test('quality review links its persisted report to the Agent step', async () => 
     runPreflight: async () => ({}),
     applyCandidate: async () => {},
     currentSourceDigest: async () => '',
+    onEvent: event => events.push(event),
   })
   await runtime._executeQualityStep({ run, step, mirror: null, eventContext: null })
   assert.equal(updates.at(-1).input.qualityReportId, 'quality-1')
   assert.equal(updates.at(-1).input.status, 'completed')
+  assert.equal(events.at(-1).projectId, 'project-1')
 })
 
 test('completed AgentRun emits a terminal event for immediate UI refresh', async () => {

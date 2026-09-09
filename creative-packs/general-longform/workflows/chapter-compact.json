@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "chapter-compact",
+  "name": "精简逐章创作（场景按需）",
+  "steps": [
+    { "id": "preflight", "action": "preflight" },
+    { "id": "chapter-card", "action": "generate", "task": "chapter_card", "candidateType": "chapter_card", "dependsOn": ["preflight"] },
+    { "id": "confirm-card", "action": "checkpoint", "dependsOn": ["chapter-card"] },
+    { "id": "chapter-draft", "action": "generate", "task": "chapter", "candidateType": "manuscript", "dependsOn": ["confirm-card"] },
+    { "id": "confirm-draft", "action": "checkpoint", "dependsOn": ["chapter-draft"] }
+  ]
+}

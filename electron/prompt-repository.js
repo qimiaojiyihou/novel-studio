@@ -482,13 +482,19 @@ export function createPromptRepository(database, {
       input.agentRunId || null,
       input.agentStepId || null,
     )
+    if (input.agentStepId) database.prepare('UPDATE agent_steps SET prompt_snapshot_json=? WHERE id=?').run(JSON.stringify(snapshot), input.agentStepId)
     return mapGenerationRecord(database.prepare('SELECT * FROM generation_records WHERE id = ?').get(id))
   }
 
-  function finishGenerationRecord({ id, status, parameters = {}, output = '', error = '', attemptCount = 1, events = [], executionBackend = '' }) {
+  function finishGenerationRecord({ id, status, parameters = {}, output = '', error = '', attemptCount = 1, events = [], executionBackend = '', executionSnapshot }) {
     if (!['completed', 'cancelled', 'failed'].includes(status)) throw new Error('生成记录状态不受支持')
     const current = database.prepare('SELECT * FROM generation_records WHERE id = ?').get(id)
     if (!current) throw new Error('生成记录不存在')
+    if (executionSnapshot) {
+      const snapshot = { ...parseJson(current.prompt_snapshot_json), execution: executionSnapshot }
+      database.prepare('UPDATE generation_records SET prompt_snapshot_json=? WHERE id=?').run(JSON.stringify(snapshot), id)
+      if (current.agent_step_id) database.prepare('UPDATE agent_steps SET prompt_snapshot_json=? WHERE id=?').run(JSON.stringify(snapshot), current.agent_step_id)
+    }
     database.prepare(`
       UPDATE generation_records
       SET status = ?, parameters_json = ?, output_text = ?, error = ?, attempt_count = ?, events_json = ?,

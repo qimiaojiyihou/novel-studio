@@ -1,11 +1,21 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { inlineTargetKey, normalizeInlineCreativeAction } from './inline-creative.js'
+import { INLINE_CONVERSATION_STEP_LIMIT, inlineTargetKey, normalizeInlineCreativeAction } from './inline-creative.js'
 import { cleanPlanningFieldText } from './generated-text.js'
+import { createPromptRepository } from './prompt-repository.js'
+import { contentDigest } from './chapter-finalization.js'
 import { buildPlanningChapterBundleTarget, buildPlanningDocumentBundleTarget, buildPlanningEntityBundleTarget } from './planning-bundle.js'
 
 const EVENT_TOOL_OUTPUT_LIMIT = 64 * 1024
 const RUN_EVENT_LIMIT = 5 * 1024 * 1024
 const SECRET_KEY_PATTERN = /(api[-_]?key|authorization|token|secret|cookie|credential|request[-_]?headers?)/i
+const ACTIVE_INLINE_STEP_STATUSES = new Set(['pending', 'running', 'waiting_approval', 'interrupted'])
+
+function requestedRoutesMatch(lockedRoutes = {}, requestedRoutes = {}) {
+  return Object.entries(requestedRoutes || {}).every(([key, value]) => {
+    if (value === undefined) return true
+    return JSON.stringify(lockedRoutes?.[key]) === JSON.stringify(value)
+  })
+}
 
 function parseJson(value, fallback = {}) {
   try { return value ? JSON.parse(value) : fallback } catch { return fallback }
@@ -37,6 +47,10 @@ function mapRun(row) {
       digest: row.creative_pack_digest,
     },
     modelRoutes: parseJson(row.model_routes_json),
+    frozenContext: parseJson(row.frozen_context_json),
+    legacySnapshot: !row.frozen_context_json || row.frozen_context_json === '{}',
+    connectionReleasedAt: row.connection_released_at || '',
+    parentRunId: row.parent_run_id || '',
     executionMode: row.execution_mode,
     actualBackend: row.actual_backend,
     fallbackReason: row.fallback_reason,
@@ -63,6 +77,7 @@ function mapStep(row) {
     attemptCount: Number(row.attempt_count),
     dependsOn: parseJson(row.depends_on_json, []),
     input: parseJson(row.input_json),
+    promptSnapshot: parseJson(row.prompt_snapshot_json),
     output: parseJson(row.output_json),
     generationRecordId: row.generation_record_id || '',
     qualityReportId: row.quality_report_id || '',
@@ -184,7 +199,7 @@ export function createCodexRepository(database, {
       input.enabled === undefined ? Number(current.enabled) : Number(Boolean(input.enabled)),
       input.preferredBackend || current.preferredBackend,
       input.model === undefined ? current.model : String(input.model || '').trim(),
-      input.reasoningEffort || current.reasoningEffort,
+      input.reasoningEffort ?? current.reasoningEffort,
       input.fastMode === undefined ? Number(current.fastMode) : Number(Boolean(input.fastMode)),
       input.authMethod || current.authMethod,
       updatedAt,
@@ -238,6 +253,7 @@ export function createCodexRepository(database, {
       database.exec('ROLLBACK')
       throw error
     }
+    freezeRun(id)
     return getRun(id)
   }
 
@@ -283,14 +299,12 @@ export function createCodexRepository(database, {
     if (project.archived_at) throw new Error('归档项目需要先恢复才能启动 AI 任务')
     assertInlineTargetOwnership(input.projectId, action.target)
     const activeRows = database.prepare(`
-      SELECT run.id, step.input_json FROM agent_runs run
+      SELECT run.id, run.execution_mode, run.status, step.input_json FROM agent_runs run
       JOIN agent_steps step ON step.run_id = run.id AND step.position = 1
       WHERE run.project_id = ? AND run.workflow_id = 'inline-action'
-        AND run.status IN ('pending', 'waiting_approval', 'running', 'waiting_confirmation', 'paused')
+        AND run.status IN ('pending', 'waiting_approval', 'running', 'waiting_confirmation', 'paused', 'completed')
       ORDER BY run.updated_at DESC, run.rowid DESC
     `).all(input.projectId)
-    const existing = activeRows.find((row) => parseJson(row.input_json)?.targetKey === action.targetKey)
-    if (existing) return { ...getRun(existing.id), focusedExisting: true }
     if (action.target.kind === 'planning_document_bundle') {
       const document = database.prepare('SELECT * FROM planning_documents WHERE project_id = ? AND kind = ?').get(input.projectId, action.target.targetId)
       const target = buildPlanningDocumentBundleTarget(document, action.target)
@@ -315,6 +329,49 @@ export function createCodexRepository(database, {
     if (!binding) throw new Error('项目尚未绑定 Creative Pack')
     const pack = parseJson(binding.content_json)
     if (!pack.manifest?.tasks?.includes(action.task)) throw new Error(`Creative Pack 未声明任务 ${action.task}`)
+
+    const exactExisting = input.freshStart ? null : activeRows.find((row) => {
+      const prior = parseJson(row.input_json)
+      return prior.targetKey === action.targetKey
+        && (row.execution_mode === action.requestedExecutionMode || row.status !== 'completed')
+    })
+    if (exactExisting) {
+      const previous = getRun(exactExisting.id)
+      const withinScopeLimit = previous.steps.length < Number(action.conversationScope.maxSteps || INLINE_CONVERSATION_STEP_LIMIT)
+      if (exactExisting.status !== 'completed'
+        || (action.conversationScope.reusable && withinScopeLimit && requestedRoutesMatch(previous.modelRoutes, input.modelRoutes))) {
+        return { ...previous, focusedExisting: true }
+      }
+    }
+
+    const existing = input.freshStart || !action.conversationScope.reusable ? null : activeRows.find((row) => {
+      if (row.execution_mode !== action.requestedExecutionMode) return false
+      const prior = parseJson(row.input_json)
+      if (!prior.conversationScope?.reusable || prior.conversationScope.key !== action.conversationScope.key) return false
+      const previous = getRun(row.id)
+      const maxSteps = Math.min(
+        Number(action.conversationScope.maxSteps || INLINE_CONVERSATION_STEP_LIMIT),
+        Number(prior.conversationScope.maxSteps || INLINE_CONVERSATION_STEP_LIMIT),
+      )
+      return previous.steps.length < maxSteps
+        && !previous.steps.some((step) => ACTIVE_INLINE_STEP_STATUSES.has(step.status))
+        && !previous.candidates.some((candidate) => candidate.status === 'pending')
+        && requestedRoutesMatch(previous.modelRoutes, input.modelRoutes)
+    })
+
+    if (existing) {
+      const previous = getRun(existing.id)
+      if (!getRunPack(previous.id)?.manifest?.tasks?.includes(action.task)) throw new Error('此会话锁定的旧能力包未声明本任务，请完全重新开始')
+      const stepId = createId('agent-step'), position = Math.max(...previous.steps.map(step => step.position)) + 1, stamp = now()
+      database.exec('BEGIN IMMEDIATE')
+      try {
+        database.prepare(`INSERT INTO agent_steps (id, run_id, step_key, position, action, task, candidate_type, status, depends_on_json, input_json, created_at, updated_at)
+          VALUES (?, ?, ?, ?, 'generate', ?, ?, 'pending', '[]', ?, ?, ?)`).run(stepId, previous.id, `inline-target-${position}`, position, action.task, action.candidateType, JSON.stringify(action), stamp, stamp)
+        database.prepare("UPDATE agent_runs SET status='pending', current_step_id=?, connection_released_at='', completed_at='', error='', updated_at=? WHERE id=?").run(stepId, stamp, previous.id)
+        database.exec('COMMIT')
+      } catch (error) { database.exec('ROLLBACK'); throw error }
+      return getRun(previous.id)
+    }
 
     const id = createId('agent-run')
     const stepId = createId('agent-step')
@@ -341,6 +398,7 @@ export function createCodexRepository(database, {
       database.exec('ROLLBACK')
       throw error
     }
+    freezeRun(id)
     return getRun(id)
   }
 
@@ -349,9 +407,6 @@ export function createCodexRepository(database, {
     if (!run || run.workflowId !== 'inline-action') throw new Error('就地 Codex 对话不存在')
     if (run.executionMode !== 'codex') throw new Error('当前就地任务不是 Codex 会话')
     if (run.status === 'cancelled') throw new Error('已取消的 Codex 对话不能继续修改')
-    if (run.events.some((event) => event.type === 'inline_conversation_finished')) {
-      throw new Error('这次 Codex 对话已经结束，请从原字段重新发起')
-    }
     const instruction = String(input.instruction || '').trim().slice(0, 20000)
     if (!instruction) throw new Error('请先说明希望 Codex 怎样修改')
     const activeStep = run.steps.find((step) => ['pending', 'waiting_approval', 'running', 'interrupted'].includes(step.status))
@@ -364,6 +419,10 @@ export function createCodexRepository(database, {
     if (!parentCandidate) throw new Error('当前对话还没有可修改的候选内容')
     const parentStep = run.steps.find((step) => step.id === parentCandidate.stepId)
     if (!parentStep) throw new Error('候选来源步骤不存在')
+    if (input.mode !== 'discuss' && parentCandidate.artifactType === 'manuscript' && parentCandidate.status === 'accepted') {
+      const manuscript = database.prepare('SELECT manuscript FROM chapters WHERE id=?').get(run.chapterId)?.manuscript || ''
+      if (manuscript !== parentCandidate.payload.manuscript) throw new Error('正式正文已在别处修改。旧版仅供比较；请基于当前编辑稿重新开始修改。')
+    }
 
     const position = Math.max(0, ...run.steps.map((step) => Number(step.position || 0))) + 1
     const stepId = createId('agent-step')
@@ -383,6 +442,14 @@ export function createCodexRepository(database, {
       ...parentStep.input,
       target,
       instruction,
+      conversationMode: input.mode === 'discuss' ? 'discuss' : 'modify',
+      modificationScope: ['selection', 'scene', 'whole'].includes(input.scope?.kind) ? input.scope : { kind: 'related' },
+      patchSource: parentCandidate.artifactType === 'manuscript' ? {
+        digest: contentDigest(parentCandidate.payload.manuscript || ''),
+        text: String(parentCandidate.payload.manuscript || ''),
+        protections: database.prepare('SELECT * FROM manuscript_protections WHERE chapter_id = ? AND source_digest = ? AND active = 1')
+          .all(run.chapterId, contentDigest(parentCandidate.payload.manuscript || '')),
+      } : null,
       revision: {
         round: position,
         instruction,
@@ -393,7 +460,7 @@ export function createCodexRepository(database, {
 
     database.exec('BEGIN IMMEDIATE')
     try {
-      database.prepare(`
+      if (stepInput.conversationMode !== 'discuss') database.prepare(`
         UPDATE agent_candidates SET status = 'stale', override_reason = ?, resolved_at = ?
         WHERE run_id = ? AND status = 'pending'
       `).run('已有更新的 Codex 修改稿', createdAt, run.id)
@@ -410,6 +477,9 @@ export function createCodexRepository(database, {
         ) VALUES (?, ?, ?, ?, 'generate', ?, ?, 'pending', '[]', ?, ?, ?)
       `).run(stepId, run.id, `inline-revision-${position}`, position, parentStep.task,
         parentStep.candidateType, JSON.stringify(stepInput), createdAt, createdAt)
+      database.prepare(`INSERT INTO creative_messages (id, project_id, run_id, step_id, role, mode, content, source_digest, created_at)
+        VALUES (?, ?, ?, ?, 'user', ?, ?, ?, ?)`).run(createId('creative-message'), run.projectId, run.id, stepId,
+          stepInput.conversationMode, instruction, stepInput.patchSource?.digest || '', createdAt)
       database.prepare(`
         UPDATE agent_runs SET status = 'pending', current_step_id = ?, error = '',
           completed_at = '', updated_at = ? WHERE id = ?
@@ -454,6 +524,7 @@ export function createCodexRepository(database, {
       session: mapSession(database.prepare('SELECT * FROM agent_sessions WHERE agent_run_id = ?').get(id)),
       approvals: database.prepare('SELECT * FROM bridge_action_requests WHERE agent_run_id = ? ORDER BY created_at DESC, rowid DESC').all(id).map(mapApproval),
       events: includeEvents ? listEvents(id) : [],
+      messages: database.prepare('SELECT * FROM creative_messages WHERE run_id = ? ORDER BY created_at, rowid').all(id),
     }
   }
 
@@ -467,9 +538,21 @@ export function createCodexRepository(database, {
     return row ? parseJson(row.content_json) : null
   }
 
+  function freezeRun(id) {
+    const run = getRun(id)
+    const pack = getRunPack(id)
+    const prompts = createPromptRepository(database)
+    const contexts = Object.fromEntries((pack?.manifest?.tasks || []).map(task => [task,
+      prompts.resolvePromptContext({ projectId: run.projectId, chapterId: run.chapterId, task })]))
+    database.prepare('UPDATE agent_runs SET frozen_context_json = ? WHERE id = ?')
+      .run(JSON.stringify({ schemaVersion: 7, compilerVersion: 'creative-compiler-7', prompts: contexts }), id)
+  }
+
   function updateRun(id, patch = {}) {
     const current = runById.get(id)
     if (!current) throw new Error('AgentRun 不存在')
+    if (patch.modelRoutes) database.prepare('UPDATE agent_runs SET model_routes_json = ? WHERE id = ?').run(JSON.stringify(patch.modelRoutes), id)
+    if (patch.connectionReleasedAt !== undefined) database.prepare('UPDATE agent_runs SET connection_released_at = ? WHERE id = ?').run(String(patch.connectionReleasedAt), id)
     const values = {
       executionMode: patch.executionMode ?? current.execution_mode,
       actualBackend: patch.actualBackend ?? current.actual_backend,
@@ -524,6 +607,22 @@ export function createCodexRepository(database, {
     if (!step || !run || step.run_id !== run.id) throw new Error('候选与 Agent 步骤不匹配')
     if (run.project_id !== input.projectId) throw new Error('候选与 AgentRun 不属于同一项目')
     const id = createId('agent-candidate')
+    const stepInput = parseJson(step.input_json)
+    const manuscript = input.payload?.manuscript
+    const protections = stepInput.patchSource?.protections || []
+    if (typeof manuscript === 'string' && protections.length) {
+      let offset = 0
+      for (const protection of protections.slice().sort((a, b) => a.start_offset - b.start_offset)) {
+        const start = manuscript.indexOf(protection.text, offset)
+        if (start < 0) throw new Error('新稿改变了保留段落，请先取消保护或缩小修改范围')
+        offset = start + protection.text.length
+        const newDigest = contentDigest(manuscript)
+        if (!database.prepare('SELECT id FROM manuscript_protections WHERE chapter_id=? AND source_digest=? AND start_offset=? AND active=1').get(run.chapter_id, newDigest, start)) {
+          database.prepare(`INSERT INTO manuscript_protections (id,project_id,chapter_id,source_digest,start_offset,end_offset,text,created_at) VALUES (?,?,?,?,?,?,?,?)`)
+            .run(createId('protection'), run.project_id, run.chapter_id, newDigest, start, offset, protection.text, now())
+        }
+      }
+    }
     database.prepare(`
       INSERT INTO agent_candidates (
         id, run_id, step_id, project_id, chapter_id, artifact_type, status,
@@ -532,7 +631,19 @@ export function createCodexRepository(database, {
     `).run(id, run.id, step.id, run.project_id, input.chapterId || run.chapter_id || null,
       input.artifactType || step.candidate_type || 'artifact', input.sourceDigest,
       stringifyRedacted(input.payload), stringifyRedacted(input.evidence), now())
+    if (Array.isArray(input.payload?.patches)) database.prepare(`INSERT INTO creative_patches
+      (id, project_id, run_id, candidate_id, source_digest, scope_json, patches_json, status, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)`).run(createId('patch'), run.project_id, run.id, id,
+        input.payload.sourceDigest, JSON.stringify(parseJson(step.input_json, {}).modificationScope || {}), JSON.stringify(input.payload.patches), now())
     return mapCandidate(candidateById.get(id))
+  }
+
+  function saveDiscussion({ runId, stepId, text }) {
+    const run = runById.get(runId)
+    const step = stepById.get(stepId)
+    if (!run || step?.run_id !== runId) throw new Error('讨论来源不匹配')
+    database.prepare(`INSERT INTO creative_messages (id, project_id, run_id, step_id, role, mode, content, created_at)
+      VALUES (?, ?, ?, ?, 'assistant', 'discuss', ?, ?)`).run(createId('message'), run.project_id, runId, stepId, String(text), now())
   }
 
   function resolveCandidate(input = {}) {
@@ -546,8 +657,15 @@ export function createCodexRepository(database, {
     const resolvedAt = now()
     database.exec('BEGIN IMMEDIATE')
     try {
-      database.prepare('UPDATE agent_candidates SET status = ?, override_reason = ?, resolved_at = ? WHERE id = ?')
-        .run(status, String(input.reason || ''), resolvedAt, candidate.id)
+      database.prepare('UPDATE agent_candidates SET status = ?, override_reason = ?, payload_json = ?, evidence_json = ?, resolved_at = ? WHERE id = ?')
+        .run(
+          status,
+          String(input.reason || ''),
+          input.payload === undefined ? candidate.payload_json : stringifyRedacted(input.payload),
+          input.evidence === undefined ? candidate.evidence_json : stringifyRedacted(input.evidence),
+          resolvedAt,
+          candidate.id,
+        )
       database.prepare('UPDATE agent_steps SET status = ?, completed_at = ?, updated_at = ? WHERE id = ?')
         .run(input.accept ? 'confirmed' : 'rejected', resolvedAt, resolvedAt, candidate.step_id)
       if (!input.accept) {
@@ -568,6 +686,24 @@ export function createCodexRepository(database, {
       database.exec('ROLLBACK')
       throw error
     }
+    return mapCandidate(candidateById.get(candidate.id))
+  }
+
+  function updateResolvedCandidate(input = {}) {
+    const candidate = candidateById.get(input.id)
+    if (!candidate) throw new Error('候选不存在')
+    if (candidate.status !== 'accepted') throw new Error('只有已接受候选可以保存作者修改')
+    database.prepare(`
+      UPDATE agent_candidates
+      SET payload_json = ?, evidence_json = ?, override_reason = ?, resolved_at = ?
+      WHERE id = ?
+    `).run(
+      stringifyRedacted(input.payload),
+      stringifyRedacted(input.evidence),
+      String(input.reason || candidate.override_reason || ''),
+      now(),
+      candidate.id,
+    )
     return mapCandidate(candidateById.get(candidate.id))
   }
 
@@ -685,35 +821,43 @@ export function createCodexRepository(database, {
     return mapApproval(approvalById.get(id))
   }
 
-  function expireApprovals() {
+  function expireApprovals({ id = '', projectId = '', agentRunId = '' } = {}) {
     const resolvedAt = now()
+    const clauses = [], values = []
+    for (const [column,value] of [['id',id],['project_id',projectId],['agent_run_id',agentRunId]]) {
+      if (value) { clauses.push(`${column} = ?`); values.push(value) }
+    }
     database.prepare(`
       UPDATE bridge_action_requests SET status = 'expired', resolved_at = ?
-      WHERE status = 'pending' AND expires_at <= ?
-    `).run(resolvedAt, resolvedAt)
+      WHERE status = 'pending' AND expires_at <= ? ${clauses.length ? `AND ${clauses.join(' AND ')}` : ''}
+    `).run(resolvedAt, resolvedAt, ...values)
   }
 
-  function listApprovals({ projectId = '', agentRunId = '', status = '', limit = 100 } = {}) {
-    expireApprovals()
+  function listApprovals({ projectId = '', agentRunId = '', status = '', limit = 100, readOnly = false } = {}) {
+    if (!readOnly) expireApprovals({projectId,agentRunId})
     const clauses = []
     const values = []
     if (projectId) { clauses.push('project_id = ?'); values.push(projectId) }
     if (agentRunId) { clauses.push('agent_run_id = ?'); values.push(agentRunId) }
-    if (status) { clauses.push('status = ?'); values.push(status) }
+    if (status) {
+      clauses.push(readOnly ? "(CASE WHEN status='pending' AND expires_at <= ? THEN 'expired' ELSE status END) = ?" : 'status = ?')
+      if (readOnly) values.push(now())
+      values.push(status)
+    }
     values.push(Math.max(1, Math.min(500, Number(limit || 100))))
     return database.prepare(`
       SELECT * FROM bridge_action_requests ${clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''}
       ORDER BY created_at DESC, rowid DESC LIMIT ?
-    `).all(...values).map(mapApproval)
+    `).all(...values).map(row=>mapApproval(readOnly && row.status==='pending' && row.expires_at<=now() ? {...row,status:'expired'} : row))
   }
 
   function getApproval(id) {
-    expireApprovals()
+    expireApprovals({id})
     return mapApproval(approvalById.get(id))
   }
 
   function resolveApproval(input = {}) {
-    expireApprovals()
+    expireApprovals({id:input.id})
     const current = approvalById.get(input.id)
     if (!current) throw new Error('审批请求不存在')
     if (current.status !== 'pending') throw new Error(`审批请求已经是 ${current.status}`)
@@ -751,7 +895,9 @@ export function createCodexRepository(database, {
     updateRun,
     updateStep,
     createCandidate,
+    saveDiscussion,
     resolveCandidate,
+    updateResolvedCandidate,
     markCandidateStale,
     cancelPendingCandidates,
     upsertSession,

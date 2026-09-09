@@ -3,6 +3,8 @@ import { toIpcPayload } from '../utils/ipc-payload.js'
 const electronApi = window.novelStudio
 
 export const appService = {
+  creativePreferences(payload) { return electronApi.creativePreferences(payload) },
+  upgradeCreativePack(payload) { return electronApi.upgradeCreativePack(payload) },
   loadWorkspace(projectId) {
     return electronApi.loadWorkspace(projectId)
   },
@@ -219,9 +221,21 @@ export const appService = {
   cancelCodexAuth() {
     return electronApi.cancelCodexAuth()
   },
-  testCodex() {
-    return electronApi.testCodex()
+  testCodex(payload) {
+    return electronApi.testCodex(payload)
   },
+  getCodexModels(payload) { return electronApi.getCodexModels(payload) },
+  listStyleSamples(payload) { return electronApi.listStyleSamples(payload) },
+  saveStyleSample(payload) { return electronApi.saveStyleSample(payload) },
+  listProtections(payload) { return electronApi.listProtections(payload) },
+  protectText(payload) { return electronApi.protectText(payload) },
+  startChapterFinalization(payload) { return electronApi.startChapterFinalization(payload) },
+  getChapterFinalization(payload) { return electronApi.getChapterFinalization(payload) },
+  confirmChapterFinalization(payload) { return electronApi.confirmChapterFinalization(payload) },
+  previewChapterAmendment(payload) { return electronApi.previewChapterAmendment(payload) },
+  confirmChapterAmendment(payload) { return electronApi.confirmChapterAmendment(payload) },
+  previewManualFinalization(payload) { return electronApi.previewManualFinalization(payload) },
+  confirmManualFinalization(payload) { return electronApi.confirmManualFinalization(payload) },
   restartCodexAdapter() {
     return electronApi.restartCodexAdapter()
   },
@@ -262,10 +276,10 @@ export const appService = {
     return electronApi.cancelAgentRun(runId)
   },
   confirmAgentCandidate(payload) {
-    return electronApi.confirmAgentCandidate(payload)
+    return electronApi.confirmAgentCandidate(toIpcPayload(payload, 'Agent 候选确认'))
   },
   rejectAgentCandidate(payload) {
-    return electronApi.rejectAgentCandidate(payload)
+    return electronApi.rejectAgentCandidate(toIpcPayload(payload, 'Agent 候选放弃'))
   },
   retryAgentStep(payload) {
     return electronApi.retryAgentStep(payload)
@@ -291,6 +305,8 @@ export const appService = {
   onApprovalEvent(callback) {
     return electronApi.onApprovalEvent(callback)
   },
+  onCreativeChange(callback) { return electronApi.onCreativeChange?.(callback) },
+  loadWorkspaceSnapshot(projectId) { return electronApi.loadWorkspaceSnapshot(projectId) },
   startGeneration(payload, onEvent = () => {}) {
     const taskId = globalThis.crypto?.randomUUID?.() || `task-${Date.now()}-${Math.random().toString(16).slice(2)}`
     const unsubscribe = electronApi.onGenerationEvent((event) => {

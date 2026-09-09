@@ -714,6 +714,10 @@ export function createAgentCandidate(input) {
   return codexStore().createCandidate(input)
 }
 
+export function saveAgentDiscussion(input) {
+  return codexStore().saveDiscussion(input)
+}
+
 export function resolveAgentCandidate(input) {
   return codexStore().resolveCandidate(input)
 }

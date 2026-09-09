@@ -25,7 +25,8 @@
       </aside>
 
       <main class="prompt-sheet">
-        <template v-if="mode === 'templates'">
+        <AuthorStyleSamples v-if="mode === 'samples'" :project-id="project.id" :chapter-id="activeChapterId" />
+        <template v-else-if="mode === 'templates'">
           <div class="prompt-sheet-heading"><div><span class="eyebrow copper">TASK TEMPLATE</span><h2>任务模板</h2><p>内置模板保持只读；从它保存时会建立一份可继续迭代的自定义模板。</p></div><button class="prompt-add" @click="newTemplate">＋ 新建模板</button></div>
           <div class="prompt-edit-layout">
             <nav class="prompt-library-list">
@@ -96,6 +97,7 @@
 </template>
 
 <script setup>
+import AuthorStyleSamples from './AuthorStyleSamples.vue'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { appService } from '../services/app-service.js'
 import CreativeExecutionControl from './CreativeExecutionControl.vue'
@@ -123,6 +125,7 @@ const addonDraft = reactive({ id: '', name: '', category: '自定义', kind: 'us
 let previewTimer = null
 
 const modes = [
+  { id: 'samples', mark: '文', label: '认可片段', hint: '作者声音，独立于故事事实' },
   { id: 'templates', mark: 'T', label: '任务模板', hint: '定义每类生成做什么' },
   { id: 'styles', mark: 'S', label: '三级文风', hint: '项目、分卷与章节继承' },
   { id: 'addons', mark: '+', label: '叠加插件', hint: '按需增加写作要求' },

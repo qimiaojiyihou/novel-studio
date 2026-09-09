@@ -118,7 +118,7 @@ test('project backup restores a new internally consistent project without creden
   try {
     const backup = createProjectBackup(database, 'project-1', { now: () => NOW })
     assert.equal(backup.format, 'novel-studio-project')
-    assert.equal(backup.version, 5)
+    assert.equal(backup.version, 8)
     assert.equal(backup.data.project.default_execution_mode, 'app_model')
     assert.equal(backup.data.tables.chapters.length, 2)
     assert.equal(backup.data.tables.quality_reports.length, 1)

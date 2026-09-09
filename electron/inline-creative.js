@@ -1,4 +1,5 @@
 const INLINE_ACTION_SCHEMA_VERSION = 1
+export const INLINE_CONVERSATION_STEP_LIMIT = 8
 
 const TARGET_TASKS = Object.freeze({
   planning_document: ['planning_field'],
@@ -82,6 +83,49 @@ export function inlineTargetKey(target = {}) {
   return [target.kind, target.targetId || 'new', fieldSet, target.selectionFrom ?? '', target.selectionTo ?? ''].join(':')
 }
 
+const BOOK_PLANNING_TARGETS = new Set([
+  'planning_document', 'planning_document_bundle', 'planning_entity', 'planning_entity_bundle',
+  'project_brief_draft', 'relationship_draft', 'story_arc_draft', 'story_arc_beat_draft',
+  'knowledge_item_draft', 'prompt_template_draft', 'style_profile_draft', 'prompt_addon_draft',
+])
+const CHAPTER_CREATIVE_TARGETS = new Set([
+  'planning_chapter_bundle', 'chapter_field', 'chapter_card', 'scene_plan', 'manuscript', 'manuscript_selection',
+])
+
+export function inlineConversationReuseScope(input = {}) {
+  const projectId = cleanText(input.projectId, 200) || 'unknown-project'
+  const target = input.target && typeof input.target === 'object' ? input.target : {}
+  const canonicalTarget = { ...target, selectionFrom: integer(target.selectionFrom), selectionTo: integer(target.selectionTo) }
+  const targetKind = cleanText(target.kind, 80)
+  const chapterId = cleanText(input.chapterId || target.targetId || target.scopeId, 200)
+  const chapterScopedDraft = ['style_profile_draft', 'prompt_addon_draft'].includes(targetKind)
+    && cleanText(target.scopeType, 40) === 'chapter'
+
+  if (CHAPTER_CREATIVE_TARGETS.has(targetKind) || chapterScopedDraft) {
+    return {
+      key: `chapter:${projectId}:${chapterId || 'unknown-chapter'}`,
+      kind: 'chapter',
+      reusable: true,
+      maxSteps: INLINE_CONVERSATION_STEP_LIMIT,
+    }
+  }
+  if (BOOK_PLANNING_TARGETS.has(targetKind)) {
+    return {
+      key: `planning:${projectId}`,
+      kind: 'planning',
+      reusable: true,
+      maxSteps: INLINE_CONVERSATION_STEP_LIMIT,
+    }
+  }
+  const kind = targetKind === 'quality_review' ? 'review' : 'audit'
+  return {
+    key: `isolated:${projectId}:${inlineTargetKey(canonicalTarget)}`,
+    kind,
+    reusable: false,
+    maxSteps: 1,
+  }
+}
+
 export function normalizeInlineCreativeAction(input = {}) {
   const task = cleanText(input.task, 80)
   const targetInput = input.target && typeof input.target === 'object' && !Array.isArray(input.target) ? input.target : {}
@@ -122,6 +166,7 @@ export function normalizeInlineCreativeAction(input = {}) {
     intent: cleanText(input.intent, 40) || ({ chapter: 'draft', rewrite: 'rewrite', quality_review: 'analysis', continuity_audit: 'analysis', chapter_state_extract: 'analysis' }[task] || 'draft'),
     target,
     targetKey: inlineTargetKey(target),
+    conversationScope: inlineConversationReuseScope({ ...input, target }),
     candidateType: candidateTypeFor(kind),
     instruction: cleanText(input.instruction, 20000),
     targetLength: Math.max(0, Math.min(12000, Math.round(Number(input.targetLength) || 0))),
