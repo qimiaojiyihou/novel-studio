@@ -30,12 +30,12 @@ function setup() {
 const reviewer = { executionMode: 'app_model', profileId: 'review-model', model: 'fixture', label: '独立上下文' }
 function state() { return { summary: '周砚付租金并开摊。', facts: [{ text: '租金已付', evidence: '周砚付了摊位租金。' }], characterStates: [], relationshipChanges: [], timelineEvents: [], openThreads: [], foreshadow: { setups: [], payoffs: [] } } }
 
-test('v21→v24 preserves pinned historical packs, runs sequentially and cascades new data', () => {
+test('v21→v26 preserves pinned historical packs, runs sequentially and cascades new data', () => {
   const db = new DatabaseSync(':memory:')
   runMigrations(db, { targetVersion: 21 })
   const before = db.prepare('SELECT version,digest FROM creative_pack_versions ORDER BY version').all()
   runMigrations(db)
-  assert.deepEqual(db.prepare('SELECT version FROM schema_migrations WHERE version>=22 ORDER BY version').all().map(r=>r.version), [22,23,24])
+  assert.deepEqual(db.prepare('SELECT version FROM schema_migrations WHERE version>=22 ORDER BY version').all().map(r=>r.version), [22,23,24,25,26])
   assert.deepEqual(db.prepare("SELECT version,digest FROM creative_pack_versions WHERE version!='1.3.0' ORDER BY version").all(), before)
   runMigrations(db)
   assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(), [])

@@ -14,6 +14,15 @@ const stamp = () => new Date().toISOString()
 const terminal = new Set(['completed', 'cancelled', 'failed', 'stale'])
 const chapterKinds = new Set(['chapter_field', 'planning_chapter_bundle', 'chapter_card', 'scene_plan', 'manuscript', 'manuscript_selection', 'chapter_state', 'continuity_audit', 'quality_review'])
 const targetKinds = new Set([...chapterKinds, 'planning_document', 'planning_document_bundle', 'planning_entity', 'planning_entity_bundle'])
+const planningEntityKinds = new Set(['character', 'world', 'volume'])
+const knowledgeKinds = new Set(['fact', 'timeline', 'foreshadow'])
+const directContentOperations = new Set([
+  'project.update', 'chapter.update', 'chapters.reorder',
+  'planning.document.save', 'planning.entity.update', 'planning.entities.reorder',
+  'planning.relationship.update', 'planning.arc.update', 'planning.arc-beat.update',
+  'knowledge.item.create', 'knowledge.item.update', 'knowledge.items.reorder', 'knowledge.check.resolve',
+  'context.update', 'prompt.style.save', 'authoring.sample.save', 'authoring.protection.save',
+])
 
 // A short critical section per book covers both renderer and external mutations.
 // Model turns run outside it; persisted runs keep their target occupied until settled.
@@ -77,7 +86,7 @@ export class CreativeInterface {
     return this.publicBinding(this.db.prepare('SELECT * FROM creative_clients WHERE id=?').get(clientId))
   }
 
-  publicBinding(row) { return { clientId: row.id, projectId: row.project_id, title: row.title, createdAt: row.created_at } }
+  publicBinding(row) { return { clientId: row.id, projectId: row.project_id, title: this.project(row.project_id).title, createdAt: row.created_at } }
   authenticate(token) {
     const client = this.db.prepare("SELECT * FROM creative_clients WHERE token_hash=? AND revoked_at=''").get(creativeDigest(String(token || '')))
     if (!client) fail('UNAUTHENTICATED', '客户端凭据无效')
@@ -89,6 +98,22 @@ export class CreativeInterface {
     const row = id && this.db.prepare(`SELECT * FROM ${table} WHERE id=? AND project_id=?`).get(id, projectId)
     if (!row) fail('PROJECT_MISMATCH', '对象不存在或不属于绑定项目')
     return row
+  }
+
+  ownedArcBeat(id, projectId) {
+    const row = id && this.db.prepare(`SELECT b.* FROM story_arc_beats b JOIN story_arcs a ON a.id=b.arc_id WHERE b.id=? AND a.project_id=?`).get(id, projectId)
+    if (!row) fail('PROJECT_MISMATCH', '对象不存在或不属于绑定项目')
+    return row
+  }
+
+  validateScope(projectId, scopeType, scopeId) {
+    if (scopeType === 'project' && scopeId === projectId) return
+    if (scopeType === 'chapter') { this.owned('chapters', scopeId, projectId); return }
+    if (scopeType === 'volume') {
+      const row = this.owned('planning_entities', scopeId, projectId)
+      if (row.kind === 'volume') return
+    }
+    fail('PROJECT_MISMATCH', '作用范围不属于绑定项目')
   }
 
   validate(client, operation, input = {}) {
@@ -113,6 +138,100 @@ export class CreativeInterface {
     }
     if (operation === 'approval.resolve') this.owned('bridge_action_requests', input.id, projectId)
     if (operation.startsWith('finalization.') && input.id) this.owned('chapter_finalizations', input.id, projectId)
+    if (operation === 'planning.entity.create') {
+      if (!planningEntityKinds.has(input.kind)) fail('INVALID_INPUT', '规划实体 kind 仅支持 character、world 或 volume')
+      if (input.data !== undefined && (!input.data || typeof input.data !== 'object' || Array.isArray(input.data))) fail('INVALID_INPUT', '规划实体 data 需要 JSON 对象')
+    }
+    if (operation === 'planning.relationship.create') {
+      const from = this.owned('planning_entities', input.fromCharacterId, projectId)
+      const to = this.owned('planning_entities', input.toCharacterId, projectId)
+      if (from.kind !== 'character' || to.kind !== 'character') fail('INVALID_INPUT', '人物关系的两个节点都需要是当前项目的人物卡')
+    }
+    if (operation === 'planning.arc-beat.create') {
+      this.owned('story_arcs', input.arcId, projectId)
+      if (input.volumeId) {
+        const volume = this.owned('planning_entities', input.volumeId, projectId)
+        if (volume.kind !== 'volume') fail('INVALID_INPUT', '情节节点的 volumeId 需要是当前项目的分卷卡')
+      }
+    }
+    if (operation === 'project.update') {
+      if (input.id && input.id !== projectId) fail('PROJECT_MISMATCH', '请求项目与客户端绑定不一致')
+      if (!['title','genre','idea','style','default_execution_mode'].some(key => input[key] !== undefined)) fail('INVALID_INPUT', '项目更新没有可写字段')
+    }
+    if (operation === 'chapter.update') {
+      this.owned('chapters', input.id, projectId)
+      if (!['title','manuscript','card','scenePlan'].some(key => input[key] !== undefined)) fail('INVALID_INPUT', '章节更新没有可写内容')
+      if (input.card !== undefined && (!input.card || typeof input.card !== 'object' || Array.isArray(input.card))) fail('INVALID_INPUT', '章节卡 card 需要 JSON 对象')
+      if (input.scenePlan !== undefined && typeof input.scenePlan !== 'string' && (!input.scenePlan || typeof input.scenePlan !== 'object' || Array.isArray(input.scenePlan))) fail('INVALID_INPUT', '场景计划 scenePlan 需要文本或 JSON 对象')
+    }
+    if (operation === 'chapters.reorder') {
+      if (!Array.isArray(input.chapterIds)) fail('INVALID_INPUT', 'chapterIds 需要数组')
+      input.chapterIds.forEach(id => this.owned('chapters', id, projectId))
+    }
+    if (operation === 'planning.document.save') {
+      if (!this.db.prepare('SELECT kind FROM planning_documents WHERE project_id=? AND kind=?').get(projectId, input.kind)) fail('PROJECT_MISMATCH', '规划文档不属于绑定项目')
+      if (!input.content || typeof input.content !== 'object' || Array.isArray(input.content)) fail('INVALID_INPUT', '规划文档 content 需要 JSON 对象')
+    }
+    if (operation === 'planning.entity.update') {
+      this.owned('planning_entities', input.id, projectId)
+      if (input.data !== undefined && (!input.data || typeof input.data !== 'object' || Array.isArray(input.data))) fail('INVALID_INPUT', '规划实体 data 需要 JSON 对象')
+    }
+    if (operation === 'planning.entities.reorder') {
+      if (!planningEntityKinds.has(input.kind) || !Array.isArray(input.entityIds)) fail('INVALID_INPUT', '规划实体排序需要有效 kind 和 entityIds')
+      input.entityIds.forEach(id => {
+        const row = this.owned('planning_entities', id, projectId)
+        if (row.kind !== input.kind) fail('PROJECT_MISMATCH', '排序对象类型与当前规划列表不一致')
+      })
+    }
+    if (operation === 'planning.relationship.update') {
+      this.owned('character_relationships', input.id, projectId)
+      for (const key of ['fromCharacterId', 'toCharacterId']) if (input[key]) {
+        const row = this.owned('planning_entities', input[key], projectId)
+        if (row.kind !== 'character') fail('INVALID_INPUT', '人物关系节点需要是当前项目的人物卡')
+      }
+    }
+    if (operation === 'planning.arc.update') this.owned('story_arcs', input.id, projectId)
+    if (operation === 'planning.arc-beat.update') {
+      this.ownedArcBeat(input.id, projectId)
+      if (input.volumeId) {
+        const volume = this.owned('planning_entities', input.volumeId, projectId)
+        if (volume.kind !== 'volume') fail('INVALID_INPUT', '情节节点的 volumeId 需要是当前项目的分卷卡')
+      }
+    }
+    if (operation === 'knowledge.item.create') {
+      if (!knowledgeKinds.has(input.kind)) fail('INVALID_INPUT', '知识条目 kind 仅支持 fact、timeline 或 foreshadow')
+      if (input.content !== undefined && (!input.content || typeof input.content !== 'object' || Array.isArray(input.content))) fail('INVALID_INPUT', '知识条目 content 需要 JSON 对象')
+    }
+    if (operation === 'knowledge.item.update') {
+      this.owned('knowledge_items', input.id, projectId)
+      if (input.content !== undefined && (!input.content || typeof input.content !== 'object' || Array.isArray(input.content))) fail('INVALID_INPUT', '知识条目 content 需要 JSON 对象')
+    }
+    if (operation === 'knowledge.items.reorder') {
+      if (!knowledgeKinds.has(input.kind) || !Array.isArray(input.itemIds)) fail('INVALID_INPUT', '知识条目排序需要有效 kind 和 itemIds')
+      input.itemIds.forEach(id => {
+        const row = this.owned('knowledge_items', id, projectId)
+        if (row.kind !== input.kind) fail('PROJECT_MISMATCH', '排序对象类型与当前知识列表不一致')
+      })
+    }
+    if (operation === 'knowledge.check.resolve') {
+      const check = this.owned('continuity_checks', input.id, projectId)
+      if (!String(input.expectedStatus || '')) fail('INVALID_INPUT', '处理连续性检查需要提交刚读取的 expectedStatus')
+      if (check.status !== input.expectedStatus) fail('SOURCE_STALE', '连续性检查状态已变化，请重新读取后处理', { currentStatus:check.status })
+    }
+    if (operation === 'prompt.style.save') {
+      this.validateScope(projectId, input.scopeType, input.scopeId)
+      if (input.style !== undefined && (!input.style || typeof input.style !== 'object' || Array.isArray(input.style))) fail('INVALID_INPUT', '结构化文风 style 需要 JSON 对象')
+    }
+    if (operation === 'authoring.sample.save') {
+      if (input.id) this.owned('author_style_samples', input.id, projectId)
+      if (input.chapterId) this.owned('chapters', input.chapterId, projectId)
+      if (input.candidateId) this.owned('agent_candidates', input.candidateId, projectId)
+    }
+    if (operation === 'authoring.protection.save') {
+      if (input.id) this.owned('manuscript_protections', input.id, projectId)
+      if (input.chapterId) this.owned('chapters', input.chapterId, projectId)
+      if (input.candidateId) this.owned('agent_candidates', input.candidateId, projectId)
+    }
     if (input.replaceFinalizationId) {
       const row = this.owned('chapter_finalizations', input.replaceFinalizationId, projectId)
       if (row.chapter_id !== input.chapterId) fail('PROJECT_MISMATCH', '被替换定稿不属于指定章节')
@@ -124,7 +243,7 @@ export class CreativeInterface {
         this.owned('chapters', target.targetId, projectId)
         if (input.chapterId && input.chapterId !== target.targetId) fail('PROJECT_MISMATCH', '章节与创作目标不一致')
       } else if (target.kind.startsWith('planning_entity')) this.owned('planning_entities', target.targetId, projectId)
-      else if (!this.db.prepare('SELECT id FROM planning_documents WHERE project_id=? AND kind=?').get(projectId, target.targetId)) fail('PROJECT_MISMATCH', '规划文档不属于绑定项目')
+      else if (!this.db.prepare('SELECT kind FROM planning_documents WHERE project_id=? AND kind=?').get(projectId, target.targetId)) fail('PROJECT_MISMATCH', '规划文档不属于绑定项目')
       if (target.sourceGenerationId) {
         const row = this.owned('generation_records', target.sourceGenerationId, projectId)
         if (row.chapter_id && row.chapter_id !== target.targetId) fail('PROJECT_MISMATCH', '来源记录不属于目标章节')
@@ -144,6 +263,23 @@ export class CreativeInterface {
     if (chapterKinds.has(input.target?.kind)) return `chapter:${input.target.targetId}`
     if (input.target) return `${input.target.kind.startsWith('planning_entity') ? 'entity' : 'document'}:${input.target.targetId}`
     return 'project'
+  }
+
+  directTarget(operation, input) {
+    if (operation === 'chapter.update') return { chapterId: input.id }
+    if (operation === 'planning.document.save') return { target: { kind:'planning_document', targetId:input.kind } }
+    if (operation === 'planning.entity.update') return { target: { kind:'planning_entity', targetId:input.id } }
+    if (operation === 'prompt.style.save' && input.scopeType === 'chapter') return { chapterId:input.scopeId }
+    if (operation === 'prompt.style.save' && input.scopeType === 'volume') return { target:{ kind:'planning_entity', targetId:input.scopeId } }
+    if (operation.startsWith('authoring.') && input.chapterId) return { chapterId:input.chapterId }
+    return { projectId:input.projectId }
+  }
+
+  async assertFreshSource(projectId, input) {
+    const current = await this.snapshot(projectId)
+    if (!input.sourceDigest || input.sourceDigest !== current.sourceDigest) {
+      fail('SOURCE_STALE', '项目内容已变化，请重新读取 snapshot 后再写入', { currentSourceDigest:current.sourceDigest })
+    }
   }
 
   assertTargetAvailable(projectId, input, exceptRunId = '', skipFinalization = false) {
@@ -245,6 +381,32 @@ export class CreativeInterface {
       this.assertTargetAvailable(projectId,{chapterId:run.chapter_id,target:parse(step?.input_json).target},run.id,Boolean(parse(run.model_routes_json).finalizationId))
     }
     const call = (channel, value) => this.invoke(channel, value)
+    if (directContentOperations.has(operation)) {
+      confirmed(input)
+      this.assertTargetAvailable(projectId, this.directTarget(operation, input))
+      await this.assertFreshSource(projectId, input)
+      if (operation === 'project.update') {
+        const result = await call('project:update', { id:projectId, ...pick(input, ['title','genre','idea','style','default_execution_mode']) })
+        if (input.title !== undefined) this.db.prepare('UPDATE creative_clients SET title=? WHERE project_id=?').run(result.title, projectId)
+        return result
+      }
+      if (operation === 'chapter.update') return call('chapter:update', pick(input, ['id','title','manuscript','expectedManuscript','card','scenePlan']))
+      if (operation === 'chapters.reorder') return call('chapters:reorder', { projectId, chapterIds:input.chapterIds })
+      if (operation === 'planning.document.save') return call('planning:document-save', { projectId, ...pick(input, ['kind','content']) })
+      if (operation === 'planning.entity.update') return call('planning:entity-update', pick(input, ['id','title','data']))
+      if (operation === 'planning.entities.reorder') return call('planning:entities-reorder', { projectId, ...pick(input, ['kind','entityIds']) })
+      if (operation === 'planning.relationship.update') return call('planning:relationship-update', pick(input, ['id','fromCharacterId','toCharacterId','label','surface','tension','direction','trend','status']))
+      if (operation === 'planning.arc.update') return call('planning:arc-update', pick(input, ['id','title','category','premise','destination','status','colorKey']))
+      if (operation === 'planning.arc-beat.update') return call('planning:arc-beat-update', pick(input, ['id','volumeId','chapterId','label','changeText']))
+      if (operation === 'knowledge.item.create') return call('knowledge:item-create', { projectId, ...pick(input, ['kind','title','content','status']) })
+      if (operation === 'knowledge.item.update') return call('knowledge:item-update', pick(input, ['id','title','content','status','effectiveFromChapter','effectiveToChapter','knowledgeScope']))
+      if (operation === 'knowledge.items.reorder') return call('knowledge:items-reorder', { projectId, ...pick(input, ['kind','itemIds']) })
+      if (operation === 'knowledge.check.resolve') return call('knowledge:check-resolve', pick(input, ['id','status']))
+      if (operation === 'context.update') return call('context:update', { projectId, ...pick(input, ['maxContextChars','recentChapterCount','relevantChapterCount','knowledgeLimit','chapterSummaryChars']) })
+      if (operation === 'prompt.style.save') return call('prompts:style-save', { projectId, ...pick(input, ['scopeType','scopeId','text','style']) })
+      if (operation === 'authoring.sample.save') return call('authoring:save-sample', { projectId, ...pick(input, ['id','chapterId','candidateId','text','reason','active','action']), ...(input.manuscriptDigest ? { sourceDigest:input.manuscriptDigest } : {}) })
+      if (operation === 'authoring.protection.save') return call('authoring:protect', { projectId, ...pick(input, ['id','chapterId','candidateId','from','to','action']), ...(input.manuscriptDigest ? { sourceDigest:input.manuscriptDigest } : {}) })
+    }
     if (operation === 'run.start' || operation === 'run.start-inline') {
       // External callers never choose connection identifiers or overwrite frozen routes.
       const payload = pick(input, ['projectId','chapterId','workflowId','task','intent','target','instruction','targetLength','executionMode','modelProfileId','reviewerProfileId','codexModel','codexReasoningEffort','codexFastMode','freshStart'])
@@ -261,6 +423,22 @@ export class CreativeInterface {
       confirmed(input)
       const chapter = await call('chapter:create', pick(input, ['projectId','title','sourceChapterId','mode']))
       return chapter
+    }
+    if (operation === 'planning.entity.create') {
+      confirmed(input)
+      return call('planning:entity-create', pick(input, ['projectId','kind','title','data']))
+    }
+    if (operation === 'planning.relationship.create') {
+      confirmed(input)
+      return call('planning:relationship-create', pick(input, ['projectId','fromCharacterId','toCharacterId','label','surface','tension','direction','trend','status']))
+    }
+    if (operation === 'planning.arc.create') {
+      confirmed(input)
+      return call('planning:arc-create', pick(input, ['projectId','title','category','premise','destination','status','colorKey']))
+    }
+    if (operation === 'planning.arc-beat.create') {
+      confirmed(input)
+      return call('planning:arc-beat-create', pick(input, ['arcId','volumeId','chapterId','label','changeText']))
     }
     if (operation === 'candidate.resolve') {
       confirmed(input)
@@ -323,4 +501,4 @@ export class CreativeInterface {
 const pick = (value, keys) => Object.fromEntries(keys.filter(key => value[key] !== undefined).map(key => [key, value[key]]))
 function confirmed(input) { if (input.confirm !== true || !String(input.reason || input.note || '').trim()) fail('CONFIRMATION_REQUIRED', '正式决定需要 confirm:true 和作者确认说明 reason 或 note') }
 export const READ_OPERATIONS = new Set(['identity','snapshot','request.get','chapter.get','revisions.list','runs.list','run.get','run.events','approvals.list','finalization.get','finalization.correction-preview','finalization.manual-preview'])
-export const WRITE_OPERATIONS = new Set(['run.start','run.start-inline','run.continue','run.pause','run.cancel','run.resume','run.retry','run.finish','candidate.propose','candidate.resolve','approval.resolve','chapter.create','finalization.start','finalization.act','finalization.correct','finalization.manual'])
+export const WRITE_OPERATIONS = new Set(['run.start','run.start-inline','run.continue','run.pause','run.cancel','run.resume','run.retry','run.finish','candidate.propose','candidate.resolve','approval.resolve','chapter.create','project.update','chapter.update','chapters.reorder','planning.document.save','planning.entity.create','planning.entity.update','planning.entities.reorder','planning.relationship.create','planning.relationship.update','planning.arc.create','planning.arc.update','planning.arc-beat.create','planning.arc-beat.update','knowledge.item.create','knowledge.item.update','knowledge.items.reorder','knowledge.check.resolve','context.update','prompt.style.save','authoring.sample.save','authoring.protection.save','finalization.start','finalization.act','finalization.correct','finalization.manual'])

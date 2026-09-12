@@ -6,6 +6,7 @@ const SENSITIVE_KEY = /(api[-_]?key|authorization|token|secret|cookie|credential
 const SQLITE_PATH = /(?:^|[\/])(?:[^\/]*\.sqlite(?:3)?|novel-studio\.db)(?:$|[\/])/i
 const VOLATILE_SOURCE_KEY = /^(?:created_at|updated_at|resolved_at|createdAt|updatedAt|resolvedAt)$/
 const PROJECT_DESCRIPTOR = '.novel-studio-project.json'
+const WINDOWS_RESERVED_NAME = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i
 
 function stableValue(value) {
   if (Array.isArray(value)) return value.map(stableValue)
@@ -38,14 +39,25 @@ function atomicWrite(filePath, content) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true })
   const tempPath = `${filePath}.tmp-${process.pid}-${Date.now()}`
   fs.writeFileSync(tempPath, content, { encoding: 'utf8', mode: 0o600 })
-  fs.renameSync(tempPath, filePath)
+  try {
+    fs.renameSync(tempPath, filePath)
+  } catch (error) {
+    // Windows does not consistently replace an existing destination with
+    // renameSync. Keep the temp-file write, then replace only for that case.
+    if (!['EEXIST', 'EPERM'].includes(error?.code) || !fs.existsSync(filePath)) {
+      fs.rmSync(tempPath, { force: true })
+      throw error
+    }
+    fs.rmSync(filePath, { force: true })
+    fs.renameSync(tempPath, filePath)
+  }
 }
 
 function jsonText(value) {
   return `${JSON.stringify(sanitizeMirrorValue(value), null, 2)}\n`
 }
 
-function projectDirectoryName(value = '') {
+export function codexProjectDirectoryName(value = '') {
   const cleaned = String(value || '未命名小说')
     .normalize('NFKC')
     .replace(/[<>:"/\\|?*\u0000-\u001f]/g, ' ')
@@ -53,7 +65,9 @@ function projectDirectoryName(value = '') {
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 72)
-  return cleaned || '未命名小说'
+    .replace(/[.\s]+$/g, '')
+  const safe = cleaned || '未命名小说'
+  return WINDOWS_RESERVED_NAME.test(safe) ? `_${safe}` : safe
 }
 
 function projectIdentityLine(value = '') {
@@ -86,11 +100,11 @@ export function createCodexBookWorkspace({ baseDirectory, project }) {
   const projectsRoot = path.join(baseDirectory, 'codex-projects')
   fs.mkdirSync(projectsRoot, { recursive: true, mode: 0o700 })
   const existing = findCodexBookWorkspace({ baseDirectory, projectId: project.id })
-  let root = existing?.root || path.join(projectsRoot, projectDirectoryName(project.title))
+  let root = existing?.root || path.join(projectsRoot, codexProjectDirectoryName(project.title))
   if (!existing && fs.existsSync(root)) {
     const owner = readProjectDescriptor(root)
     if (owner?.projectId !== project.id) {
-      root = path.join(projectsRoot, `${projectDirectoryName(project.title)} · ${stableDigest(project.id).slice(0, 8)}`)
+      root = path.join(projectsRoot, `${codexProjectDirectoryName(project.title)} · ${stableDigest(project.id).slice(0, 8)}`)
     }
   }
   fs.mkdirSync(root, { recursive: true, mode: 0o700 })

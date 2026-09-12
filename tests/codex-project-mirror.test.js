@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 import {
+  codexProjectDirectoryName,
   createCodexBookWorkspace,
   createCodexProjectMirror,
   findCodexBookWorkspace,
@@ -15,6 +16,15 @@ import {
   stableSourceValue,
   writeMirrorText,
 } from '../electron/codex-project-mirror.js'
+
+test('Codex project directory names are valid on Windows', () => {
+  assert.equal(codexProjectDirectoryName('在世证明'), '在世证明')
+  assert.equal(codexProjectDirectoryName('悬疑:档案?  '), '悬疑 档案')
+  assert.equal(codexProjectDirectoryName('CON'), '_CON')
+  assert.equal(codexProjectDirectoryName('nul.txt'), '_nul.txt')
+  assert.equal(codexProjectDirectoryName('...'), '未命名小说')
+  assert.equal(codexProjectDirectoryName(`${'书'.repeat(71)}.`), '书'.repeat(71))
+})
 
 function fixture() {
   const baseDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'novel-studio-codex-mirror-'))

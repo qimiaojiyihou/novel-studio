@@ -8,6 +8,7 @@
 |---|---|---|
 | `identity` | `{}` | 绑定项目、客户端、运行构建标识 |
 | `snapshot` | `{}` | 正式项目、chapters、planning、knowledge、memories、styles、候选/运行/定稿摘要 |
+| `request.get` | `{"requestId":"REQUEST_ID"}` | 回执丢失或重启后查询原幂等写请求；先查结果，不盲目换 ID 重做 |
 | `chapter.get` | `{"chapterId":"CHAPTER_ID"}` | 本章完整正文和章节卡，不只截取首尾 |
 | `revisions.list` | `{"chapterId":"CHAPTER_ID"}` | 旧稿版本 |
 | `runs.list` | `{}` | 本书运行列表 |
@@ -20,7 +21,51 @@
 
 snapshot 的规划条目可能含 `content_json`、`data_json`；解析后阅读。候选与运行摘要不是正式设定；必要时读取完整 run。正式来源摘要是 snapshot.sourceDigest；正文补丁摘要和定稿 stateDigest 是其他类型，不能互换。
 
-## 2. 生成 / 重写一章
+## 2. 直接写入正式内容
+
+作者已经给出明确内容并要求保存时，不必先启动模型候选。先读取 `snapshot` 与目标完整内容，提交对应写操作，并统一带上：
+
+```json
+{
+  "sourceDigest": "刚读取的 snapshot.sourceDigest",
+  "confirm": true,
+  "reason": "记录作者本次实际要求"
+}
+```
+
+一次写入成功后，下一项写入前重新读取 snapshot；不要连续复用旧摘要。项目元信息和故事种子用 `project.update`；正文、章名、完整章卡或场景计划用 `chapter.update`；故事基础/世界总设定/总纲整卡用 `planning.document.save`；人物、世界元素、分卷、关系、情节弧及节点用对应 `planning.*.update`；事实/时间线/伏笔用 `knowledge.item.create/update`；上下文预算用 `context.update`；项目/卷/章文风用 `prompt.style.save`。
+
+完整直写矩阵如下。表中的“可写字段”之外，仍需带本节开头的 `sourceDigest`、`confirm:true`、`reason`；`projectId` 由专属绑定自动注入，不要用输入切换书籍。
+
+| 正式内容 | 操作 | 可写字段与规则 |
+|---|---|---|
+| 书名、题材、故事种子、项目文风、默认执行方式 | `project.update` | `title?`, `genre?`, `idea?`, `style?`, `default_execution_mode?`；至少一项。故事种子就是 `idea`，项目文风就是 `style` |
+| 章名、正文、章节卡、场景计划 | `chapter.update` | `id`, `title?`, `manuscript?`, `expectedManuscript?`, `card?`, `scenePlan?`；`card` 为完整对象，`scenePlan` 为文本或完整对象 |
+| 章节顺序 | `chapters.reorder` | `chapterIds`；提交本书全部章节 ID 的目标顺序，不传局部子集 |
+| 故事基础、世界总设定、总纲 | `planning.document.save` | `kind`, `content`；kind 从 snapshot 中现有 planning document 读取，`content` 为合并后的完整对象 |
+| 人物、世界元素/地点、分卷 | `planning.entity.update` | `id`, `title?`, `data?`；`data` 为对象并与原字段合并 |
+| 人物/世界元素/分卷排序 | `planning.entities.reorder` | `kind:"character"|"world"|"volume"`, `entityIds`；提交同 kind 全部 ID 的目标顺序 |
+| 人物关系 | `planning.relationship.update` | `id`, `fromCharacterId?`, `toCharacterId?`, `label?`, `surface?`, `tension?`, `direction?`, `trend?`, `status?` |
+| 情节弧 | `planning.arc.update` | `id`, `title?`, `category?`, `premise?`, `destination?`, `status?`, `colorKey?` |
+| 情节弧节点 | `planning.arc-beat.update` | `id`, `volumeId?`, `chapterId?`, `label?`, `changeText?`；关联对象必须属于本书 |
+| 事实、时间线、伏笔 | `knowledge.item.create` | `kind:"fact"|"timeline"|"foreshadow"`, `title`, `content?`, `status?` |
+| 已有知识条目 | `knowledge.item.update` | `id`, `title?`, `content?`, `status?`, `effectiveFromChapter?`, `effectiveToChapter?`, `knowledgeScope?` |
+| 知识条目排序 | `knowledge.items.reorder` | `kind:"fact"|"timeline"|"foreshadow"`, `itemIds`；提交同 kind 全部 ID 的目标顺序 |
+| 连续性检查处理 | `knowledge.check.resolve` | `id`, `expectedStatus`, `status`；`expectedStatus` 必须是刚读取值 |
+| 上下文预算 | `context.update` | `maxContextChars?` 8000—200000，`recentChapterCount?` 0—20，`relevantChapterCount?` 0—20，`knowledgeLimit?` 0—100，`chapterSummaryChars?` 200—4000 |
+| 分层文风 | `prompt.style.save` | `scopeType:"project"|"volume"|"chapter"`, `scopeId`, `text?`, `style?`；scopeId 必须是本项目、分卷或章节的实际 ID |
+| 认可片段 | `authoring.sample.save` | 新增：`chapterId` 或正文候选的 `candidateId`、`text`、`manuscriptDigest`，可带 `reason`,`active`；更新：`id` 加可改字段；删除：`id`,`action:"delete"` |
+| 正文保护范围 | `authoring.protection.save` | 新增：`chapterId` 或 `candidateId`、`from`,`to`,`manuscriptDigest`；移除：`id`,`action:"remove"` |
+
+新增对象也属于正式写入：章节使用 `chapter.create`；人物/世界元素/分卷使用 `planning.entity.create`；人物关系、情节弧和节点分别使用 `planning.relationship.create`、`planning.arc.create`、`planning.arc-beat.create`。准确字段见第 3、4 节。由模型生成内容时走 `run.*` 和候选确认，不把直写接口当成绕过候选的模型通道。
+
+`planning.document.save` 和 `chapter.update.card` 接收完整整卡，提交前合并并保留原字段；`planning.entity.update.data` 是字段合并。更新正文时同时传刚读取的 `expectedManuscript`，防止前台尚未保存的旧缓冲覆盖。`chapter.update` 不直接设置 completed；定稿状态仍由定稿流程产生。
+
+处理连续性检查时使用 `knowledge.check.resolve`，除项目摘要外还传刚读取条目的 `expectedStatus` 和目标 `status`；状态已经被另一端处理时会返回过期错误。
+
+认可片段用 `authoring.sample.save`，保护范围用 `authoring.protection.save`。新增时除项目 `sourceDigest` 外，还传目标正文的 `manuscriptDigest`；offset 使用 JavaScript UTF-16 位置。全局模型、供应商、密钥、项目改绑和删除操作不属于书籍内容直写。
+
+## 3. 生成 / 重写一章
 
 已有章节直接使用原 chapterId。仅在用户要求新增章节时，使用 `chapter.create`，input 为 `{"title":"章节名","confirm":true,"reason":"作者要求新增一章"}`，保留返回 ID。
 
@@ -44,9 +89,32 @@ snapshot 的规划条目可能含 `content_json`、`data_json`；解析后阅读
 
 先读 `run.get` 核对冻结模型和实际后端，等待审批或输出；一轮发起后以返回的 runId 跟进，不连续点生成。ACP/exec 由应用控制，不以应用模型替代用户指定 Codex。已有运行模型被冻结；改变 Codex 聊天任务模型不会自动改变应用调用的模型。
 
-## 3. 规划与整卡
+## 4. 规划与整卡
 
-使用同一个 `run.start-inline`，换 task/target。目标字段从现有规划结构/任务声明读取，不根据中文标签猜英文键。
+新书规划缺少对象时，先建立正式对象并保存返回 ID。每项都是写操作，需要稳定 request-id、`confirm:true` 和记录用户要求的 `reason`：
+
+| 操作 | 主要 input | 返回值用途 |
+|---|---|---|
+| `planning.entity.create` | `kind:"character"|"world"|"volume", title, data?, confirm:true, reason` | 新建人物卡、世界元素/地点或分卷卡；返回对象的 `id` 后续作为 entityId。地点使用 `kind:"world"`，并在 `data.category` 标明“地点”等类别 |
+| `planning.relationship.create` | `fromCharacterId, toCharacterId, label, surface?, tension?, direction?, trend?, status?, confirm:true, reason` | 在同书的两个人物卡之间建立关系；返回对象的 `id` |
+| `planning.arc.create` | `title, category?, premise?, destination?, status?, colorKey?, confirm:true, reason` | 新建跨卷情节弧；返回对象的 `id` 后续作为 arcId |
+| `planning.arc-beat.create` | `arcId, volumeId?, chapterId?, label, changeText?, confirm:true, reason` | 给情节弧增加分卷/章节节点；返回对象的 `id` |
+
+可选枚举：关系 direction 为 `mutual/from_to/to_from`，trend 为 `warming/stable/cooling/hostile`，status 为 `active/changed/ended`；情节弧 category 为 `main/character/relationship/mystery/world/other`，status 为 `planned/active/resolved/paused`，colorKey 为 `copper/pine/slate/ochre/plum`。所有关联 ID 先从本书 snapshot 或前一步返回值取得，不能引用另一书的对象。
+
+例如先创建人物卡：
+
+```json
+{
+  "kind": "character",
+  "title": "人物名",
+  "data": {"role": "主角", "goal": "当前目标"},
+  "confirm": true,
+  "reason": "作者要求为新书建立主角"
+}
+```
+
+创建后重新读 snapshot 核对正式规划。需要让模型补全或改写卡片时，把创建响应中的 `id` 放入 target.targetId，使用同一个 `run.start-inline`，换 task/target。模型运行会采用 Novel Studio“模型与任务路由”里当前保存的 ACP 提供方；选择 Qoder 时会锁定 Qoder 模型。目标字段从现有规划结构/任务声明读取，不根据中文标签猜英文键。
 
 | 内容 | task | target |
 |---|---|---|
@@ -61,7 +129,7 @@ snapshot 的规划条目可能含 `content_json`、`data_json`；解析后阅读
 
 章节目标同时传顶层 chapterId。默认补空白；明确要求改已有字段时根据目标支持传 `includeFilled:true`，并说明保留内容。人物卡优先沿用该卡的已有创作运行，不逐字段建新对话。服务器对同章运行采用章节级锁，比“单字段”更严格。
 
-## 4. 讨论与修改
+## 5. 讨论与修改
 
 读取 run，选择实际 parentCandidateId，再发 `run.continue`：
 
@@ -80,7 +148,7 @@ snapshot 的规划条目可能含 `content_json`、`data_json`；解析后阅读
 
 `run.finish` 释放本次连接，保留历史；再次修改优先 `run.continue`。`run.pause` 中断当前生成，`run.resume` 恢复，`run.retry` 需要实际失败 stepId。`run.cancel` 终止运行，不等于关闭面板。完全重新开始只有在用户明确要求后使用 `freshStart:true` 新开运行；占用的旧目标先让用户决定如何处理。
 
-## 5. 候选确认
+## 6. 候选确认
 
 先 `run.get`，阅读完整候选、差异、原稿与异常。正文候选检查重复输出、指令混入、字数、叙事自然度、事实冲突。字数不足保留候选并做有目的的增补，不循环整章生成。
 
@@ -94,7 +162,9 @@ snapshot 的规划条目可能含 `content_json`、`data_json`；解析后阅读
 
 `candidate.propose` 仅在用户明确要导入外部草稿时使用：需要 task、target、payload 和刚读取的 snapshot.sourceDigest。它只入候选，不调用 Codex；不要把它当成应用模型生成入口。定稿子运行候选走下面的定稿流程，不用 candidate.resolve。
 
-## 6. 完成本章
+运行停在工具或正式写入审批时，先用 `approvals.list` 读取本书待审批项并向作者展示实际动作。作者明确决定后用 `approval.resolve`，输入 `{"id":"APPROVAL_ID","approved":true|false,"confirm":true,"reason":"作者本次实际决定"}`。该操作只处理这一项审批，不建立全局免审策略；过期或其他项目的审批会被拒绝。
+
+## 7. 完成本章
 
 ### 人工直接定稿（作者明确选择跳过审稿与交接时）
 
@@ -111,7 +181,7 @@ snapshot 的规划条目可能含 `content_json`、`data_json`；解析后阅读
 5. 审核通过并获准确认后：`{"id":"FINALIZATION_ID","action":"accept-state","confirm":true,"reason":"记录实际核对与作者确认"}`。
 6. 再读 finalization.get 和 chapter.get。只有实际 status 为 completed 才报告“已定稿”。可稍后定稿，但把待办清楚保留下来。
 
-## 7. 进度与交接
+## 8. 进度与交接
 
 ### 定稿后文字校正（proofread.1 起）
 

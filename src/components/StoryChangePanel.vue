@@ -176,7 +176,7 @@ const pendingCandidate = computed(() => [...(run.value?.candidates || [])].rever
 const pendingApproval = computed(() => run.value?.approvals?.find((item) => item.status === 'pending') || null)
 const retryableStep = computed(() => [...(run.value?.steps || [])].reverse().find((item) => ['failed', 'interrupted'].includes(item.status) && item.attemptCount < 3) || null)
 const isAnalyzing = computed(() => Boolean(currentSet.value && ['draft', 'analyzing'].includes(currentSet.value.status) && run.value && !['completed', 'cancelled', 'failed'].includes(run.value.status)))
-const backendLabel = computed(() => ({ codex_acp: 'Codex ACP', codex_exec: 'Codex exec' }[run.value?.actualBackend] || (run.value ? '等待 Codex' : '本地扫描')))
+const backendLabel = computed(() => ({ codex_acp: 'Codex ACP', codex_exec: 'Codex exec', qoder_acp: 'Qoder ACP' }[run.value?.actualBackend] || (run.value ? `等待 ${run.value.modelRoutes?.agentProvider === 'qoder' ? 'Qoder' : 'Codex'}` : '本地扫描')))
 const runStatusLabel = computed(() => ({ pending: '准备项目镜像', waiting_approval: '等待批准模型调用', running: '正在分析整书影响', paused: '分析已暂停', failed: '分析失败' }[run.value?.status] || '正在整理候选'))
 const groups = computed(() => [
   { level: 'required', eyebrow: 'REQUIRED', label: '必须同步', items: currentSet.value?.items?.filter((item) => item.impactLevel === 'required') || [] },

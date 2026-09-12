@@ -1,6 +1,6 @@
 {
   "name": "novel-studio",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A local-first novel creation studio powered by structured AI workflows.",
   "private": true,
   "type": "module",
@@ -14,9 +14,9 @@
     "build:go": "node scripts/build-go-service.mjs",
     "build:app": "npm run build:creative-packs && npm run build:codex && npm run build:go && npm run build && electron-builder",
     "preview": "vite preview",
-    "check:creative-interface": "node --check electron/creative-interface.js && node --check electron/creative-server.js && node --check electron/creative-snapshot.js && node --check scripts/creative-client.mjs && node --check scripts/install-operator-skill.mjs && node --check skills/novel-studio-operator/scripts/operate.mjs && node --check scripts/smoke-dual-book.mjs",
+    "check:creative-interface": "node --check electron/creative-interface.js && node --check electron/creative-server.js && node --check electron/creative-snapshot.js && node --check scripts/creative-client.mjs && node --check scripts/install-operator-skill.mjs && node --check scripts/setup-operator-workspace.mjs && node --check skills/novel-studio-operator/scripts/operate.mjs && node --check scripts/smoke-dual-book.mjs",
     "precheck": "node --check electron/application-menu.js && node --check scripts/smoke-application-menu.mjs && node --check electron/authoring-repository.js && node --check electron/build-info.js && node --check electron/chapter-finalization.js && node --check electron/codex-models.js && node --check electron/creative-context.js && node --check electron/creative-upgrade-migrations.js && node --check electron/manuscript-checks.js && node --check electron/manuscript-patches.js && node --check scripts/smoke-creative-upgrade.mjs && npm run check:creative-interface",
-    "check": "node --check electron/main.js && node --check electron/preload.cjs && node --check electron/model-adapter.js && node --check electron/model-gateway.js && node --check electron/model-request-config.js && node --check electron/prompt-templates.js && node --check electron/prompt-compiler.js && node --check electron/prompt-repository.js && node --check electron/database-migrations.js && node --check electron/workspace-repository.js && node --check electron/planning-repository.js && node --check electron/planning-bundle.js && node --check electron/knowledge-repository.js && node --check electron/context-repository.js && node --check electron/context-reuse.js && node --check electron/creative-pack.js && node --check electron/creative-quality.js && node --check electron/generated-text.js && node --check electron/prompt-evaluator.js && node --check electron/quality-repository.js && node --check electron/story-change-repository.js && node --check electron/structured-output-retry.js && node --check electron/manuscript-formats.js && node --check electron/project-portability.js && node --check electron/inline-creative.js && node --check electron/codex-repository.js && node --check electron/codex-project-mirror.js && node --check electron/codex-task-label.js && node --check electron/codex-agent-gateway.js && node --check electron/agent-runtime.js && node --check scripts/build-go-service.mjs && node --check scripts/build-creative-packs.mjs && node --check scripts/build-codex-runtime.mjs",
+    "check": "node --check electron/main.js && node --check electron/preload.cjs && node --check electron/model-adapter.js && node --check electron/model-gateway.js && node --check electron/model-request-config.js && node --check electron/prompt-templates.js && node --check electron/prompt-compiler.js && node --check electron/prompt-repository.js && node --check electron/database-migrations.js && node --check electron/workspace-repository.js && node --check electron/planning-repository.js && node --check electron/planning-bundle.js && node --check electron/knowledge-repository.js && node --check electron/context-repository.js && node --check electron/context-reuse.js && node --check electron/creative-pack.js && node --check electron/creative-quality.js && node --check electron/generated-text.js && node --check electron/prompt-evaluator.js && node --check electron/quality-repository.js && node --check electron/story-change-repository.js && node --check electron/structured-output-retry.js && node --check electron/manuscript-formats.js && node --check electron/project-portability.js && node --check electron/inline-creative.js && node --check electron/codex-repository.js && node --check electron/codex-project-mirror.js && node --check electron/codex-task-label.js && node --check electron/codex-agent-gateway.js && node --check electron/qoder-agent-gateway.js && node --check electron/agent-gateway-router.js && node --check electron/agent-runtime.js && node --check scripts/build-go-service.mjs && node --check scripts/build-creative-packs.mjs && node --check scripts/build-codex-runtime.mjs",
     "postcheck": "node --check electron/chapter-amendment.js && node --check electron/chapter-manual-finalization.js && node --check electron/manuscript-diff.js",
     "test": "node --test tests/*.test.js"
   },
@@ -78,6 +78,10 @@
         "to": "scripts/install-operator-skill.mjs"
       },
       {
+        "from": "scripts/setup-operator-workspace.mjs",
+        "to": "scripts/setup-operator-workspace.mjs"
+      },
+      {
         "from": "resources/novel-studio-service",
         "to": "novel-studio-service",
         "filter": [
@@ -103,6 +107,9 @@
       "target": [
         "nsis"
       ]
+    },
+    "nsis": {
+      "include": "build/installer.nsh"
     },
     "linux": {
       "target": [

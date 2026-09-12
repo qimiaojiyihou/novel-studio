@@ -14,22 +14,31 @@
         <section class="settings-block codex-agent-block">
           <div class="settings-block-heading">
             <div>
-              <span class="settings-kicker">CODEX AGENT</span>
-              <h3>Codex 创作 Agent</h3>
+              <span class="settings-kicker">ACP AGENT</span>
+              <h3>{{ agentName }} 创作 Agent</h3>
             </div>
-            <span class="codex-runtime-state" :class="codexStatus.runtime?.available ? 'ready' : 'missing'">
-              {{ codexStatus.runtime?.available ? 'ACP 已就绪' : '运行时待检查' }}
+            <span class="codex-runtime-state" :class="selectedAgentRuntime?.available ? 'ready' : 'missing'">
+              {{ selectedAgentRuntime?.available ? 'ACP 已就绪' : '运行时待检查' }}
             </span>
           </div>
-          <p class="codex-agent-intro">作为独立执行方式运行创作工作流。优先使用 ACP 长会话；启动失败且尚未产生输出时，自动进入只读 exec 兼容模式。</p>
+          <p class="codex-agent-intro">作为独立执行方式运行创作工作流。{{ codexDraft.agentProvider === 'qoder' ? 'Qoder 通过本机 qoder / qodercn 的 --acp 模式建立长会话，复用 CLI 登录状态。' : 'Codex 优先使用 ACP 长会话；启动失败且尚未产生输出时，自动进入只读 exec 兼容模式。' }}</p>
           <div class="codex-proof-grid">
-            <article><span>ACP</span><strong>{{ codexStatus.runtime?.adapterVersion || '—' }}</strong><small>{{ integrityLabel }}</small></article>
-            <article><span>CLI</span><strong>{{ codexStatus.runtime?.cliVersion || '—' }}</strong><small>随安装包固定发布</small></article>
-            <article><span>认证</span><strong>{{ codexDraft.authMethod === 'environment' ? '环境变量' : 'ChatGPT' }}</strong><small>{{ codexStatus.runtime?.authenticatedMethod ? '本次应用会话已认证' : codexStatus.runtime?.environmentAuthAvailable ? '检测到 API Key 环境变量' : '不保存 Codex 凭据' }}</small></article>
+            <article><span>ACP</span><strong>{{ selectedAgentRuntime?.adapterVersion || '—' }}</strong><small>{{ integrityLabel }}</small></article>
+            <article><span>CLI</span><strong>{{ selectedAgentRuntime?.cliVersion || (selectedAgentRuntime?.available ? '已检测' : '—') }}</strong><small>{{ codexDraft.agentProvider === 'qoder' ? (selectedAgentRuntime?.executablePath || '等待填写 Qoder CLI 路径') : '随安装包固定发布' }}</small></article>
+            <article><span>认证</span><strong>{{ agentAuthLabel }}</strong><small>{{ agentAuthDetail }}</small></article>
           </div>
           <div class="codex-settings-grid">
-            <label><span>默认认证</span><select v-model="codexDraft.authMethod"><option value="chatgpt">ChatGPT 登录</option><option value="environment" :disabled="!codexStatus.runtime?.environmentAuthAvailable">环境 API Key</option></select></label>
-            <label>
+            <label><span>ACP 提供方</span><select v-model="codexDraft.agentProvider"><option value="codex">Codex</option><option value="qoder">Qoder</option></select></label>
+            <label v-if="codexDraft.agentProvider === 'codex'"><span>默认认证</span><select v-model="codexDraft.authMethod"><option value="chatgpt">ChatGPT 登录</option><option value="environment" :disabled="!codexStatus.runtime?.environmentAuthAvailable">环境 API Key</option></select></label>
+            <label v-if="codexDraft.agentProvider === 'qoder'" class="wide">
+              <span>Qoder 默认模型</span>
+              <select v-model="codexDraft.qoderModel">
+                <option v-for="option in qoderModelOptions" :key="option.value" :value="option.value">{{ option.name }}{{ option.description ? ` · ${option.description}` : '' }}</option>
+              </select>
+              <small>{{ qoderModelConfig.options?.length ? '模型目录来自当前 Qoder ACP 登录账号；新任务会锁定这里选择的模型。' : '点击“测试 Qoder ACP”读取当前账号的模型目录。' }}</small>
+            </label>
+            <label v-if="codexDraft.agentProvider === 'qoder'" class="wide"><span>Qoder CLI 路径</span><input v-model.trim="codexDraft.qoderCliPath" placeholder="留空自动检测，例如 ~/.qoder-cn/entry/qodercn" /><small>支持 Qoder CLI 与 Qoder CLI CN；先在终端执行 qoder login 或 qodercn login，也可向应用进程提供 QODER_PERSONAL_ACCESS_TOKEN。</small></label>
+            <label v-if="codexDraft.agentProvider === 'codex'">
               <span>默认模型</span>
               <input v-model="codexModelSearch" type="search" placeholder="搜索名称或模型 ID" aria-label="搜索 Codex 模型" />
               <select v-model="codexDraft.model" @change="refreshCodexModels(true)">
@@ -39,17 +48,17 @@
               <details><summary>高级模型 ID</summary><input v-model.trim="codexDraft.model" placeholder="例如 gpt-6-astra" aria-label="高级 Codex 模型 ID" /></details>
               <small>GPT-6 Astra 对应 gpt-6-astra。可用性以当前 ACP 目录为准；已有对话继续使用启动时锁定的模型。</small>
             </label>
-            <label><span>推理强度</span><select v-model="codexDraft.reasoningEffort"><option value="">模型默认</option><option v-for="option in codexReasoningOptions" :key="option.value" :value="option.value">{{ option.name }}</option><option v-if="codexDraft.reasoningEffort && !codexReasoningOptions.some(o => o.value === codexDraft.reasoningEffort)" :value="codexDraft.reasoningEffort">{{ codexDraft.reasoningEffort }} · 待刷新验证</option></select></label>
-            <label class="codex-toggle"><span>Fast mode{{ codexFastSupported ? '' : ' · 待验证支持' }}</span><input v-model="codexDraft.fastMode" type="checkbox" :disabled="!codexFastSupported" /></label>
+            <label v-if="codexDraft.agentProvider === 'codex'"><span>推理强度</span><select v-model="codexDraft.reasoningEffort"><option value="">模型默认</option><option v-for="option in codexReasoningOptions" :key="option.value" :value="option.value">{{ option.name }}</option><option v-if="codexDraft.reasoningEffort && !codexReasoningOptions.some(o => o.value === codexDraft.reasoningEffort)" :value="codexDraft.reasoningEffort">{{ codexDraft.reasoningEffort }} · 待刷新验证</option></select></label>
+            <label v-if="codexDraft.agentProvider === 'codex'" class="codex-toggle"><span>Fast mode{{ codexFastSupported ? '' : ' · 待验证支持' }}</span><input v-model="codexDraft.fastMode" type="checkbox" :disabled="!codexFastSupported" /></label>
           </div>
           <div v-if="codexMessage.text" class="connection-result" :class="codexMessage.state"><i></i><span>{{ codexMessage.text }}</span></div>
           <div class="codex-actions">
-            <button class="outline-button" :disabled="codexBusy" @click="authenticateCodex">{{ codexDraft.authMethod === 'environment' ? '使用环境变量认证' : '登录 ChatGPT' }}</button>
-            <button class="test-button" :disabled="codexBusy" @click="testCodex">测试 Codex</button>
-            <button class="outline-button" :disabled="codexBusy" @click="refreshCodexModels()">刷新模型列表</button>
+            <button v-if="codexDraft.agentProvider === 'codex'" class="outline-button" :disabled="codexBusy" @click="authenticateCodex">{{ codexDraft.authMethod === 'environment' ? '使用环境变量认证' : '登录 ChatGPT' }}</button>
+            <button class="test-button" :disabled="codexBusy" @click="testCodex">测试 {{ agentName }} ACP</button>
+            <button v-if="codexDraft.agentProvider === 'codex'" class="outline-button" :disabled="codexBusy" @click="refreshCodexModels()">刷新模型列表</button>
             <button class="primary-button" :disabled="codexBusy" @click="saveCodex">保存 Agent 设置</button>
           </div>
-          <small class="codex-permission-note">工具权限按次审批；不会提供永久允许。Codex 只访问当前 AgentRun 的受控镜像，结果只进入候选区。</small>
+          <small class="codex-permission-note">工具权限按次审批；不会提供永久允许。{{ agentName }} 只访问当前 AgentRun 的受控镜像，结果只进入候选区。</small>
         </section>
         <section class="settings-block route-block">
           <div class="settings-block-heading">
@@ -279,11 +288,28 @@ const connectionTest = reactive({ state: 'idle', message: '' })
 const requestConfigText = ref('')
 const jsonValidation = reactive({ state: 'idle', message: '保存或测试前会自动校验' })
 const enabledProfiles = computed(() => props.settings.profiles.filter((profile) => profile.enabled))
-const codexStatus = reactive({ runtime: {}, settings: {} })
-const codexDraft = reactive({ enabled: true, preferredBackend: 'codex_acp', model: '', reasoningEffort: 'high', fastMode: false, authMethod: 'chatgpt' })
+const codexStatus = reactive({ runtime: {}, qoderRuntime: {}, settings: {} })
+const codexDraft = reactive({ enabled: true, preferredBackend: 'codex_acp', agentProvider: 'codex', qoderCliPath: '', qoderModel: 'auto', model: '', reasoningEffort: 'high', fastMode: false, authMethod: 'chatgpt' })
 const codexMessage = reactive({ state: 'idle', text: '' })
 const codexBusy = ref(false)
-const integrityLabel = computed(() => ({ verified: '摘要校验通过', development: '开发环境校验', invalid: '摘要或版本不匹配', missing: '资源缺失' }[codexStatus.runtime?.integrity] || '等待诊断'))
+const agentName = computed(() => codexDraft.agentProvider === 'qoder' ? 'Qoder' : 'Codex')
+const selectedAgentRuntime = computed(() => codexDraft.agentProvider === 'qoder' ? codexStatus.qoderRuntime : codexStatus.runtime)
+const integrityLabel = computed(() => ({ verified: '摘要校验通过', development: '开发环境校验', external: '本机外部运行时', invalid: '摘要或版本不匹配', missing: '资源缺失' }[selectedAgentRuntime.value?.integrity] || '等待诊断'))
+const agentAuthLabel = computed(() => codexDraft.agentProvider === 'qoder'
+  ? (selectedAgentRuntime.value?.environmentAuthAvailable ? 'Qoder PAT' : 'Qoder 登录态')
+  : (codexDraft.authMethod === 'environment' ? '环境变量' : 'ChatGPT'))
+const agentAuthDetail = computed(() => {
+  if (codexDraft.agentProvider === 'qoder') {
+    return selectedAgentRuntime.value?.environmentAuthAvailable
+      ? '检测到 QODER_PERSONAL_ACCESS_TOKEN'
+      : '复用 qoder CLI 本机登录状态'
+  }
+  return codexStatus.runtime?.authenticatedMethod
+    ? '本次应用会话已认证'
+    : codexStatus.runtime?.environmentAuthAvailable
+      ? '检测到 API Key 环境变量'
+      : '不保存 Codex 凭据'
+})
 const codexModelConfig = computed(() => codexStatus.runtime?.configOptions?.find((option) => option.id === 'model') || {})
 const codexModelSearch = ref('')
 const codexModelsRefreshed = ref(false)
@@ -293,6 +319,17 @@ const codexReasoningOptions = computed(() => codexStatus.runtime?.configOptions?
 const codexFastSupported = computed(() => Boolean(codexStatus.runtime?.configOptions?.find(o => o.id === 'fast-mode')))
 const modelAvailability = (status) => ({ available: '可用', pending: '待刷新', unsupported: '当前运行时未支持' }[status])
 const codexDefaultModel = computed(() => codexModelConfig.value.currentValue || '')
+const qoderModelConfig = computed(() => codexStatus.qoderRuntime?.configOptions?.find((option) => option.id === 'model') || {})
+const qoderModelOptions = computed(() => {
+  const options = (qoderModelConfig.value.options || []).flatMap((item) => item.options || [item])
+  const values = new Set(options.map((item) => item.value))
+  const result = options.map((item) => ({ value: item.value, name: item.name || item.value, description: item.description || '' }))
+  if (!values.has('auto')) result.unshift({ value: 'auto', name: 'Auto', description: '使用 Qoder 默认选择' })
+  if (codexDraft.qoderModel && !values.has(codexDraft.qoderModel) && codexDraft.qoderModel !== 'auto') {
+    result.push({ value: codexDraft.qoderModel, name: codexDraft.qoderModel, description: '等待 ACP 回读验证' })
+  }
+  return result
+})
 
 watch(() => props.visible, (visible) => {
   if (!visible) cancelEdit()
@@ -314,7 +351,7 @@ async function saveCodex() {
   try {
     const saved = await appService.saveCodexSettings(codexDraft)
     Object.assign(codexDraft, saved)
-    Object.assign(codexMessage, { state: 'success', text: 'Codex Agent 设置已保存；凭据仍由 ChatGPT 登录或环境变量维护。' })
+    Object.assign(codexMessage, { state: 'success', text: `${agentName.value} Agent 设置已保存；凭据继续由对应 CLI 登录态或环境变量维护。` })
   } catch (error) {
     Object.assign(codexMessage, { state: 'error', text: `保存失败：${error.message}` })
   } finally { codexBusy.value = false }
@@ -334,12 +371,16 @@ async function authenticateCodex() {
 
 async function testCodex() {
   codexBusy.value = true
-  Object.assign(codexMessage, { state: 'testing', text: '正在校验 ACP 适配器与协议…' })
+  Object.assign(codexMessage, { state: 'testing', text: `正在校验 ${agentName.value} ACP 与协议…` })
   try {
-    const result = await appService.testCodex({ model: codexDraft.model, reasoningEffort: codexDraft.reasoningEffort, fastMode: codexDraft.fastMode })
+    const selectedModel = codexDraft.agentProvider === 'qoder' ? codexDraft.qoderModel : codexDraft.model
+    const result = await appService.testCodex({ agentProvider: codexDraft.agentProvider, qoderCliPath: codexDraft.qoderCliPath, model: selectedModel, reasoningEffort: codexDraft.reasoningEffort, fastMode: codexDraft.fastMode })
     Object.assign(codexMessage, { state: 'success', text: result.message })
-    codexStatus.runtime.configOptions = result.status.configOptions
-    codexModelsRefreshed.value = true
+    if (codexDraft.agentProvider === 'qoder') codexStatus.qoderRuntime = result.status.runtime || codexStatus.qoderRuntime
+    else {
+      codexStatus.runtime.configOptions = result.status.configOptions
+      codexModelsRefreshed.value = true
+    }
   } catch (error) {
     Object.assign(codexMessage, { state: 'error', text: `测试失败：${error.message}` })
   } finally { codexBusy.value = false }

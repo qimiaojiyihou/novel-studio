@@ -8,9 +8,13 @@ import { request as httpRequest } from 'node:http'
 import { runMigrations } from '../electron/database-migrations.js'
 import { createWorkspaceRepository } from '../electron/workspace-repository.js'
 import { createPlanningRepository } from '../electron/planning-repository.js'
+import { createKnowledgeRepository } from '../electron/knowledge-repository.js'
+import { createContextRepository } from '../electron/context-repository.js'
+import { createPromptRepository } from '../electron/prompt-repository.js'
+import { createAuthoringRepository } from '../electron/authoring-repository.js'
 import { createCodexRepository } from '../electron/codex-repository.js'
 import { AgentRuntime } from '../electron/agent-runtime.js'
-import { ChapterFinalizer, createFinalizationRepository } from '../electron/chapter-finalization.js'
+import { ChapterFinalizer, contentDigest, createFinalizationRepository } from '../electron/chapter-finalization.js'
 import { CreativeInterface, creativeDigest } from '../electron/creative-interface.js'
 import { readCreativeSnapshot } from '../electron/creative-snapshot.js'
 import { startCreativeServer } from '../electron/creative-server.js'
@@ -23,7 +27,8 @@ function setup(t) {
   // Query SQLite itself before the first fixture/schema mutation.
   assertIsolatedRuntime({ database:{ path:db.prepare('PRAGMA database_list').all().find(row=>row.name==='main').file } },directory)
   runMigrations(db)
-  const workspace=createWorkspaceRepository(db), planning=createPlanningRepository(db), repository=createCodexRepository(db)
+  const workspace=createWorkspaceRepository(db), planning=createPlanningRepository(db), knowledge=createKnowledgeRepository(db)
+  const context=createContextRepository(db), prompts=createPromptRepository(db), authoring=createAuthoringRepository(db), repository=createCodexRepository(db)
   const a=workspace.createProject({ title:'隔离悬疑书',genre:'悬疑',idea:'仅工程测试 A' })
   const b=workspace.createProject({ title:'隔离文娱书',genre:'文娱',idea:'仅工程测试 B' })
   for (const book of [a,b]) planning.loadPlanningCenter(book.project.id)
@@ -51,7 +56,15 @@ function setup(t) {
       'agent:finish-inline':()=>runtime.finishInline(p),'agent:continue-inline':()=>runtime.continueInline(p),
       'agent:confirm-candidate':()=>runtime.confirmCandidate({...p,accept:true}),'agent:reject-candidate':()=>runtime.confirmCandidate({...p,accept:false}),
       'approvals:list':()=>repository.listApprovals(p),'approvals:resolve':()=>repository.resolveApproval(p),
-      'chapter:create':()=>workspace.createChapter(p),'revisions:list':()=>workspace.listRevisions(p),
+      'project:update':()=>workspace.updateProject(p),'chapter:create':()=>workspace.createChapter(p),'chapter:update':()=>workspace.updateChapter(p),
+      'chapters:reorder':()=>workspace.reorderChapters(p),'revisions:list':()=>workspace.listRevisions(p),
+      'planning:document-save':()=>planning.saveDocument(p),'planning:entity-create':()=>planning.createEntity(p),'planning:entity-update':()=>planning.updateEntity(p),
+      'planning:entities-reorder':()=>planning.reorderEntities(p),'planning:relationship-create':()=>planning.createRelationship(p),
+      'planning:relationship-update':()=>planning.updateRelationship(p),'planning:arc-create':()=>planning.createStoryArc(p),'planning:arc-update':()=>planning.updateStoryArc(p),
+      'planning:arc-beat-create':()=>planning.createStoryArcBeat(p),'planning:arc-beat-update':()=>planning.updateStoryArcBeat(p),
+      'knowledge:item-create':()=>knowledge.createItem(p),'knowledge:item-update':()=>knowledge.updateItem(p),'knowledge:items-reorder':()=>knowledge.reorderItems(p),
+      'knowledge:check-resolve':()=>knowledge.resolveCheck(p),'context:update':()=>context.updateContextProfile(p),'prompts:style-save':()=>prompts.saveStyleProfile(p),
+      'authoring:save-sample':()=>authoring.saveSample(p),'authoring:protect':()=>authoring.protect(p),
       'chapter:finalize-start':()=>finalizer.start(p),'chapter:finalize-get':()=>p.id?finalizer.repository.get(p.id):finalizer.repository.latest(p.chapterId),
       'chapter:finalize-confirm':()=>p.action==='accept-state'?finalizer.repository.confirm(p.id):p.action==='cancel'?finalizer.repository.patch(p.id,{status:'cancelled'}):finalizer.advance(p.id,{acceptReview:p.action==='accept-review',reason:p.reason}),
     }
@@ -64,7 +77,7 @@ function setup(t) {
   const call=(index,operation,input={},requestId='')=>api.call(tokens[index],{operation,input,requestId})
   const start=(index,key='start-0001')=>call(index,'run.start-inline',{task:'chapter',chapterId:[a,b][index].chapters[0].id,target:{kind:'manuscript',targetId:[a,b][index].chapters[0].id},codexModel:'gpt-6-astra',codexReasoningEffort:'xhigh'},key)
   t.after(async()=>{for(const release of gates.values())release(); await Promise.allSettled([...runtime.active.values()]); db.close()})
-  return {directory,file,db,workspace,repository,runtime,finalizer,api,createApi,a,b,tokens,call,start,calls,gates,cancelled}
+  return {directory,file,db,workspace,planning,knowledge,context,prompts,authoring,repository,runtime,finalizer,api,createApi,a,b,tokens,call,start,calls,gates,cancelled}
 }
 const waitFor=async predicate=>{for(let i=0;i<200;i++){if(predicate())return;await new Promise(resolve=>setTimeout(resolve,5))}assert.fail('fixture timeout')}
 
@@ -105,6 +118,112 @@ test('capability binding and every referenced chapter, run, step, source and can
   const candidate=f.repository.getRun(rb.id).candidates[0]
   await assert.rejects(f.call(0,'candidate.resolve',{runId:ra.id,candidateId:candidate.id,accept:true,confirm:true,reason:'fixture'},'accept-evil'),{code:'PROJECT_MISMATCH'})
   assert.equal(f.workspace.loadWorkspaceSnapshot(f.b.project.id).chapters[0].manuscript,'')
+})
+
+test('external authors create project-scoped planning entities, relationships, arcs and beats with replay-safe writes',async t=>{
+  const f=setup(t), before=(await f.call(0,'snapshot')).sourceDigest
+  const create=(operation,input,requestId)=>f.call(0,operation,{...input,confirm:true,reason:'作者要求建立新书规划'},requestId)
+  await assert.rejects(f.call(0,'planning.entity.create',{kind:'character',title:'未确认人物'},'plan-no-confirm'),{code:'CONFIRMATION_REQUIRED'})
+  const protagonist=await create('planning.entity.create',{kind:'character',title:'程砚',data:{role:'主角',goal:'查清失踪案'}},'plan-character-01')
+  const partner=await create('planning.entity.create',{kind:'character',title:'陆微',data:{role:'搭档'}},'plan-character-02')
+  const location=await create('planning.entity.create',{kind:'world',title:'旧港站',data:{category:'地点',summary:'封闭货运站'}},'plan-world-001')
+  const volume=await create('planning.entity.create',{kind:'volume',title:'第一卷 雾港'},'plan-volume-01')
+  const relationship=await create('planning.relationship.create',{fromCharacterId:protagonist.id,toCharacterId:partner.id,label:'临时同盟',tension:'彼此隐瞒线索'},'plan-relation-1')
+  const arc=await create('planning.arc.create',{title:'失踪案主线',category:'main',premise:'追查旧港失踪案',destination:'揭开幕后交易'},'plan-arc-0001')
+  const beat=await create('planning.arc-beat.create',{arcId:arc.id,volumeId:volume.id,label:'发现货单',changeText:'主角确认案件与旧港有关'},'plan-beat-001')
+
+  assert.equal((await create('planning.entity.create',{kind:'character',title:'程砚',data:{role:'主角',goal:'查清失踪案'}},'plan-character-01')).id,protagonist.id)
+  assert.equal(relationship.fromCharacterName,'程砚')
+  assert.equal(beat.arcId,arc.id)
+  const snapshot=await f.call(0,'snapshot')
+  assert.notEqual(snapshot.sourceDigest,before)
+  assert.ok(snapshot.planning.entities.some(row=>row.id===location.id && row.project_id===f.a.project.id))
+  assert.ok(snapshot.planning.relationships.some(row=>row.id===relationship.id))
+  assert.ok(snapshot.planning.arcs.some(row=>row.id===arc.id))
+  assert.ok(snapshot.planning.beats.some(row=>row.id===beat.id))
+  assert.equal((await f.call(1,'snapshot')).planning.entities.some(row=>row.id===protagonist.id),false)
+
+  const foreign=f.planning.createEntity({projectId:f.b.project.id,kind:'character',title:'另一书人物'})
+  await assert.rejects(create('planning.relationship.create',{fromCharacterId:protagonist.id,toCharacterId:foreign.id,label:'越界关系'},'plan-cross-rel'),{code:'PROJECT_MISMATCH'})
+  await assert.rejects(create('planning.arc-beat.create',{arcId:arc.id,volumeId:foreign.id,label:'错误分卷'},'plan-cross-beat'),{code:'PROJECT_MISMATCH'})
+  await assert.rejects(create('planning.entity.create',{kind:'chapter',title:'错误类型'},'plan-kind-bad'),{code:'INVALID_INPUT'})
+})
+
+test('bound authors can directly write every project content center without following the foreground project',async t=>{
+  const f=setup(t)
+  const initialDigest=(await f.call(0,'snapshot')).sourceDigest
+  f.context.loadContextManager(f.a.project.id)
+  f.knowledge.loadKnowledgeCenter(f.a.project.id)
+  assert.equal((await f.call(0,'snapshot')).sourceDigest,initialDigest,'derived default context and system checks are not author content changes')
+  let sequence=0
+  const write=async(operation,input={})=>{
+    const source=await f.call(0,'snapshot')
+    sequence+=1
+    return f.call(0,operation,{...input,sourceDigest:source.sourceDigest,confirm:true,reason:'作者确认通过外接写入正式项目内容'},`content-${String(sequence).padStart(4,'0')}`)
+  }
+
+  const project=await write('project.update',{idea:'外接写入的一句话想法',style:'克制、具体，以动作推进。'})
+  assert.equal(project.idea,'外接写入的一句话想法')
+  const document=await write('planning.document.save',{kind:'foundation',content:{targetReader:'社会派悬疑读者',premise:'一名死者持续通过生存认证。'}})
+  assert.equal(document.content.premise,'一名死者持续通过生存认证。')
+
+  const first=await f.call(0,'planning.entity.create',{kind:'character',title:'林岚',data:{role:'经办员'},confirm:true,reason:'作者建立人物'},'direct-character-01')
+  const second=await f.call(0,'planning.entity.create',{kind:'character',title:'沈伯',data:{role:'认证对象'},confirm:true,reason:'作者建立人物'},'direct-character-02')
+  const updatedEntity=await write('planning.entity.update',{id:first.id,title:'林岚',data:{goal:'核对九年回执'}})
+  assert.equal(updatedEntity.data.goal,'核对九年回执')
+  const relationship=await f.call(0,'planning.relationship.create',{fromCharacterId:first.id,toCharacterId:second.id,label:'经办关系',confirm:true,reason:'作者建立关系'},'direct-relation-01')
+  assert.equal((await write('planning.relationship.update',{id:relationship.id,label:'调查与被调查',tension:'身份记录相互冲突'})).tension,'身份记录相互冲突')
+  const arc=await f.call(0,'planning.arc.create',{title:'九张回执',confirm:true,reason:'作者建立情节弧'},'direct-arc-0001')
+  const beat=await f.call(0,'planning.arc-beat.create',{arcId:arc.id,chapterId:f.a.chapters[0].id,label:'首次异常',confirm:true,reason:'作者建立情节节点'},'direct-beat-001')
+  assert.equal((await write('planning.arc.update',{id:arc.id,premise:'逐年回查认证痕迹'})).premise,'逐年回查认证痕迹')
+  assert.equal((await write('planning.arc-beat.update',{id:beat.id,changeText:'认证失败暴露第二个代办者'})).changeText,'认证失败暴露第二个代办者')
+  const reordered=await write('planning.entities.reorder',{kind:'character',entityIds:[second.id,first.id]})
+  assert.deepEqual(reordered.map(item=>item.id),[second.id,first.id])
+
+  const manuscript='林岚把第九张回执压在窗口玻璃下。'
+  const chapter=await write('chapter.update',{id:f.a.chapters[0].id,title:'第九次认证',expectedManuscript:'',manuscript,card:{goal:'查明失败原因'},scenePlan:{version:1,scenes:[]}})
+  assert.equal(chapter.manuscript,manuscript)
+  assert.equal(chapter.card.goal,'查明失败原因')
+  const added=await f.call(0,'chapter.create',{title:'回执背面',confirm:true,reason:'作者新增章节'},'direct-chapter-02')
+  const chapters=await write('chapters.reorder',{chapterIds:[added.id,f.a.chapters[0].id]})
+  assert.deepEqual(chapters.map(item=>item.id),[added.id,f.a.chapters[0].id])
+
+  const fact=await write('knowledge.item.create',{kind:'fact',title:'认证周期',content:{fact:'每年夏季完成一次资格认证'}})
+  const updatedFact=await write('knowledge.item.update',{id:fact.id,content:{fact:'每年七月完成一次资格认证'},effectiveFromChapter:1,knowledgeScope:{reader:false,characters:[first.id]}})
+  assert.equal(updatedFact.content.fact,'每年七月完成一次资格认证')
+  const check=f.knowledge.loadKnowledgeCenter(f.a.project.id).checks.find(item=>item.status==='open')
+  const resolvedCheck=await write('knowledge.check.resolve',{id:check.id,expectedStatus:'open',status:'dismissed'})
+  assert.equal(resolvedCheck.status,'dismissed')
+  const profile=await write('context.update',{maxContextChars:48000,recentChapterCount:4})
+  assert.equal(profile.profile.maxContextChars,48000)
+  const styles=await write('prompt.style.save',{scopeType:'project',scopeId:f.a.project.id,text:'平静叙述惨烈内容。',style:{narrativeDistance:'restrained'}})
+  assert.equal(styles.styleScopes.find(item=>item.scopeType==='project').style.narrativeDistance,'restrained')
+
+  await write('authoring.sample.save',{chapterId:f.a.chapters[0].id,manuscriptDigest:contentDigest(manuscript),text:'第九张回执',reason:'作者认可这一处具体物象'})
+  await write('authoring.protection.save',{chapterId:f.a.chapters[0].id,manuscriptDigest:contentDigest(manuscript),from:0,to:2})
+  const snapshot=await f.call(0,'snapshot')
+  assert.equal(snapshot.project.idea,'外接写入的一句话想法')
+  assert.equal(snapshot.contextProfile.max_context_chars,48000)
+  assert.ok(snapshot.styleSamples.some(item=>item.project_id===f.a.project.id))
+  assert.ok(snapshot.protections.some(item=>item.text==='林岚'))
+  assert.equal((await f.call(1,'snapshot')).project.idea,'仅工程测试 B')
+})
+
+test('direct content writes require confirmation and a fresh project snapshot; queued stale writers do not overwrite',async t=>{
+  const f=setup(t), source=await f.call(0,'snapshot')
+  const base={sourceDigest:source.sourceDigest,confirm:true,reason:'作者确认修改设定'}
+  await assert.rejects(f.call(0,'project.update',{...base,confirm:false,idea:'未确认'},'direct-denied-01'),{code:'CONFIRMATION_REQUIRED'})
+  await assert.rejects(f.call(0,'project.update',{confirm:true,reason:'缺少来源',idea:'未确认'},'direct-denied-02'),{code:'SOURCE_STALE'})
+  await assert.rejects(f.call(0,'chapter.update',{...base,id:f.b.chapters[0].id,manuscript:'越界'},'direct-cross-01'),{code:'PROJECT_MISMATCH'})
+  const [first,second]=await Promise.allSettled([
+    f.call(0,'project.update',{...base,idea:'第一个外接任务写入'},'direct-race-01'),
+    f.call(0,'project.update',{...base,style:'第二个外接任务的过期写入'},'direct-race-02'),
+  ])
+  assert.equal(first.status,'fulfilled')
+  assert.equal(second.status,'rejected')
+  assert.equal(second.reason.code,'SOURCE_STALE')
+  assert.equal(f.workspace.loadWorkspaceSnapshot(f.a.project.id).project.idea,'第一个外接任务写入')
+  assert.notEqual(f.workspace.loadWorkspaceSnapshot(f.a.project.id).project.style,'第二个外接任务的过期写入')
 })
 
 test('same-target competition is rejected; concurrent duplicates and lost responses reuse one run and one formal write',async t=>{

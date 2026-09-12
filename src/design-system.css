@@ -683,6 +683,7 @@ body {
 #app .codex-proof-grid article,
 #app .codex-settings-grid { align-items: start; }
 #app .codex-settings-grid label { min-width: 0; align-content: start; }
+#app .codex-settings-grid .wide { grid-column: 1 / -1; }
 #app .codex-settings-grid .codex-toggle { align-self: end; min-height: 38px; border-color: var(--ns-border); background: var(--ns-surface-muted); }
 #app .codex-proof-grid small,
 #app .codex-permission-note { color: var(--ns-text-muted); }

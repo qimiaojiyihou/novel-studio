@@ -4,6 +4,17 @@ import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 
 const read = file => JSON.parse(fs.readFileSync(file, 'utf8'))
+
+export function defaultNovelStudioUserData({ platform = process.platform, environment = process.env, home = os.homedir() } = {}) {
+  if (platform === 'win32') return path.join(environment.APPDATA || path.join(home, 'AppData', 'Roaming'), 'novel-studio')
+  if (platform === 'darwin') return path.join(home, 'Library', 'Application Support', 'novel-studio')
+  return path.join(environment.XDG_CONFIG_HOME || path.join(home, '.config'), 'novel-studio')
+}
+
+export function defaultCreativeInterfaceDirectory(options = {}) {
+  return path.join(defaultNovelStudioUserData(options), 'creative-interface')
+}
+
 export async function callCreative(clientFile, operation, input = {}, requestId = '') {
   const client = read(clientFile), server = read(client.serverFile)
   if (!/^http:\/\/127\.0\.0\.1:\d+$/.test(server.url)) throw new Error('创作接口地址应为本机回环地址')
@@ -27,7 +38,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   try {
     let result
     if (args[0] === 'bind') {
-      const directory = args.includes('--directory') ? option('--directory') : path.join(os.homedir(),'Library/Application Support/novel-studio/creative-interface')
+      const directory = args.includes('--directory') ? option('--directory') : defaultCreativeInterfaceDirectory()
       result = await bindCreative(directory,{ clientId:option('--id'),projectId:option('--project'),expectedTitle:option('--title') })
     } else {
       if (!args.includes('--client')) throw new Error('用法: node scripts/creative-client.mjs OPERATION --client /绝对路径/client.json [--input request.json] [--request-id 稳定请求ID]')

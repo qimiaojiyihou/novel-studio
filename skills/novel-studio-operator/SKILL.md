@@ -1,6 +1,6 @@
 ---
 name: novel-studio-operator
-description: 操作已绑定书籍的 Novel Studio 专属创作任务。用于读取正式书稿和规划、启动或续接 Codex 创作、讨论和修改候选、核对审批、确认版本、独立审稿与章节定稿，以及处理双书并行的目标占用、过期候选和重启恢复。适用于外部 Codex 作家任务，不适用于应用内部带 .nscollab.json 的 ACP 候选生成会话。
+description: 操作已绑定书籍的 Novel Studio 专属创作任务。用于读取和直接写入正式书稿、项目设定、规划、知识、上下文与文风，启动或续接 Codex/Qoder 创作、讨论和修改候选、核对审批、确认版本、独立审稿与章节定稿，以及处理双书并行的目标占用、过期候选和重启恢复。适用于外部专属作家任务，不适用于应用内部带 .nscollab.json 的 ACP 候选生成会话。
 ---
 
 # Novel Studio 专属作家操作
@@ -11,6 +11,20 @@ description: 操作已绑定书籍的 Novel Studio 专属创作任务。用于�
 
 - **外部专属作家任务**：工作区有 `.novel-studio-project.json` 和 `.novel-studio-operator.json`，使用下方操作入口。
 - **内部 ACP 执行会话**：任务明确提供 AgentRun 镜像和 `.nscollab.json` 时，使用 `novel-studio-creator` 和该镜像；即使工作目录是同一本书，也不要调用本 Skill 的操作脚本或读取外部客户端凭据。内部会话负责产出候选，外部任务负责操作应用，避免递归启动模型。
+
+## 新书工作区与首次绑定
+
+- 当前版 Novel Studio 新建书籍时会立即在 Electron `userData/codex-projects/` 下生成书籍工作区和 `.novel-studio-project.json`；启动时也会补建旧版本遗漏的目录。macOS 默认根目录是 `~/Library/Application Support/novel-studio/codex-projects/`，Windows 默认根目录是 `%APPDATA%\novel-studio\codex-projects\`。
+- 目录名只是经过 Windows 兼容清洗的归类名称：非法字符会被替换，系统保留名会加前缀，同名目录可能带项目摘要，书籍更名后目录也不会随之改名。始终读取 descriptor 的 `projectId`，再与应用项目列表和客户端 `identity` 三方核对；不要按目录名或模糊书名绑定。
+- 只有 `.novel-studio-project.json` 表示书籍工作区已准备好，不代表专属作家任务已经绑定。开发/管理任务需为这个精确项目创建独立客户端，再运行打包资源中的 `scripts/install-operator-skill.mjs`，生成 `.novel-studio-operator.json` 和本 Skill 副本；普通作家任务不使用管理绑定接口。
+- descriptor 缺失时先确认正在运行的构建标识并正常重启新版应用，让启动修复补建。若界面明确报告目录创建错误，保留已建立的书籍数据并报告路径/权限错误；不要手写 descriptor、复制另一书的绑定文件或另建同名书籍。
+
+## 另一台电脑与专属任务生成
+
+- 书库备份可迁移，`.novel-studio-operator.json`、客户端文件、`server.json` 和任务 ID 不可跨电脑复用。它们含本机绝对路径或本机回环服务身份；目标电脑必须安装同版或更新版 Novel Studio，导入书库并运行应用后重新生成。
+- 推荐在 Novel Studio 的作品菜单选择“准备并打开 Codex 专属任务”。应用会按 descriptor 的精确项目 ID 在目标电脑创建本机客户端、安装本 Skill、刷新 `.novel-studio-operator.json`，并生成 `NOVEL-STUDIO-TASK.md` 后打开本书 Codex 项目。此步骤不改书稿、不调用模型。
+- 若界面入口失败，从目标电脑的应用资源目录运行 `node scripts/setup-operator-workspace.mjs --workspace "书籍工作区绝对路径"`。脚本会自动发现 Windows `%APPDATA%`、macOS `~/Library/Application Support` 或 Linux `$XDG_CONFIG_HOME` 下的本机创作接口；应用必须正在运行。
+- 在目标电脑的 Codex 项目中新建一个用户可继续交互的任务，以 `NOVEL-STUDIO-TASK.md` 为首次消息，或直接要求“按本书启动说明接手”。新任务会读取本目录 `AGENTS.md` 与本 Skill，首次只读核验后等待作者继续。每本书单独创建一个任务；不要从另一书 fork，也不要复制第一台电脑的 task/thread ID。
 
 ## 首次接手或恢复
 
@@ -39,7 +53,8 @@ node .agents/skills/novel-studio-operator/scripts/operate.mjs OPERATION --input 
 
 ## 写入与模型边界
 
-- 用户要求“使用 Novel Studio / Codex 创作”时，通过 `run.start-inline` 或现有运行的 `run.continue` 生成。不要把自己在当前聊天里写的文章伪称为应用生成。
+- 用户要求“使用 Novel Studio / Codex / Qoder 创作”时，通过 `run.start-inline` 或现有运行的 `run.continue` 生成。新增人物、地点、分卷、关系或情节弧时，先使用对应的 `planning.*.create` 建立正式规划对象，再用返回 ID 启动整卡生成或继续编排。不要把自己在当前聊天里写的文章伪称为应用生成。
+- 作者已经明确给出内容并要求保存时，使用对应的 `project.update`、`chapter.update`、`planning.*`、`knowledge.*`、`context.update`、`prompt.style.save` 或 `authoring.*` 直接写入。每次先读 snapshot，把当前 `sourceDigest` 连同 `confirm:true` 和实际 `reason` 提交；一次成功写入后，下一次写入前重新读取。不要因接口已开放而跳过作者确认，也不要把项目摘要当作正文摘要。
 - 模型调用、工具操作和正式写入是不同权限。已有授权仅在其明确范围内有效；没有授权的审批交给用户。`confirm:true` 和 reason 是决定记录，不是凭空产生的授权。
 - 未确认候选可讨论、比较、修改；只有获准接受后才调用 `candidate.resolve`。接受正文只是更新编辑稿，定稿走独立流程。
 - 作者明确选择跳过审稿和交接时，可走操作流程中的“人工直接定稿”，不限于错字校正。不因审稿耗时或出错自行选择此模式；完成后注明未审稿、交接未更新。

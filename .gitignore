@@ -1,6 +1,7 @@
 node_modules/
 dist/
 release/
+release-*/
 
 # Go service binaries are generated for the target platform during packaging.
 resources/novel-studio-service/*/*

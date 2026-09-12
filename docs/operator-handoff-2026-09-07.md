@@ -23,6 +23,7 @@
 - `scripts/operate.mjs`、自包含副本 `scripts/creative-client.mjs`
 - `.novel-studio-operator.json`：项目 ID、客户端 ID、工作区和客户端文件路径，不含 token。
 - `NOVEL-STUDIO-OPERATOR.md`：入口说明。
+- `NOVEL-STUDIO-TASK.md`：在 Codex 中新建本书专属任务时使用的首次消息。
 - `.installed-files.json`：受管理文件摘要，重复安装不覆盖作者自定义修改。
 
 现有工作区的 AGENTS.md、README、书稿和客户端凭据均保持原状。源代码的书籍 AGENTS 生成器已增加双角色引导，随下次应用打包更新生效；这次没有为更新生成器重启或替换正在使用的应用。当前两个任务已收到明确的 Skill 文件路径，直接读取即可使用。新任务接手本书时也可显式让其读此路径，不必依赖旧任务的聊天记忆。
@@ -48,13 +49,21 @@ node .agents/skills/novel-studio-operator/scripts/operate.mjs OPERATION --input 
 node scripts/install-operator-skill.mjs --workspace /已核对的书籍工作区 --client /本书客户端文件 --project 实际项目ID
 ```
 
-安装前读工作区 descriptor 和应用 identity，校验项目及客户端；只创建/更新受管理文档和脚本，不调用管理绑定。目标文件有作者修改或包含符号链接时保留现状并报错。Skill 与安装脚本、原始客户端已加入 extraResources；打包版使用 Resources/scripts 下的安装入口，自带所需文件，不依赖开发仓库。
+跨电脑迁移和新书首次创建优先使用完整初始化脚本：
+
+```sh
+node scripts/setup-operator-workspace.mjs --workspace /已核对的书籍工作区
+```
+
+目标电脑需保持 Novel Studio 运行。脚本按本机系统目录重新生成客户端与绑定，并写入 `NOVEL-STUDIO-TASK.md`；随后在 Codex 打开的本书项目中新建用户专属任务，以该文件作为首次消息。客户端文件、`server.json`、`.novel-studio-operator.json` 和旧 task/thread ID 不跨电脑复制。
+
+安装前读工作区 descriptor 和应用 identity，校验项目及客户端；只创建/更新受管理文档和脚本。目标文件有作者修改或包含符号链接时保留现状并报错。Skill、完整初始化脚本、安装脚本与原始客户端已加入 extraResources；打包版使用 Resources/scripts 下的入口，自带所需文件，不依赖开发仓库。
 
 ## 验证与交付边界
 
-- 自动测试覆盖：接口允许列表同步、跨书阻止、只读状态、内部镜像角色、确认记录、请求 ID/不自动重试、自定义文件保护、幂等安装、打包后自包含安装。
-- `npm run check`、`npm test`（267/267）、`npm run build` 通过；其中 operator 专项 10 项，构建保留原有大 bundle 提醒。
-- skill-creator 的 Python quick_validate 因环境缺 PyYAML 未运行完成；另用项目现有 js-yaml 校验前置信息及引用文件，校验通过，未安装额外依赖。
+- 自动测试覆盖：接口允许列表同步、跨书阻止、只读状态、内部镜像角色、确认记录、请求 ID/不自动重试、自定义文件保护、幂等安装、跨电脑本机重绑、任务说明生成、跨平台目录发现和打包后自包含安装。
+- `npm run check`、`npm test`（315/315）、`npm run build` 通过；其中 operator 专项 19 项，构建保留原有大 bundle 提醒。
+- skill-creator 的 `quick_validate.py` 已使用具备 PyYAML 的隔离 Python 环境运行，结果为 `Skill is valid!`。
 - 两本现有书的安装、身份及状态读取成功，均连接 `creative-upgrade-2026.09.07-menu-zh.1`。
 - 已向两个现有专属任务发送只读接手交接；明确保留其最新作者要求，不追加创作指令，不以交接授权接受候选或生成。
 - 本次没有真实创作调用，没有修改正式书稿、候选状态、运行、审批、绑定或数据库，也没有新增任务或重启应用。

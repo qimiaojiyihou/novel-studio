@@ -3,7 +3,8 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 export const READ_OPERATIONS = new Set(['identity', 'snapshot', 'request.get', 'chapter.get', 'revisions.list', 'runs.list', 'run.get', 'run.events', 'approvals.list', 'finalization.get', 'finalization.correction-preview', 'finalization.manual-preview'])
-export const WRITE_OPERATIONS = new Set(['run.start', 'run.start-inline', 'run.continue', 'run.pause', 'run.cancel', 'run.resume', 'run.retry', 'run.finish', 'candidate.propose', 'candidate.resolve', 'approval.resolve', 'chapter.create', 'finalization.start', 'finalization.act', 'finalization.correct', 'finalization.manual'])
+export const WRITE_OPERATIONS = new Set(['run.start', 'run.start-inline', 'run.continue', 'run.pause', 'run.cancel', 'run.resume', 'run.retry', 'run.finish', 'candidate.propose', 'candidate.resolve', 'approval.resolve', 'chapter.create', 'project.update', 'chapter.update', 'chapters.reorder', 'planning.document.save', 'planning.entity.create', 'planning.entity.update', 'planning.entities.reorder', 'planning.relationship.create', 'planning.relationship.update', 'planning.arc.create', 'planning.arc.update', 'planning.arc-beat.create', 'planning.arc-beat.update', 'knowledge.item.create', 'knowledge.item.update', 'knowledge.items.reorder', 'knowledge.check.resolve', 'context.update', 'prompt.style.save', 'authoring.sample.save', 'authoring.protection.save', 'finalization.start', 'finalization.act', 'finalization.correct', 'finalization.manual'])
+const DIRECT_CONTENT_OPERATIONS = new Set(['project.update', 'chapter.update', 'chapters.reorder', 'planning.document.save', 'planning.entity.update', 'planning.entities.reorder', 'planning.relationship.update', 'planning.arc.update', 'planning.arc-beat.update', 'knowledge.item.create', 'knowledge.item.update', 'knowledge.items.reorder', 'knowledge.check.resolve', 'context.update', 'prompt.style.save', 'authoring.sample.save', 'authoring.protection.save'])
 const read = file => JSON.parse(fs.readFileSync(file, 'utf8'))
 const fail = (code, message) => { throw Object.assign(new Error(message), { code }) }
 
@@ -52,9 +53,10 @@ export async function operate({ workspace, operation = 'status', input = {}, req
   if (!input || typeof input !== 'object' || Array.isArray(input)) fail('INVALID_INPUT', 'input 应为 JSON 对象')
   if (input.projectId && input.projectId !== binding.projectId) fail('BINDING_MISMATCH', '请求项目与本书绑定不一致')
   if (WRITE_OPERATIONS.has(operation) && !/^[a-zA-Z0-9_-]{8,160}$/.test(requestId)) fail('REQUEST_ID_REQUIRED', '写操作需要 8—160 位稳定请求 ID')
-  const decision = ['chapter.create', 'candidate.resolve', 'approval.resolve', 'finalization.correct'].includes(operation)
+  const decision = DIRECT_CONTENT_OPERATIONS.has(operation) || ['chapter.create', 'planning.entity.create', 'planning.relationship.create', 'planning.arc.create', 'planning.arc-beat.create', 'candidate.resolve', 'approval.resolve', 'finalization.correct'].includes(operation)
     || (operation === 'finalization.act' && ['accept-review', 'accept-state', 'correct-state'].includes(input.action))
   if (decision && (input.confirm !== true || !String(input.reason || input.note || '').trim())) fail('CONFIRMATION_REQUIRED', '请先核对作者决定，再提交 confirm:true 和实际 reason')
+  if (DIRECT_CONTENT_OPERATIONS.has(operation) && !String(input.sourceDigest || '').trim()) fail('SOURCE_DIGEST_REQUIRED', '直接写入内容前需要读取 snapshot，并传入当前 sourceDigest')
   if (operation === 'finalization.correct' && input.meaningUnchanged !== true) fail('CONFIRMATION_REQUIRED', '文字校正需要作者确认剧情、事实与交接含义未变')
   if (operation === 'finalization.manual' && (input.confirm !== true || input.skipReview !== true || input.skipHandoff !== true)) fail('CONFIRMATION_REQUIRED', '人工直接定稿需要作者明确选择跳过本次审稿与交接')
   // Reuse the application's transport. The installer copies it beside this file.

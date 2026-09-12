@@ -49,6 +49,20 @@ test('Codex repository persists one session and workflow steps per AgentRun', ()
   database.close()
 })
 
+test('Agent provider settings persist Qoder selection and its external CLI path', () => {
+  const { database, repository } = setup()
+  const defaults = repository.getProviderSettings()
+  assert.equal(defaults.agentProvider, 'codex')
+  assert.equal(defaults.qoderCliPath, '')
+  assert.equal(defaults.qoderModel, 'auto')
+  const saved = repository.updateProviderSettings({ agentProvider: 'qoder', qoderCliPath: ' /Users/test/.local/bin/qoder ', qoderModel: ' qmodel_38max ' })
+  assert.equal(saved.agentProvider, 'qoder')
+  assert.equal(saved.qoderCliPath, '/Users/test/.local/bin/qoder')
+  assert.equal(saved.qoderModel, 'qmodel_38max')
+  assert.throws(() => database.prepare("UPDATE agent_provider_settings SET agent_provider = 'other' WHERE id = 'codex'").run(), /CHECK constraint failed/)
+  database.close()
+})
+
 test('Codex events are ordered, redacted and bounded', () => {
   const { database, repository } = setup()
   const run = repository.createRun({ projectId: 'project-1', chapterId: 'chapter-1', workflowId: 'chapter-creation', executionMode: 'codex' })

@@ -17,7 +17,7 @@ import { contextDependencyDigest, recordCreativeDependencies, invalidateCreative
 import { buildContextDelta } from './context-reuse.js'
 import { createAuthoringRepository } from './authoring-repository.js'
 import { TEXT_PATCH_SCHEMA, assertProtectedText } from './manuscript-patches.js'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import {
   archiveProject,
   applyPlanningFoundationBundle,
@@ -153,7 +153,9 @@ import { aggregatePromptEvalResults, scorePromptEvalCase, validatePromptEvalSuit
 import { runWithStructuredOutputRetry } from './structured-output-retry.js'
 import { AgentRuntime, manuscriptLengthRange } from './agent-runtime.js'
 import { CodexAgentGateway, inspectCodexRuntime } from './codex-agent-gateway.js'
-import { createCodexBookWorkspace, createCodexProjectMirror, removeCodexBookWorkspace } from './codex-project-mirror.js'
+import { QoderAgentGateway, inspectQoderRuntime } from './qoder-agent-gateway.js'
+import { AgentGatewayRouter, agentProviderLabel, normalizeAgentProvider } from './agent-gateway-router.js'
+import { createCodexBookWorkspace, createCodexProjectMirror, findCodexBookWorkspace, removeCodexBookWorkspace } from './codex-project-mirror.js'
 import { codexTaskDisplayTitle } from './codex-task-label.js'
 import { projectForInlineTarget, sanitizeProjectDraftContext } from './inline-creative.js'
 import { planningBundleSchema } from './planning-bundle.js'
@@ -168,6 +170,8 @@ let closeResponsePending = false
 const activeBenchmarkTasks = new Map()
 const activeBenchmarkControls = new Map()
 let codexGateway = null
+let qoderGateway = null
+let agentGateway = null
 let agentRuntime = null
 let chapterFinalizer = null
 let creativeInterface = null
@@ -242,6 +246,18 @@ function codexBookWorkspaceForProject(projectId) {
   const project = listProjects().find((item) => item.id === projectId)
   if (!project) throw new Error('项目不存在')
   return createCodexBookWorkspace({ baseDirectory: app.getPath('userData'), project })
+}
+
+function repairMissingCodexBookWorkspaces() {
+  const baseDirectory = app.getPath('userData')
+  for (const project of listProjects()) {
+    if (findCodexBookWorkspace({ baseDirectory, projectId: project.id })) continue
+    try {
+      createCodexBookWorkspace({ baseDirectory, project })
+    } catch (error) {
+      console.warn(`[Codex] 修复《${project.title}》书籍工作区失败：${error.message}`)
+    }
+  }
 }
 
 function outputSchemaForTask(pack, task, candidateType = '', target = null) {
@@ -464,12 +480,15 @@ async function prepareCodexPrompt({ run, step, extra = {} }) {
     task: step.task,
   })
   const codexSettings = loadCodexSettings()
+  const agentProvider = normalizeAgentProvider(run.modelRoutes?.agentProvider ?? codexSettings?.agentProvider)
   const codexRunSettings = {
-    model: run.modelRoutes?.codexModel ?? codexSettings?.model ?? '',
+    agentProvider,
+    model: run.modelRoutes?.codexModel ?? (agentProvider === 'qoder' ? codexSettings?.qoderModel || 'auto' : codexSettings?.model || ''),
     reasoningEffort: run.modelRoutes?.codexReasoningEffort ?? codexSettings?.reasoningEffort ?? 'high',
     fastMode: run.modelRoutes?.codexFastMode ?? Boolean(codexSettings?.fastMode),
     authMethod: run.modelRoutes?.codexAuthMethod ?? codexSettings?.authMethod ?? 'chatgpt',
   }
+  const agentLabel = agentProviderLabel(codexRunSettings.agentProvider)
   const inlineAction = run.workflowId === 'inline-action' ? step.input || {} : null
   const inlineRevision = inlineAction?.revision || null
   const revisionCandidate = inlineRevision?.parentCandidateId
@@ -587,7 +606,7 @@ async function prepareCodexPrompt({ run, step, extra = {} }) {
     promptContext,
     longContext: effectiveLongContext,
     sourceGeneration,
-    modelProfile: { id: 'codex-agent', provider: 'codex', name: 'Codex Agent', model: codexRunSettings.model },
+    modelProfile: { id: `${codexRunSettings.agentProvider}-agent`, provider: codexRunSettings.agentProvider, name: `${agentLabel} Agent`, model: codexRunSettings.model },
     agentRunId: run.id,
     agentStepId: step.id,
     chapterStateMode: run.modelRoutes?.chapterStateMode,
@@ -673,7 +692,7 @@ async function prepareCodexPrompt({ run, step, extra = {} }) {
     projectId: run.projectId,
     chapterId: run.chapterId,
     task: step.task,
-    model: { provider: 'codex', name: 'Codex Agent', model: codexRunSettings.model },
+    model: { provider: codexRunSettings.agentProvider, name: `${agentLabel} Agent`, model: codexRunSettings.model },
     promptSnapshot: compiled.snapshot,
     request: {
       task: step.task,
@@ -702,9 +721,12 @@ async function prepareCodexPrompt({ run, step, extra = {} }) {
       : inlineAction?.patchSource && inlineAction.modificationScope?.kind !== 'whole' ? TEXT_PATCH_SCHEMA
         : outputSchemaForTask(getAgentRunPack(run.id), step.task, step.candidateType, target),
     model: codexRunSettings.model,
+    agentProvider: codexRunSettings.agentProvider,
     reasoningEffort: codexRunSettings.reasoningEffort,
     fastMode: Boolean(codexRunSettings.fastMode),
-    authMethod: codexRunSettings.authMethod === 'environment' ? 'api-key' : 'chat-gpt',
+    authMethod: codexRunSettings.agentProvider === 'qoder'
+      ? (process.env.QODER_PERSONAL_ACCESS_TOKEN ? 'environment' : 'qoder-login')
+      : (codexRunSettings.authMethod === 'environment' ? 'api-key' : 'chat-gpt'),
     displayTitle,
     generationRecordId: generationRecord.id,
     promptSnapshot: compiled.snapshot,
@@ -1014,24 +1036,34 @@ async function applyAgentCandidate({ run, candidate, applyOptions = {} }) {
 
 function initializeCodexIntegration() {
   const repository = agentRepositoryApi()
+  const onGlobalAgentEvent = (payload) => {
+    publishCodexEvent('codex:event', payload)
+    if (payload.type === 'permission') {
+      const approval = payload.approval || payload
+      if (approval.agentRunId) updateAgentRun(approval.agentRunId, { status: 'waiting_approval' })
+      if (approval.agentStepId) updateAgentStep(approval.agentStepId, { status: 'waiting_approval', approvalId: approval.id })
+      publishCodexEvent('approvals:event', approval)
+    }
+  }
   codexGateway = new CodexAgentGateway({
     appPath: path.join(__dirname, '..'),
     resourcesPath: process.resourcesPath,
     repository,
     shouldAutoApprove: ({ actionType, projectId }) => actionType === 'model_call' && codexSessionModelApprovalProjects.has(projectId),
-    onGlobalEvent: (payload) => {
-      publishCodexEvent('codex:event', payload)
-      if (payload.type === 'permission') {
-        const approval = payload.approval || payload
-        if (approval.agentRunId) updateAgentRun(approval.agentRunId, { status: 'waiting_approval' })
-        if (approval.agentStepId) updateAgentStep(approval.agentStepId, { status: 'waiting_approval', approvalId: approval.id })
-        publishCodexEvent('approvals:event', approval)
-      }
-    },
+    onGlobalEvent: onGlobalAgentEvent,
   })
+  qoderGateway = new QoderAgentGateway({
+    appPath: path.join(__dirname, '..'),
+    resourcesPath: process.resourcesPath,
+    repository,
+    settingsProvider: loadCodexSettings,
+    shouldAutoApprove: ({ actionType, projectId }) => actionType === 'model_call' && codexSessionModelApprovalProjects.has(projectId),
+    onGlobalEvent: onGlobalAgentEvent,
+  })
+  agentGateway = new AgentGatewayRouter({ repository, codex: codexGateway, qoder: qoderGateway })
   agentRuntime = new AgentRuntime({
     repository,
-    codexGateway,
+    codexGateway: agentGateway,
     createMirror: async (run) => mirrorForRun(run),
     refreshMirror: async (run) => mirrorForRun(run),
     prepareCodexPrompt,
@@ -1072,7 +1104,7 @@ function initializeCodexIntegration() {
           qualityReportId: child.steps.find(item => item.id === candidate.stepId)?.qualityReportId, reviewRunId: child.id }, payload: candidate.payload }
       } finally {
         signal.removeEventListener('abort', abort)
-        await codexGateway.closeSession(child.id)
+        await agentGateway.closeSession(child.id)
       }
     },
     persistQualityReview: async ({ run, sourceCandidate, result, review }) => {
@@ -1175,7 +1207,8 @@ function initializeCodexIntegration() {
           modelRoutes: { modelProfileId: record.reviewer.profileId || '', reviewerProfileId: record.reviewer.profileId || '',
             ...(record.checks.creativeRequestId ? { creativeRequestId:record.checks.creativeRequestId } : {}),
             codexModel: record.reviewer.model || '', codexReasoningEffort: record.reviewer.reasoningEffort || '',
-            codexFastMode: Boolean(record.reviewer.fastMode), codexAuthMethod: record.reviewer.authMethod || 'chatgpt', finalizationId: record.id,
+            codexFastMode: Boolean(record.reviewer.fastMode), codexAuthMethod: record.reviewer.authMethod || 'chatgpt',
+            agentProvider: normalizeAgentProvider(record.reviewer.agentProvider), finalizationId: record.id,
             chapterStateMode: isReview ? undefined : record.checks.chapterStateMode },
         })
         finalizationRepository.patch(record.id, { [key]: run.id })
@@ -1193,7 +1226,7 @@ function initializeCodexIntegration() {
         candidate = run.candidates.find(item => item.status === 'pending')
       }
       if (!candidate) throw new Error(run.error || '独立任务尚未生成有效候选，请在创作助手中继续任务。')
-      await codexGateway.closeSession(run.id)
+      await agentGateway.closeSession(run.id)
       if (isReview && !run.steps.some(step => step.qualityReportId)) {
         const sourceId = run.steps[0]?.input?.target?.sourceGenerationId
         if (sourceId) {
@@ -1213,6 +1246,9 @@ function runtimeInfo() {
     appPath: path.join(__dirname, '..'),
     resourcesPath: process.resourcesPath,
   })
+  const qoder = qoderGateway?.inspectRuntime?.() || inspectQoderRuntime({
+    configuredPath: loadCodexSettings()?.qoderCliPath || '',
+  })
   return {
     buildId: CREATIVE_BUILD_ID,
     uiEntry: process.env.VITE_DEV_SERVER_URL ? 'development' : 'built',
@@ -1227,6 +1263,7 @@ function runtimeInfo() {
       fallback: 'embedded',
     },
     codex,
+    qoder,
   }
 }
 
@@ -2082,16 +2119,17 @@ async function importProjectFile() {
 function registerAppHandler(channel, handler) {
   creativeHandlers.set(channel, handler)
   ipcMain.handle(channel, (event, payload) => {
-    const mutations = /:(start|start-inline|continue-inline|pause|resume|cancel|finish-inline|confirm-candidate|reject-candidate|retry-step|resolve|create|update|delete|document-save|entity-update|finalize-start|finalize-confirm|amendment-confirm|manual-confirm|restore|protect|save-sample)$/
+    const mutations = /:(start|start-inline|continue-inline|pause|resume|cancel|finish-inline|confirm-candidate|reject-candidate|retry-step|resolve|create|update|delete|reorder|document-save|style-save|entity-update|finalize-start|finalize-confirm|amendment-confirm|manual-confirm|restore|protect|save-sample)$/
     if (!mutations.test(channel)) return handler(event, payload)
     const value = payload && typeof payload === 'object' ? payload : {}
     let projectId = value.projectId || ''
     const id = value.runId || value.chapterId || value.id || (typeof payload === 'string' ? payload : '')
     if (!projectId && id) {
-      for (const table of ['agent_runs','chapters','planning_entities','chapter_finalizations','bridge_action_requests','agent_candidates']) {
+      for (const table of ['agent_runs','chapters','planning_entities','character_relationships','story_arcs','knowledge_items','continuity_checks','author_style_samples','manuscript_protections','chapter_finalizations','bridge_action_requests','agent_candidates']) {
         const row = openDatabase().prepare(`SELECT project_id FROM ${table} WHERE id=?`).get(id)
         if (row) { projectId=row.project_id; break }
       }
+      if (!projectId) projectId = openDatabase().prepare('SELECT a.project_id FROM story_arc_beats b JOIN story_arcs a ON a.id=b.arc_id WHERE b.id=?').get(id)?.project_id || ''
     }
     return creativeMutationQueue.run(projectId, async () => {
       // The UI shares write serialization with project-bound clients. A live
@@ -2123,8 +2161,10 @@ async function initializeCreativeInterface() {
     snapshot:projectId => readCreativeSnapshot(db,projectId),
     stageCandidate:input => {
       const defaults=loadCodexSettings()
-      return agentRuntime.stageExternalCandidate({ ...input,modelRoutes:{ codexModel:defaults.model,
-        codexReasoningEffort:defaults.reasoningEffort,codexFastMode:defaults.fastMode,codexAuthMethod:defaults.authMethod } })
+      const agentProvider=normalizeAgentProvider(defaults.agentProvider)
+      return agentRuntime.stageExternalCandidate({ ...input,modelRoutes:{ codexModel:agentProvider === 'qoder' ? defaults.qoderModel || 'auto' : defaults.model,
+        codexReasoningEffort:defaults.reasoningEffort,codexFastMode:defaults.fastMode,codexAuthMethod:defaults.authMethod,
+        agentProvider } })
     },
     onChange:payload => publishCodexEvent('creative:changed',payload),
   })
@@ -2160,7 +2200,16 @@ function registerIpc() {
   ipcMain.handle('workspace:load', (_event, projectId) => loadWorkspace(projectId))
   ipcMain.handle('workspace:snapshot', (_event, projectId) => loadWorkspaceSnapshot(projectId))
   ipcMain.handle('projects:list', listProjects)
-  ipcMain.handle('project:create', (_event, input) => createProject(input))
+  ipcMain.handle('project:create', (_event, input) => {
+    const workspace = createProject(input)
+    try {
+      const codexWorkspace = createCodexBookWorkspace({ baseDirectory: app.getPath('userData'), project: workspace.project })
+      return { ...workspace, codexWorkspace: { root: codexWorkspace.root, descriptor: codexWorkspace.descriptor } }
+    } catch (error) {
+      console.error(`[Codex] 新书《${workspace.project.title}》的书籍工作区创建失败：${error.message}`)
+      return { ...workspace, codexWorkspaceError: error.message }
+    }
+  })
   ipcMain.handle('project:update', (_event, patch) => updateProject(patch))
   ipcMain.handle('project:archive', (_event, projectId) => archiveProject(projectId))
   ipcMain.handle('project:restore', (_event, projectId) => restoreProject(projectId))
@@ -2246,9 +2295,17 @@ function registerIpc() {
   })
   ipcMain.handle('codex:status', () => ({
     runtime: codexGateway.inspectRuntime(),
+    qoderRuntime: qoderGateway.inspectRuntime(),
     settings: loadCodexSettings(),
   }))
-  ipcMain.handle('codex:settings-save', (_event, payload) => saveCodexSettings(payload))
+  ipcMain.handle('codex:settings-save', async (_event, payload) => {
+    const before = loadCodexSettings()
+    const saved = saveCodexSettings(payload)
+    if (before.agentProvider !== saved.agentProvider || before.qoderCliPath !== saved.qoderCliPath) {
+      await qoderGateway.restartAdapter({ suppressErrors: true })
+    }
+    return saved
+  })
   ipcMain.handle('codex:start-auth', async (_event, methodId) => {
     await codexGateway.authenticate(methodId || 'chat-gpt')
     return codexGateway.inspectRuntime()
@@ -2257,16 +2314,32 @@ function registerIpc() {
   const inspectCodexModels = async (payload = {}) => {
     const diagnosticDirectory = path.join(app.getPath('userData'), 'codex-diagnostics')
     fs.mkdirSync(diagnosticDirectory, { recursive: true, mode: 0o700 })
-    const status = await codexGateway.testConnection({ cwd: diagnosticDirectory,
+    const provider = normalizeAgentProvider(payload.agentProvider)
+    const gateway = provider === 'qoder' ? qoderGateway : codexGateway
+    if (provider === 'qoder' && qoderGateway.useConfiguredPath(payload.qoderCliPath)) {
+      await qoderGateway.restartAdapter({ suppressErrors: true })
+    }
+    const status = await gateway.testConnection({ cwd: diagnosticDirectory,
       model: String(payload.model || ''), reasoningEffort: String(payload.reasoningEffort || ''), fastMode: Boolean(payload.fastMode) })
-    return { ok: true, status, message: '模型目录与配置已回读，诊断连接已释放；未发送创作请求。' }
+    return { ok: true, status, message: provider === 'qoder'
+      ? 'Qoder ACP 已建立诊断会话并正常释放；未发送创作请求。'
+      : '模型目录与配置已回读，诊断连接已释放；未发送创作请求。' }
   }
   ipcMain.handle('codex:test', (_event, payload) => inspectCodexModels(payload))
   ipcMain.handle('codex:models', (_event, payload) => inspectCodexModels(payload))
   ipcMain.handle('codex:restart-adapter', () => codexGateway.restartAdapter())
   ipcMain.handle('codex:open-project', async (_event, projectId) => {
     const workspace = codexBookWorkspaceForProject(String(projectId || ''))
-    return codexGateway.openDesktopWorkspace({ workspaceRoot: workspace.root, waitForRegistration: true })
+    const setupModule = app.isPackaged
+      ? path.join(process.resourcesPath, 'scripts', 'setup-operator-workspace.mjs')
+      : path.join(__dirname, '..', 'scripts', 'setup-operator-workspace.mjs')
+    const { setupOperatorWorkspace } = await import(pathToFileURL(setupModule).href)
+    const operator = await setupOperatorWorkspace({
+      workspace: workspace.root,
+      interfaceDirectory: path.join(app.getPath('userData'), 'creative-interface'),
+    })
+    const opened = await codexGateway.openDesktopWorkspace({ workspaceRoot: workspace.root, waitForRegistration: true })
+    return { ...opened, operator: { projectId: operator.projectId, clientId: operator.clientId, taskGuide: operator.taskGuide, changedFiles: operator.changedFiles } }
   })
   ipcMain.handle('approvals:session-model-policy', (_event, payload = {}) => {
     const projectId = String(payload.projectId || '')
@@ -2279,6 +2352,7 @@ function registerIpc() {
   })
   ipcMain.handle('agent:start', (event, payload) => {
     const codexDefaults = loadCodexSettings()
+    const agentProvider = normalizeAgentProvider(payload.agentProvider ?? codexDefaults.agentProvider)
     return agentRuntime.start({
       ...payload,
       modelRoutes: {
@@ -2286,7 +2360,10 @@ function registerIpc() {
         modelProfileId: payload.modelProfileId || '',
         reviewerProfileId: payload.reviewerProfileId || '',
       targetLength: Math.max(800, Math.min(12000, Math.round(Number(payload.targetLength) || 2000))),
-        codexModel: payload.codexModel ?? codexDefaults.model ?? '',
+        codexModel: agentProvider === 'qoder'
+          ? payload.qoderModel ?? codexDefaults.qoderModel ?? 'auto'
+          : payload.codexModel ?? codexDefaults.model ?? '',
+        agentProvider,
         codexReasoningEffort: payload.codexReasoningEffort ?? codexDefaults.reasoningEffort ?? 'high',
         codexFastMode: payload.codexFastMode ?? Boolean(codexDefaults.fastMode),
         codexAuthMethod: payload.codexAuthMethod ?? codexDefaults.authMethod ?? 'chatgpt',
@@ -2295,6 +2372,7 @@ function registerIpc() {
   })
   ipcMain.handle('agent:start-inline', (event, payload = {}) => {
     const codexDefaults = loadCodexSettings()
+    const agentProvider = normalizeAgentProvider(payload.agentProvider ?? codexDefaults.agentProvider)
     return agentRuntime.startInline({
       ...payload,
       modelRoutes: {
@@ -2303,7 +2381,10 @@ function registerIpc() {
         planning_field: payload.modelProfileId || '',
         appModelName: payload.modelProfileName || '',
         targetLength: Math.max(0, Math.min(12000, Math.round(Number(payload.targetLength) || 0))),
-        codexModel: payload.codexModel ?? codexDefaults.model ?? '',
+        codexModel: agentProvider === 'qoder'
+          ? payload.qoderModel ?? codexDefaults.qoderModel ?? 'auto'
+          : payload.codexModel ?? codexDefaults.model ?? '',
+        agentProvider,
         codexReasoningEffort: payload.codexReasoningEffort ?? codexDefaults.reasoningEffort ?? 'high',
         codexFastMode: payload.codexFastMode ?? Boolean(codexDefaults.fastMode),
         codexAuthMethod: payload.codexAuthMethod ?? codexDefaults.authMethod ?? 'chatgpt',
@@ -2319,9 +2400,13 @@ function registerIpc() {
     const profile = settings.profiles.find(item => item.id === profileId && item.enabled)
     if (executionMode === 'app_model' && !profile) throw new Error('请先在模型设置中选择质量评审模型，或选择 Codex 独立审稿')
     const codex = loadCodexSettings()
+    const selectedAgentProvider = normalizeAgentProvider(codex.agentProvider)
+    const selectedAgentLabel = agentProviderLabel(selectedAgentProvider)
+    const selectedAgentModel = selectedAgentProvider === 'qoder' ? codex.qoderModel || 'auto' : codex.model
     const reviewer = executionMode === 'codex'
-      ? { executionMode, model: requested.model || codex.model, reasoningEffort: requested.reasoningEffort || codex.reasoningEffort, fastMode: codex.fastMode,
-          authMethod: codex.authMethod, label: 'Codex · 独立上下文审稿（相同模型时并非跨模型评审）' }
+      ? { executionMode, model: requested.model || selectedAgentModel, reasoningEffort: requested.reasoningEffort || codex.reasoningEffort, fastMode: codex.fastMode,
+          authMethod: codex.authMethod, agentProvider: selectedAgentProvider,
+          label: `${selectedAgentLabel} · 独立上下文审稿（相同模型时并非跨模型评审）` }
       : { executionMode, profileId, model: profile.model, provider: profile.provider, settings: profile.settings,
           label: `${profile.name} · 独立上下文审稿` }
     const replaceId = String(payload.replaceFinalizationId || '')
@@ -2401,7 +2486,7 @@ function registerIpc() {
   ipcMain.handle('approvals:get', (_event, id) => getApprovalRequest(id))
   ipcMain.handle('approvals:resolve', (_event, payload) => {
     const before = getApprovalRequest(payload.id)
-    const resolved = codexGateway.resolveApproval(payload)
+    const resolved = agentGateway.resolveApproval(payload)
     if (before?.agentRunId) {
       updateAgentRun(before.agentRunId, { status: payload.approved ? 'running' : 'paused' })
       if (before.agentStepId) updateAgentStep(before.agentStepId, {
@@ -2544,6 +2629,7 @@ app.whenReady().then(async () => {
   if (!app.hasSingleInstanceLock()) return
   Menu.setApplicationMenu(Menu.buildFromTemplate(applicationMenuTemplate()))
   openDatabase()
+  repairMissingCodexBookWorkspaces()
   initializeCodexIntegration()
   registerIpc()
   await initializeCreativeInterface()
@@ -2565,5 +2651,5 @@ app.on('before-quit', () => {
   void creativeServer?.close()
   stopGoService()
   expirePendingApprovalRequests()
-  void codexGateway?.shutdown()
+  void agentGateway?.shutdown()
 })

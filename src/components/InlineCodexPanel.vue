@@ -440,12 +440,13 @@ const panelKicker = computed(() => {
   const targetKind = step.value?.input?.target?.kind
   const bundleLabel = targetKind === 'planning_document_bundle' ? 'PAGE' : targetKind === 'planning_entity_bundle' ? 'CARD' : targetKind === 'planning_chapter_bundle' ? 'CHAPTER' : ''
   if (run.value?.executionMode === 'app_model') return bundleLabel ? `AI · ${bundleLabel} BATCH` : 'AI · INLINE'
-  return bundleLabel ? `CODEX · ${bundleLabel} SESSION` : 'CODEX · INLINE'
+  const agent = run.value?.modelRoutes?.agentProvider === 'qoder' ? 'QODER' : 'CODEX'
+  return bundleLabel ? `${agent} · ${bundleLabel} SESSION` : `${agent} · INLINE`
 })
 const modelLabel = computed(() => run.value?.executionMode === 'app_model'
   ? run.value?.modelRoutes?.appModelName || run.value?.modelRoutes?.planning_field || run.value?.modelRoutes?.modelProfileId || '规划任务模型'
-  : run.value?.modelRoutes?.codexModel || 'Codex 默认模型')
-const backendLabel = computed(() => ({ codex_acp: 'Codex ACP', codex_exec: 'Codex exec', app_model: '任务模型' }[run.value?.actualBackend]
+  : run.value?.modelRoutes?.agentProvider === 'qoder' ? run.value?.modelRoutes?.codexModel || 'Qoder Auto' : run.value?.modelRoutes?.codexModel || 'Codex 默认模型')
+const backendLabel = computed(() => ({ codex_acp: 'Codex ACP', codex_exec: 'Codex exec', qoder_acp: 'Qoder ACP', app_model: '任务模型' }[run.value?.actualBackend]
   || (run.value?.executionMode === 'app_model' ? '等待任务模型' : '等待 ACP')))
 const trace = computed(() => (run.value?.events || []).filter((item) => ['status', 'plan', 'tool_call', 'tool_result', 'usage', 'failed', 'completed'].includes(item.type)).slice(-24))
 const tokenUsage = computed(() => {

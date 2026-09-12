@@ -60,7 +60,7 @@
             <button class="row-more" :aria-label="`管理《${item.title}》`" @click.stop="toggleProjectActions(item.id)">⋯</button>
             <div v-if="projectActionId === item.id" class="row-action-menu project-action-menu" @click.stop>
               <button @click="openEditProject(item)">编辑项目信息</button>
-              <button @click="openBookInCodex(item)">在 Codex 中打开本书</button>
+              <button @click="openBookInCodex(item)">准备并打开 Codex 专属任务</button>
               <button @click="openProjectTransfer(item)">导入与导出</button>
               <button @click="askArchiveProject(item)">归档项目</button>
               <button class="danger" @click="askDeleteProject(item)">删除项目</button>
@@ -201,6 +201,7 @@
           <button id="editor-tab-card" role="tab" :aria-selected="activeTab === 'card'" :tabindex="activeTab === 'card' ? 0 : -1" aria-controls="chapter-editor-content" :class="{ active: activeTab === 'card' }" @click="activeTab = 'card'">章节卡</button>
           <button id="editor-tab-scene" role="tab" :aria-selected="activeTab === 'scene'" :tabindex="activeTab === 'scene' ? 0 : -1" aria-controls="chapter-editor-content" :class="{ active: activeTab === 'scene' }" @click="activeTab = 'scene'">场景计划</button>
           <span class="tab-spacer"></span>
+          <button v-if="activeTab === 'manuscript'" type="button" title="查找正文（Ctrl+F / ⌘F）" @click="novelEditorRef?.find()">查找</button>
           <span class="editor-mode">{{ saveState === 'saving' ? '正在保存' : '编辑内容自动保存' }}</span>
         </div>
 
@@ -1000,7 +1001,7 @@ async function openBookInCodex(item = project) {
   projectMenuOpen.value = false
   try {
     const result = await appService.openCodexProject(item.id)
-    showToast(`已在 Codex 中打开《${item.title}》项目${result?.workspaceName ? ` · ${result.workspaceName}` : ''}`)
+    showToast(`《${item.title}》的本机绑定和任务说明已准备，并已在 Codex 中打开${result?.workspaceName ? ` · ${result.workspaceName}` : ''}`)
   } catch (error) {
     showToast(`打开 Codex 项目失败：${error.message}`)
   }
@@ -1053,7 +1054,9 @@ async function createNewProject() {
     const loaded = await appService.createProject({ ...newProjectDraft })
     applyWorkspace(loaded)
     newProjectOpen.value = false
-    showToast(`《${loaded.project.title}》已建立，可以开始第一章`)
+    showToast(loaded.codexWorkspaceError
+      ? `《${loaded.project.title}》已建立，但 Codex 项目目录创建失败：${loaded.codexWorkspaceError}`
+      : `《${loaded.project.title}》与 Codex 项目目录已建立，可以开始第一章`)
   } catch (error) {
     showToast(`建立项目失败：${error.message}`)
   } finally {
@@ -1584,14 +1587,14 @@ async function startInlineCodex(action = {}) {
     })
   }
   inlinePanelOpen.value = true
-  const executionLabel = run.executionMode === 'codex' ? 'Codex' : '任务模型'
+  const executionLabel = run.executionMode === 'codex' ? (run.modelRoutes?.agentProvider === 'qoder' ? 'Qoder' : 'Codex') : '任务模型'
   const targetKind = run.steps?.[0]?.input?.target?.kind || request.target?.kind || ''
   const scopeLabel = targetKind === 'planning_document_bundle' ? '这一页' : targetKind === 'planning_entity_bundle' ? '这张卡' : targetKind === 'planning_chapter_bundle' ? '这一章规划' : '当前目标'
   const batchLabel = targetKind === 'planning_document_bundle' ? '整页' : targetKind === 'planning_entity_bundle' ? '整卡' : targetKind === 'planning_chapter_bundle' ? '整章规划' : '就地'
   showToast(run.focusedExisting
     ? `已打开${scopeLabel}正在运行的${executionLabel}任务`
     : run.executionMode === 'codex'
-      ? `${batchLabel} Codex 会话已建立${batchLabel === '就地' ? '' : '，本次调用会一次返回所有字段'}`
+      ? `${batchLabel} ${executionLabel} 会话已建立${batchLabel === '就地' ? '' : '，本次调用会一次返回所有字段'}`
       : `${batchLabel}生成已开始${batchLabel === '就地' ? '' : '，本次调用会一次返回所有字段'}`)
   return run
 }
@@ -1853,6 +1856,10 @@ function generationErrorMessage(error, prefix) {
 
 function handleSelection(selection) {
   cursorOffset.value = Number(selection.to || 0)
+  if (selection.source === 'search') {
+    selectionTools.visible = false
+    return
+  }
   selectionTools.text = selection.text || ''
   selectionTools.from = selection.from
   selectionTools.to = selection.to

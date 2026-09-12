@@ -183,6 +183,9 @@ export function createCodexRepository(database, {
       fastMode: Boolean(row.fast_mode),
       adapterVersion: row.adapter_version,
       authMethod: row.auth_method,
+      agentProvider: row.agent_provider === 'qoder' ? 'qoder' : 'codex',
+      qoderCliPath: row.qoder_cli_path || '',
+      qoderModel: row.qoder_model || 'auto',
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     } : null
@@ -194,7 +197,8 @@ export function createCodexRepository(database, {
     const updatedAt = now()
     database.prepare(`
       UPDATE agent_provider_settings SET enabled = ?, preferred_backend = ?, model = ?,
-        reasoning_effort = ?, fast_mode = ?, auth_method = ?, updated_at = ? WHERE id = 'codex'
+        reasoning_effort = ?, fast_mode = ?, auth_method = ?, agent_provider = ?, qoder_cli_path = ?, qoder_model = ?,
+        updated_at = ? WHERE id = 'codex'
     `).run(
       input.enabled === undefined ? Number(current.enabled) : Number(Boolean(input.enabled)),
       input.preferredBackend || current.preferredBackend,
@@ -202,6 +206,9 @@ export function createCodexRepository(database, {
       input.reasoningEffort ?? current.reasoningEffort,
       input.fastMode === undefined ? Number(current.fastMode) : Number(Boolean(input.fastMode)),
       input.authMethod || current.authMethod,
+      input.agentProvider === undefined ? current.agentProvider : (input.agentProvider === 'qoder' ? 'qoder' : 'codex'),
+      input.qoderCliPath === undefined ? current.qoderCliPath : String(input.qoderCliPath || '').trim().slice(0, 4096),
+      input.qoderModel === undefined ? current.qoderModel : String(input.qoderModel || 'auto').trim().slice(0, 256),
       updatedAt,
     )
     return getProviderSettings()

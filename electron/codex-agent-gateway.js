@@ -245,6 +245,11 @@ export class CodexAgentGateway {
     approvalTimeoutMs = 5 * 60 * 1000,
     onGlobalEvent = () => {},
     shouldAutoApprove = () => false,
+    agentId = 'codex',
+    agentName = 'Codex',
+    acpBackend = 'codex_acp',
+    adapterVersion = ADAPTER_VERSION,
+    supportsExecFallback = true,
   }) {
     this.appPath = appPath
     this.resourcesPath = resourcesPath
@@ -254,6 +259,11 @@ export class CodexAgentGateway {
     this.approvalTimeoutMs = approvalTimeoutMs
     this.onGlobalEvent = onGlobalEvent
     this.shouldAutoApprove = shouldAutoApprove
+    this.agentId = agentId
+    this.agentName = agentName
+    this.acpBackend = acpBackend
+    this.adapterVersion = adapterVersion
+    this.supportsExecFallback = supportsExecFallback
     this.runtime = null
     this.process = null
     this.connection = null
@@ -355,7 +365,7 @@ export class CodexAgentGateway {
   async authenticate(methodId = 'chat-gpt') {
     await this.startAdapter()
     const available = this.initializeResult?.authMethods || []
-    if (!available.some((method) => method.id === methodId)) throw new Error(`Codex 不支持认证方式 ${methodId}`)
+    if (!available.some((method) => method.id === methodId)) throw new Error(`${this.agentName} 不支持认证方式 ${methodId}`)
     await this.connection.authenticate({ methodId })
     this.authenticatedMethod = methodId
     return this.inspectRuntime()
@@ -374,7 +384,7 @@ export class CodexAgentGateway {
         ok: true,
         protocolVersion: this.initializeResult?.protocolVersion || '',
         sessionCreated: Boolean(created?.sessionId),
-        adapterVersion: ADAPTER_VERSION,
+        adapterVersion: this.adapterVersion,
         configOptions: publicConfigOptions(this.configOptions),
         models: modelDirectory(this.configOptions, true),
         selected: sessionModelSnapshot(this.configOptions),
@@ -441,7 +451,7 @@ export class CodexAgentGateway {
     return registration
   }
 
-  async createSession({ agentRunId, mirrorRoot, workspaceRoot = '', authMethod = '', backend = 'codex_acp' }) {
+  async createSession({ agentRunId, mirrorRoot, workspaceRoot = '', authMethod = '', backend = this.acpBackend }) {
     await this.startAdapter()
     try {
       const directories = sessionDirectories(workspaceRoot, mirrorRoot)
@@ -456,7 +466,7 @@ export class CodexAgentGateway {
       this.sessionToRun.set(created.sessionId, agentRunId)
       this.repository?.upsertSession?.({
         agentRunId, backend, sessionId: created.sessionId, status: 'active',
-        protocolVersion: this.initializeResult?.protocolVersion || '', adapterVersion: ADAPTER_VERSION,
+        protocolVersion: this.initializeResult?.protocolVersion || '', adapterVersion: this.adapterVersion,
         capabilities: this.initializeResult?.agentCapabilities || {}, authMethod,
       })
       return session
@@ -498,7 +508,7 @@ export class CodexAgentGateway {
     this.configOptions = session.configOptions
     this.sessions.set(agentRunId, session)
     this.sessionToRun.set(sessionId, agentRunId)
-    this.repository?.upsertSession?.({ agentRunId, backend: 'codex_acp', sessionId, status: 'active', recoveryStrategy: strategy, authMethod })
+    this.repository?.upsertSession?.({ agentRunId, backend: this.acpBackend, sessionId, status: 'active', recoveryStrategy: strategy, authMethod })
     return session
   }
 
@@ -515,12 +525,12 @@ export class CodexAgentGateway {
         const option = session.configOptions.find((item) => item.id === configId)
         if (!option) {
           if (configId === 'fast-mode' && value === false) return
-          throw new Error(`当前 Codex 运行时未声明配置 ${configId}；请刷新模型列表`)
+          throw new Error(`当前 ${this.agentName} 运行时未声明配置 ${configId}；请刷新模型列表`)
         }
         if (option.currentValue === value) return
-        if (!this.connection?.setSessionConfigOption) throw new Error('当前 Codex 运行时不支持显式模型配置')
+        if (!this.connection?.setSessionConfigOption) throw new Error(`当前 ${this.agentName} 运行时不支持显式模型配置`)
         if (option.type === 'select' && !option.options?.flatMap(item => item.options || [item]).some((item) => item.value === value)) {
-          throw new Error(`Codex 会话不支持配置 ${configId}=${value}`)
+          throw new Error(`${this.agentName} 会话不支持配置 ${configId}=${value}`)
         }
         const response = await this.connection.setSessionConfigOption({
           sessionId: session.sessionId,
@@ -529,7 +539,7 @@ export class CodexAgentGateway {
           ...(option.type === 'boolean' ? { type: 'boolean' } : {}),
         })
         if (!response.configOptions?.some((item) => item.id === configId && item.currentValue === value)) {
-          throw new Error(`Codex 配置回读不匹配：${configId}=${value} 未生效；已停止本次调用`)
+          throw new Error(`${this.agentName} 配置回读不匹配：${configId}=${value} 未生效；已停止本次调用`)
         }
         session.configOptions = response.configOptions
         this.configOptions = session.configOptions
@@ -571,7 +581,7 @@ export class CodexAgentGateway {
         agentStepId,
         sessionId: session?.sessionId || '',
         actionType: 'model_call',
-        permission: `运行 Codex 创作步骤：${settings.stepLabel || agentStepId}`,
+        permission: `运行 ${this.agentName} 创作步骤：${settings.stepLabel || agentStepId}`,
         payload: { model: settings.model || '', reasoningEffort: settings.reasoningEffort || '', displayTitle: settings.displayTitle || '', promptDigest: createHash('sha256').update(promptText).digest('hex') },
       })
       if (!session) {
@@ -606,7 +616,7 @@ export class CodexAgentGateway {
         if (response.stopReason === 'cancelled') throw new CodexCancelledError()
         const result = {
           schemaVersion: 1,
-          backend: 'codex_acp',
+          backend: this.acpBackend,
           sessionId: session.sessionId,
           content: session.content,
           structuredOutput: structuredFromContent(session.content),
@@ -627,12 +637,12 @@ export class CodexAgentGateway {
       }
     } catch (error) {
       const outputStarted = Boolean(session?.outputStarted)
-      const fallback = allowExecFallback && this._canFallback(error, outputStarted)
+      const fallback = this.supportsExecFallback && allowExecFallback && this._canFallback(error, outputStarted)
       if (!fallback) {
         if (approval?.id && error.name !== 'CodexCancelledError') this.repository?.completeApproval?.(approval.id, { error: error.message })
         error.codexPartialResult = {
           schemaVersion: 1,
-          backend: 'codex_acp',
+          backend: this.acpBackend,
           sessionId: session?.sessionId || '',
           content: session?.content || '',
           structuredOutput: structuredFromContent(session?.content || ''),
@@ -730,7 +740,7 @@ export class CodexAgentGateway {
       usage: {},
       modelSnapshot: { model, reasoningEffort, fastMode, verified: false, source: 'exec_explicit_arguments' },
       events,
-      fallbackFrom: 'codex_acp',
+      fallbackFrom: this.acpBackend,
       fallbackReason,
       outputStarted: Boolean(content || events.length),
     }

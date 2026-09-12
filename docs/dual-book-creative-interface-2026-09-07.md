@@ -1,6 +1,6 @@
 # 双书并行创作接口
 
-构建：`creative-upgrade-2026.09.07-dual-book.2`。基线是当前本地 `finalize.1` 工作区，保留全部已有暂存、未暂存及新增文件。`.2` 增补交接修正按钮的就地校验与保存结果反馈，接口协议不变。
+当前构建：`creative-upgrade-2026.09.12-cross-device-operator.3`。基线保留当前本地工作区的全部已有暂存、未暂存及新增文件。本版在原双书接口上补齐项目内容直写、新书跨平台工作区、目标电脑本机重新绑定与专属任务启动说明；协议保持项目绑定、幂等和确认机制。
 
 ## 已核对的项目身份
 
@@ -15,7 +15,24 @@ ID 是绑定依据，精确书名是首次绑定时的第二道核验。前台�
 
 接口随 Novel Studio 主进程启动，仅监听 `127.0.0.1` 的随机端口。每本书使用独立令牌，凭据文件权限为 `0600`，父目录为 `0700`。接口拒绝带浏览器 Origin 的请求；不给网页提供 CORS。该机制隔离项目调用，不将同一操作系统用户下的任意程序当作互不信任的沙箱。
 
-服务发现文件：`~/Library/Application Support/novel-studio/creative-interface/server.json`。普通客户端文件只包含本书身份、令牌及服务发现文件位置。任务不要读取 `admin.json` 或其他客户端的凭据。重启后客户端重新读取服务地址；项目令牌保持有效。
+服务发现文件位于 Electron `userData/creative-interface/server.json`：macOS 默认是 `~/Library/Application Support/novel-studio/creative-interface/server.json`，Windows 默认是 `%APPDATA%\novel-studio\creative-interface\server.json`，Linux 默认在 `$XDG_CONFIG_HOME/novel-studio/creative-interface/server.json`（未设置时使用 `~/.config`）。普通客户端文件只包含本书身份、令牌及服务发现文件位置。任务不要读取 `admin.json` 或其他客户端的凭据。重启后客户端重新读取服务地址；项目令牌保持有效。
+
+## 换电脑、生成本机绑定与专属任务
+
+书库备份可带到另一台电脑，客户端令牌、`server.json`、`.novel-studio-operator.json` 和 Codex task/thread ID 不随书库迁移。目标电脑安装本构建或更新版并导入书库后，保持 Novel Studio 运行，在作品菜单点击“准备并打开 Codex 专属任务”。应用会按 `.novel-studio-project.json` 中的精确项目 ID：
+
+1. 在目标电脑生成仅绑定本书的本机客户端，不复用来源电脑 token。
+2. 安装或刷新 `.agents/skills/novel-studio-operator/` 与 `.novel-studio-operator.json`；旧机器绝对路径只在项目 ID 相同的显式本机重绑流程中替换。
+3. 生成 `NOVEL-STUDIO-TASK.md`，写入固定项目 ID、首次只读核验和全部受控写入要求。
+4. 在 Codex 中打开本书项目。随后在该项目新建一个用户可继续交互的任务，把 `NOVEL-STUDIO-TASK.md` 作为首次消息；每本书各建一个，不从其他书 fork。
+
+界面入口需要修复时，可在目标电脑应用运行期间从安装资源目录执行：
+
+```sh
+node scripts/setup-operator-workspace.mjs --workspace "书籍工作区绝对路径"
+```
+
+脚本自动发现当前操作系统的 `creative-interface` 目录；也可显式传 `--directory`。它只生成本机绑定、操作 Skill 和任务说明，不修改正文、候选、审批、运行或定稿，不调用模型。
 
 仅开发/管理任务首次绑定：
 
@@ -28,7 +45,7 @@ node scripts/creative-client.mjs bind --id entertainment-author --project projec
 
 ## 创作任务用法
 
-客户端脚本：`/Users/weiqifeng/Desktop/novelmodel/novel-studio/scripts/creative-client.mjs`。
+开发工作区客户端脚本为 `scripts/creative-client.mjs`；安装版使用应用资源目录中的同名脚本。书籍专属任务优先使用已经安装到本书目录的自包含入口，不依赖开发机路径。
 
 ```sh
 node /Users/weiqifeng/Desktop/novelmodel/novel-studio/scripts/creative-client.mjs identity --client '/Users/weiqifeng/Library/Application Support/novel-studio/creative-interface/clients/suspense-author.json'
@@ -57,11 +74,32 @@ node /Users/weiqifeng/Desktop/novelmodel/novel-studio/scripts/creative-client.mj
 | `candidate.resolve` | `runId, candidateId, accept, confirm:true, reason`；调用既有候选确认，支持 `editedPayload` 和原 `applyOptions`。定稿子候选必须走定稿流程 |
 | `approval.resolve` | `id, approved, confirm:true, reason/note`；仅决定该审批项，不改变全局或项目免审策略 |
 | `chapter.create` | `title, confirm:true, reason`；可用已核对同书的 `sourceChapterId` 和 `mode:copy-plan` 复制规划 |
+| `project.update` | `title?/genre?/idea?/style?/default_execution_mode?, sourceDigest, confirm:true, reason`；直接更新本书元信息、故事种子和项目文风 |
+| `chapter.update` | `id, title?/manuscript?/expectedManuscript?/card?/scenePlan?, sourceDigest, confirm:true, reason`；写正文、章卡和场景计划，不允许直接伪造定稿状态 |
+| `chapters.reorder` | `chapterIds, sourceDigest, confirm:true, reason`；完整提交本书章节 ID 顺序 |
+| `planning.document.save` | `kind, content, sourceDigest, confirm:true, reason`；保存 foundation/world/outline 等已有规划文档整卡 |
+| `planning.entity.create` | `kind, title, data?, confirm:true, reason`；kind 支持 `character/world/volume`，地点作为带 `data.category` 的 world 实体 |
+| `planning.entity.update` / `planning.entities.reorder` | 更新人物、世界元素、分卷整卡，或提交同 kind 的完整 ID 顺序；需 `sourceDigest, confirm:true, reason` |
+| `planning.relationship.create` | `fromCharacterId, toCharacterId, label, surface?, tension?, direction?, trend?, status?, confirm:true, reason`；两个节点必须是本书人物卡 |
+| `planning.relationship.update` | `id` 加需要修改的关系字段，以及 `sourceDigest, confirm:true, reason` |
+| `planning.arc.create` | `title, category?, premise?, destination?, status?, colorKey?, confirm:true, reason`；新建跨卷情节弧 |
+| `planning.arc.update` | `id` 加需要修改的情节弧字段，以及 `sourceDigest, confirm:true, reason` |
+| `planning.arc-beat.create` | `arcId, volumeId?, chapterId?, label, changeText?, confirm:true, reason`；关联对象必须属于本书 |
+| `planning.arc-beat.update` | `id` 加需要修改的节点字段，以及 `sourceDigest, confirm:true, reason` |
+| `knowledge.item.create` / `knowledge.item.update` / `knowledge.items.reorder` | 写事实、时间线、伏笔及其生效范围、可见范围和顺序；kind 为 `fact/timeline/foreshadow` |
+| `knowledge.check.resolve` | `id, expectedStatus, status, sourceDigest, confirm:true, reason`；处理本书连续性检查，并核对刚读取的原状态 |
+| `context.update` | 写本书上下文预算、近期/相关章节数、知识上限和章节摘要长度 |
+| `prompt.style.save` | `scopeType, scopeId, text, style?, sourceDigest, confirm:true, reason`；写项目/分卷/章节文风 |
+| `authoring.sample.save` / `authoring.protection.save` | 写认可片段或正文保护范围；新增时另传正文的 `manuscriptDigest`，与项目 `sourceDigest` 区分 |
 | `finalization.start` | `chapterId, reviewer`；先本地检查，不调用模型；已有未结束定稿返回原记录 |
 | `finalization.get` | `id` 或 `chapterId` |
 | `finalization.act` | `id, action`；`start-review`、`accept-review`、`correct-state`、`accept-state`、`resume`、`cancel`。接受或修正需要 `confirm:true, reason`，证据修正还需要原 `sourceDigest/stateDigest/corrections` |
 
 就地目标支持已保存的 `planning_document` / `planning_document_bundle`、`planning_entity` / `planning_entity_bundle`、`chapter_field` / `planning_chapter_bundle`、`chapter_card`、`scene_plan`、`manuscript` / `manuscript_selection`、`chapter_state`、`continuity_audit` 和 `quality_review`。规划文档的 `targetId` 是 `foundation/world/outline` 等真实文档 kind；卡片与章节的 `targetId` 是准确 ID。
+
+外部作家可以先通过四个 `planning.*.create` 操作建立新书的正式规划结构，再用响应对象的 `id` 作为 entityId/arcId 启动整卡生成。所有创建操作进入同一项目写入队列、记录幂等请求，并在回执丢失时按原 requestId 返回同一对象，不重复建卡。
+
+所有内容直写操作先读取一次 `snapshot`，把返回的 `sourceDigest` 原样放入请求；写入成功后摘要会变化，下一次修改需重新读取。主进程在项目队列内再次核对摘要和对象归属，因此两个外接任务拿着同一旧快照竞争时只允许先到者生效，后到者返回 `SOURCE_STALE`。直写是作者确认后的正式保存，不是模型候选；需要先讨论或预览时仍使用 `run.*` / `candidate.*` 流程。
 
 生成正文示例（参数文件）：
 
@@ -99,7 +137,7 @@ node /Users/weiqifeng/Desktop/novelmodel/novel-studio/scripts/creative-client.mj
 
 进程崩溃后，不确定的请求标记 `REQUEST_INTERRUPTED`，不会自动重放。已持久化的运行 ID 随错误详情保留；先读取状态和已有候选，再显式恢复原步骤。若崩溃恰好发生在正式写入与回执保存之间，先从本书快照核对实际结果；接口不会假设该操作尚未发生。正常丢失响应、重复确认及重启后读取已完成请求均返回相同结果。
 
-外部候选摘要取本书正式资料，排除前台选中状态、缓存同步时间和运行日志；来源变化时拒绝提交或确认并保留过期候选。前台旧正文保存额外检查原正文，外部确认后不会被旧编辑缓冲静默覆盖。
+外部来源摘要取本书正式资料，覆盖项目、章节、规划、正式知识、上下文配置、文风、认可片段和保护范围，并排除前台选中状态、自动刷新的连续性检查、纯缓存同步时间和运行日志；来源变化时拒绝直写、提交或确认。连续性检查另用 `expectedStatus` 防止重复处理，前台旧正文保存还会核对原正文，外部确认后不会被旧编辑缓冲静默覆盖。
 
 ## 验证方式
 

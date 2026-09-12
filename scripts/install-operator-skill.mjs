@@ -30,6 +30,7 @@ function sourceFiles(directory, prefix = '') {
 }
 
 export async function installOperator({ workspace, clientFile, projectId,
+  replaceLocalBinding = false,
   skillSource = path.resolve(here, '../skills/novel-studio-operator'),
   clientSource = path.join(here, 'creative-client.mjs'), call = callCreative }) {
   const root = fs.realpathSync(workspace), client = fs.realpathSync(clientFile)
@@ -39,7 +40,11 @@ export async function installOperator({ workspace, clientFile, projectId,
   if (identity.projectId !== projectId || !identity.clientId) throw new Error('客户端与书籍工作区不属于同一项目')
   const config = { schemaVersion: 1, projectId, clientId: identity.clientId, workspace: root, clientFile: client }
   regularPath(root, path.join(root, configName))
-  if (fs.existsSync(path.join(root, configName)) && JSON.stringify(read(path.join(root, configName))) !== JSON.stringify(config)) throw new Error('已有操作绑定不同，保留原文件；请明确核对后再安装')
+  const existingConfig = fs.existsSync(path.join(root, configName)) ? read(path.join(root, configName)) : null
+  if (existingConfig && JSON.stringify(existingConfig) !== JSON.stringify(config)) {
+    if (!replaceLocalBinding) throw new Error('已有操作绑定不同，保留原文件；跨电脑迁移请使用目标机重新绑定流程')
+    if (existingConfig.projectId !== projectId) throw new Error('已有操作绑定属于其他项目，拒绝替换')
+  }
   const prefix = path.join('.agents', 'skills', 'novel-studio-operator')
   const manifestFile = path.join(root, prefix, '.installed-files.json')
   regularPath(root, manifestFile)
@@ -55,6 +60,15 @@ export async function installOperator({ workspace, clientFile, projectId,
     '从本目录运行 `node .agents/skills/novel-studio-operator/scripts/operate.mjs status` 核验绑定和进度。',
     '仅为操作指引，不替代当前作者要求，不储存正文或凭据。',
     '内部 ACP 候选会话继续使用其明确提供的 .nscollab.json 镜像与 novel-studio-creator。', '',
+  ].join('\n'))])
+  files.push(['NOVEL-STUDIO-TASK.md', Buffer.from([
+    '# Novel Studio 书籍专属任务启动说明', '',
+    `请接手 Novel Studio 中项目 ID 为 \`${projectId}\` 的《${identity.title || descriptor.title || '未命名小说'}》。`,
+    '这是本书可长期继续交互的专属创作任务，不是应用内部 ACP 候选会话。',
+    '先完整读取 `.agents/skills/novel-studio-operator/SKILL.md` 与其操作流程，再运行 `node .agents/skills/novel-studio-operator/scripts/operate.mjs status`。',
+    '首次只读核对 identity、项目标题、章节、未完成运行、候选和定稿状态并向用户汇报，等待新的创作指令；不要重建项目、复制正文或自行启动模型。',
+    '后续所有正文、设定、规划、知识、上下文、文风、候选、审批和定稿操作都通过本书受控接口完成，不直接写 SQLite，不依赖前台当前选中的书。',
+    '每次写入遵守来源摘要、稳定 request-id、项目归属和作者确认要求；不要读取其他书籍的客户端或管理凭据。', '',
   ].join('\n'))])
   // Preflight every destination before writing. Never overwrite an author's edited guide.
   for (const [name, data] of files) {
@@ -74,20 +88,24 @@ export async function installOperator({ workspace, clientFile, projectId,
     changed++
   }
   fs.writeFileSync(manifestFile, `${JSON.stringify(Object.fromEntries(files.map(([name, data]) => [name, digest(data)])), null, 2)}\n`, { mode: 0o600 })
-  return { projectId, clientId: identity.clientId, workspace: root, changedFiles: changed, buildId: identity.buildId,
+  return { projectId, title: identity.title, clientId: identity.clientId, workspace: root,
+    taskGuide: path.join(root, 'NOVEL-STUDIO-TASK.md'), changedFiles: changed, buildId: identity.buildId,
     note: '仅安装操作 Skill 和公开绑定指针；未修改书稿、审批、运行或客户端凭据。' }
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
     const args = process.argv.slice(2), values = {}
+    let replaceLocalBinding = false
     while (args.length) {
-      const key = args.shift(), value = args.shift()
-      if (!['--workspace', '--client', '--project'].includes(key) || !value || Object.hasOwn(values, key)) throw new Error('用法：install-operator-skill.mjs --workspace 书籍目录 --client 本书客户端文件 --project 项目ID')
+      const key = args.shift()
+      if (key === '--replace-local-binding') { replaceLocalBinding = true; continue }
+      const value = args.shift()
+      if (!['--workspace', '--client', '--project'].includes(key) || !value || Object.hasOwn(values, key)) throw new Error('用法：install-operator-skill.mjs --workspace 书籍目录 --client 本书客户端文件 --project 项目ID [--replace-local-binding]')
       values[key] = value
     }
     if (!values['--workspace'] || !values['--client'] || !values['--project']) throw new Error('安装需要明确书籍目录、客户端路径和项目 ID')
-    const result = await installOperator({ workspace: values['--workspace'], clientFile: values['--client'], projectId: values['--project'] })
+    const result = await installOperator({ workspace: values['--workspace'], clientFile: values['--client'], projectId: values['--project'], replaceLocalBinding })
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`)
   } catch (error) {
     process.stderr.write(`${JSON.stringify({ code: error.code || 'INSTALL_ERROR', message: error.message })}\n`)

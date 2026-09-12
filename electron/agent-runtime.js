@@ -500,6 +500,7 @@ export class AgentRuntime {
           projectId: run.projectId,
           stepLabel: step.key,
           displayTitle: prepared.displayTitle || '',
+          agentProvider: prepared.agentProvider || run.modelRoutes?.agentProvider || 'codex',
           model: prepared.model || '',
           reasoningEffort: prepared.reasoningEffort || '',
           fastMode: Boolean(prepared.fastMode),

@@ -86,4 +86,38 @@ export const creativeUpgradeMigrations = [
       END;
     `)
   } },
+  { version: 25, name: 'qoder-acp-agent-provider', up(db) {
+    db.exec(`
+      ALTER TABLE agent_provider_settings ADD COLUMN agent_provider TEXT NOT NULL DEFAULT 'codex'
+        CHECK(agent_provider IN ('codex', 'qoder'));
+      ALTER TABLE agent_provider_settings ADD COLUMN qoder_cli_path TEXT NOT NULL DEFAULT '';
+
+      CREATE TABLE agent_sessions_v25 (
+        id TEXT PRIMARY KEY,
+        agent_run_id TEXT NOT NULL UNIQUE,
+        backend TEXT NOT NULL CHECK(backend IN ('codex_acp', 'codex_exec', 'qoder_acp')),
+        session_id TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'initializing'
+          CHECK(status IN ('initializing', 'active', 'interrupted', 'closed', 'failed', 'recreated')),
+        protocol_version TEXT NOT NULL DEFAULT '',
+        adapter_version TEXT NOT NULL DEFAULT '',
+        capabilities_json TEXT NOT NULL DEFAULT '{}',
+        auth_method TEXT NOT NULL DEFAULT '',
+        recovery_strategy TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        closed_at TEXT NOT NULL DEFAULT '',
+        FOREIGN KEY(agent_run_id) REFERENCES agent_runs(id) ON DELETE CASCADE
+      );
+      INSERT INTO agent_sessions_v25 SELECT * FROM agent_sessions;
+      DROP TABLE agent_sessions;
+      ALTER TABLE agent_sessions_v25 RENAME TO agent_sessions;
+      CREATE INDEX agent_sessions_status_idx ON agent_sessions(status, updated_at DESC);
+    `)
+  } },
+  { version: 26, name: 'qoder-acp-model-selection', up(db) {
+    db.exec(`
+      ALTER TABLE agent_provider_settings ADD COLUMN qoder_model TEXT NOT NULL DEFAULT 'auto';
+    `)
+  } },
 ]

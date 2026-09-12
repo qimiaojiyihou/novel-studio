@@ -85,6 +85,14 @@ test('fresh database migrates to the latest schema with foreign keys enabled', (
     assert.ok(database.prepare('PRAGMA table_info(model_profiles)').all().some((column) => column.name === 'settings_json'))
     assert.ok(database.prepare('PRAGMA table_info(model_profiles)').all().some((column) => column.name === 'capabilities_json'))
     assert.ok(database.prepare('PRAGMA table_info(generation_records)').all().some((column) => column.name === 'request_json'))
+    assert.ok(database.prepare('PRAGMA table_info(agent_provider_settings)').all().some((column) => column.name === 'agent_provider'))
+    assert.ok(database.prepare('PRAGMA table_info(agent_provider_settings)').all().some((column) => column.name === 'qoder_cli_path'))
+    assert.ok(database.prepare('PRAGMA table_info(agent_provider_settings)').all().some((column) => column.name === 'qoder_model'))
+    database.prepare("UPDATE agent_provider_settings SET agent_provider = 'qoder', qoder_cli_path = '/tmp/qoder', qoder_model = 'qmodel_38max' WHERE id = 'codex'").run()
+    const agentSettings = database.prepare("SELECT agent_provider, qoder_cli_path, qoder_model FROM agent_provider_settings WHERE id = 'codex'").get()
+    assert.equal(agentSettings.agent_provider, 'qoder')
+    assert.equal(agentSettings.qoder_cli_path, '/tmp/qoder')
+    assert.equal(agentSettings.qoder_model, 'qmodel_38max')
   } finally {
     database.close()
   }

@@ -376,6 +376,7 @@ button:disabled { cursor: wait; opacity: .62; }
 .codex-proof-grid strong { color: #403a34; font: 17px var(--font-display); }
 .codex-proof-grid small { color: #897d70; font-size: 9px; line-height: 1.45; }
 .codex-settings-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 13px; margin-top: 16px; }
+.codex-settings-grid .wide { grid-column: 1 / -1; }
 .codex-settings-grid .codex-toggle { display: flex; align-items: center; justify-content: space-between; padding: 0 11px; border: 1px solid #d8cfc1; background: #fbf8f1; }
 .codex-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 16px; }
 .codex-permission-note { display: block; margin-top: 11px; color: #958778; font-size: 9px; line-height: 1.55; }

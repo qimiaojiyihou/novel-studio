@@ -8,7 +8,7 @@
       </div>
       <div class="assistant-launch">
         <label><span>执行方式</span><select v-model="launch.executionMode"><option value="codex">Codex · ACP 优先</option><option value="app_model">应用模型路由</option></select></label>
-        <small v-if="launch.executionMode === 'codex'" class="assistant-launch-note">Codex 模型在“模型与项目设置 → Codex 创作 Agent”中选择，并在 AgentRun 启动时锁定。</small>
+        <small v-if="launch.executionMode === 'codex'" class="assistant-launch-note">ACP Agent 提供方与模型在“模型与项目设置 → 创作 Agent”中选择，并在 AgentRun 启动时锁定。</small>
         <label><span>工作流 · Creative Pack {{ creativePreferences?.version }}</span><select v-model="launch.workflowId"><option v-for="workflow in creativePreferences?.workflows || []" :key="workflow.id" :value="workflow.id">{{ workflow.name }}</option></select></label>
         <details v-if="creativePreferences?.upgrade"><summary>预览升级到 1.3.0</summary><p>新增精简流程；场景按需展开，章末默认约束事件，字数偏差保留候选。现有正文、长章节卡和已启动运行保持原样。</p><p>涉及任务：{{ creativePreferences.upgrade.changedTasks.join('、') }}</p><button type="button" @click="upgradePack">确认升级创作规则</button></details>
         <label v-if="launch.executionMode === 'app_model'"><span>生成模型</span><select v-model="launch.modelProfileId"><option v-for="profile in enabledProfiles" :key="profile.id" :value="profile.id">{{ profile.name }}</option></select></label>
@@ -36,7 +36,7 @@
           <div>
             <span class="settings-kicker">AGENT RUN</span>
             <h2>{{ workflowLabel(activeRun.workflowId) }}</h2>
-            <p>{{ backendLabel(activeRun) }}<template v-if="activeRun.executionMode === 'codex'"> · {{ activeRun.modelRoutes?.codexModel || 'Codex 默认模型' }} / {{ activeRun.modelRoutes?.codexReasoningEffort || 'high' }}</template><template v-if="activeRun.modelRoutes?.targetLength"> · 正文目标 {{ activeRun.modelRoutes.targetLength }} 字</template><template v-if="activeRun.fallbackReason"> · {{ activeRun.fallbackReason }}</template></p>
+            <p>{{ backendLabel(activeRun) }}<template v-if="activeRun.executionMode === 'codex' && activeRun.modelRoutes?.agentProvider !== 'qoder'"> · {{ activeRun.modelRoutes?.codexModel || 'Codex 默认模型' }} / {{ activeRun.modelRoutes?.codexReasoningEffort || 'high' }}</template><template v-else-if="activeRun.executionMode === 'codex'"> · {{ activeRun.modelRoutes?.codexModel || 'auto' }}</template><template v-if="activeRun.modelRoutes?.targetLength"> · 正文目标 {{ activeRun.modelRoutes.targetLength }} 字</template><template v-if="activeRun.fallbackReason"> · {{ activeRun.fallbackReason }}</template></p>
           </div>
           <div class="assistant-run-controls">
             <button v-if="['running','waiting_approval'].includes(activeRun.status)" class="outline-button" @click="pauseRun">暂停</button>
@@ -206,8 +206,8 @@ async function retryStep(step) {
 }
 
 function workflowLabel(id) { return ({ 'project-initialization': '项目初始化', 'chapter-creation': '完整章节流程', 'chapter-compact': '精简章节创作', 'inline-action': '就地任务' }[id] || id) }
-function backendName(value) { return { codex_acp: 'Codex ACP', codex_exec: 'Codex exec', app_model: '应用模型' }[value] || value }
-function backendLabel(run) { return run.actualBackend ? backendName(run.actualBackend) : run.executionMode === 'codex' ? 'Codex · 等待 ACP' : '应用模型路由' }
+function backendName(value) { return { codex_acp: 'Codex ACP', codex_exec: 'Codex exec', qoder_acp: 'Qoder ACP', app_model: '应用模型' }[value] || value }
+function backendLabel(run) { return run.actualBackend ? backendName(run.actualBackend) : run.executionMode === 'codex' ? `${run.modelRoutes?.agentProvider === 'qoder' ? 'Qoder' : 'Codex'} · 等待 ACP` : '应用模型路由' }
 function statusLabel(value) { return ({ pending: '待开始', waiting_approval: '等待审批', running: '执行中', waiting_confirmation: '等待确认', paused: '已暂停', interrupted: '已中断', completed: '已完成', confirmed: '已确认', rejected: '已拒绝', stale: '已过期', cancelled: '已取消', failed: '失败' }[value] || value) }
 function stepLabel(step) { return ({ preflight: '生成前准备度', chapter_card: '生成章节卡', scene_plan: '生成场景计划', chapter: '生成正文候选', quality_review: '质量评审', chapter_state_extract: '提取章后状态' }[step.task] || (step.action === 'checkpoint' ? '等待作者确认' : step.key)) }
 function candidateLabel(type) { return ({ chapter_card: '章节卡候选', scene_plan: '场景计划候选', manuscript: '正文候选', manuscript_selection: '局部重写候选', planning_field: '规划字段候选', renderer_draft: '编辑器草稿候选', chapter_state: '章后状态候选', continuity_audit: '连续性审计候选', quality_review: '质量评审候选', foundation_bundle: '故事基础候选' }[type] || type) }

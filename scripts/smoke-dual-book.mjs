@@ -47,6 +47,13 @@ try {
   for (const [index,title] of ['隔离测试悬疑书','隔离测试文娱书'].entries()) {
     books.push(await page.evaluate(input=>window.novelStudio.createProject(input),{title,genre:index?'文娱':'悬疑',idea:`fixture-book-${index}`}))
   }
+  for (const book of books) {
+    assert.ok(book.codexWorkspace?.root,'new books create their Codex project immediately')
+    assert.equal(fs.realpathSync(path.dirname(book.codexWorkspace.root)),fs.realpathSync(path.join(directory,'codex-projects')))
+    const descriptor=JSON.parse(fs.readFileSync(path.join(book.codexWorkspace.root,'.novel-studio-project.json'),'utf8'))
+    assert.equal(descriptor.projectId,book.project.id)
+  }
+  console.log('New-book Codex project provisioning verified')
   const bindings=[]
   for(const [index,book] of books.entries()){
     bindings.push(await bindCreative(path.join(directory,'creative-interface'),{clientId:`fixture-${index}`,projectId:book.project.id,expectedTitle:book.project.title}))
@@ -56,6 +63,21 @@ try {
     },{projectId:book.project.id,index,port:model.address().port})
   }
   const call=(index,op,input={},id='')=>callCreative(bindings[index].clientFile,op,input,id)
+  let directSequence=0
+  const direct=async(index,operation,input)=>{
+    const source=await call(index,'snapshot')
+    directSequence+=1
+    return call(index,operation,{...input,sourceDigest:source.sourceDigest,confirm:true,reason:'隔离桌面冒烟确认内容直写'},`direct-${String(directSequence).padStart(4,'0')}`)
+  }
+  await direct(0,'project.update',{idea:'隔离桌面外接故事种子',style:'克制、具体。'})
+  const foundation=(await call(0,'snapshot')).planning.documents.find(item=>item.kind==='foundation')
+  await direct(0,'planning.document.save',{kind:'foundation',content:{...JSON.parse(foundation.content_json),premise:'外接接口写入的隔离测试前提'}})
+  const firstChapter=(await call(0,'chapter.get',{chapterId:books[0].chapters[0].id}))
+  await direct(0,'chapter.update',{id:firstChapter.id,card:{...firstChapter.card,goal:'验证外接章卡写入'}})
+  await direct(0,'knowledge.item.create',{kind:'fact',title:'隔离接口事实',content:{fact:'只属于第一本测试书'}})
+  assert.equal((await call(0,'snapshot')).project.idea,'隔离桌面外接故事种子')
+  assert.equal((await call(1,'snapshot')).project.idea,'fixture-book-1')
+  console.log('Project content writes verified through the desktop host')
   await page.reload();await page.getByRole('button',{name:'创作助手',exact:true}).click()
   const startInput=index=>({projectId:books[index].project.id,chapterId:books[index].chapters[0].id,task:'chapter',target:{kind:'manuscript',targetId:books[index].chapters[0].id},executionMode:'app_model',modelProfileId:`fixture-${index}`})
   const [a,b]=await Promise.all([call(0,'run.start-inline',startInput(0),'generate-0001'),call(1,'run.start-inline',startInput(1),'generate-0001')])
