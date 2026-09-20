@@ -19,14 +19,25 @@
           <label><span>对话 ID 或链接</span><input v-model="draft.threadId" :disabled="busy || Boolean(binding?.lastAppliedVersion)" placeholder="粘贴 ChatGPT Work 对话链接或任务 ID" /></label>
           <div class="work-sync-actions">
             <button type="button" :disabled="busy || !draft.threadId.trim()" @click="saveBinding">{{ binding ? '更新绑定信息' : '绑定此对话' }}</button>
-            <button v-if="binding" type="button" class="secondary" :disabled="busy" @click="copyPrompt">复制增量同步提示词</button>
             <button v-if="binding" type="button" class="secondary" :disabled="busy" @click="openCodex">打开本书 Codex 任务</button>
           </div>
           <p v-if="binding" class="work-sync-note">最近成功版本：{{ binding.lastAppliedVersion || '尚未同步' }}。首次导入后来源对话会锁定，避免把另一段对话误写进本书。</p>
         </section>
 
+        <section v-if="binding" class="work-sync-card">
+          <div class="work-sync-card-heading"><div><small>同步提示词</small><h3>{{ binding.lastAppliedVersion ? '继续同步设计变化' : '建立第一版设计基线' }}</h3></div></div>
+          <div class="work-sync-mode-grid">
+            <button type="button" :class="{ active: !binding.lastAppliedVersion }" :disabled="busy || Boolean(binding.lastAppliedVersion)" @click="copyPrompt('initial')">
+              <strong>首次全量同步</strong><span>汇总本对话中全部已确认且仍有效的设计，建立完整基线。</span><small>{{ binding.lastAppliedVersion ? '基线已建立' : '当前应使用' }}</small>
+            </button>
+            <button type="button" :class="{ active: Boolean(binding.lastAppliedVersion) }" :disabled="busy || !binding.lastAppliedVersion" @click="copyPrompt('incremental')">
+              <strong>后续增量同步</strong><span>只整理上次成功版本之后已经确认的新增或修改内容。</span><small>{{ binding.lastAppliedVersion ? `基于 ${binding.lastAppliedVersion}` : '首次同步后启用' }}</small>
+            </button>
+          </div>
+        </section>
+
         <section class="work-sync-card" :class="{ muted: !binding }">
-          <div class="work-sync-card-heading"><div><small>增量包</small><h3>粘贴并检查更新</h3></div><span v-if="preview" class="work-sync-state" :class="preview.preview?.conflicts?.length ? 'warn' : 'ok'">{{ preview.preview?.conflicts?.length ? '有冲突' : '可写入' }}</span></div>
+          <div class="work-sync-card-heading"><div><small>设计同步包</small><h3>粘贴并检查更新</h3></div><span v-if="preview" class="work-sync-state" :class="preview.preview?.conflicts?.length ? 'warn' : 'ok'">{{ preview.preview?.conflicts?.length ? '有冲突' : '可写入' }}</span></div>
           <textarea v-model="packageText" :disabled="busy || !binding" spellcheck="false" placeholder="将 ChatGPT Work 返回的 JSON 同步包粘贴到这里。支持纯 JSON 或 ```json 代码块。"></textarea>
           <div class="work-sync-actions"><button type="button" :disabled="busy || !binding || !packageText.trim()" @click="previewPackage">检查更新</button></div>
         </section>
@@ -100,12 +111,12 @@ async function saveBinding() {
   } catch (error) { notify(`绑定失败：${error.message}`) }
   finally { busy.value = false }
 }
-async function copyPrompt() {
+async function copyPrompt(mode) {
   busy.value = true
   try {
-    const prompt = await appService.getWorkDesignPrompt(props.project.id)
+    const prompt = await appService.getWorkDesignPrompt({ projectId:props.project.id, mode })
     await navigator.clipboard.writeText(prompt)
-    notify('增量同步提示词已复制，可粘贴到绑定的 ChatGPT Work 对话')
+    notify(`${mode === 'initial' ? '首次全量' : '后续增量'}同步提示词已复制，可粘贴到绑定的 ChatGPT Work 对话`)
   } catch (error) { notify(`复制失败：${error.message}`) }
   finally { busy.value = false }
 }

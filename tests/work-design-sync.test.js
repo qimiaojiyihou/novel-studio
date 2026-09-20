@@ -57,9 +57,12 @@ test('bound Work design package previews and applies every supported design laye
   const f = setup(); t.after(() => f.database.close())
   const originalManuscript = '这段正文必须保留。'
   f.workspace.updateChapter({ id:f.book.chapters[0].id, manuscript:originalManuscript })
-  const prompt = f.sync.prompt(f.book.project.id)
+  const prompt = f.sync.prompt(f.book.project.id, 'initial')
   assert.match(prompt, /01a0-work-thread/)
   assert.match(prompt, new RegExp(f.book.project.id))
+  assert.match(prompt, /首次全量设计基线包/)
+  assert.match(prompt, /不要只输出最近一轮变化/)
+  assert.throws(() => f.sync.prompt(f.book.project.id, 'incremental'), /先使用首次全量同步/)
 
   const preview = await f.sync.preview({ projectId:f.book.project.id, packageText:JSON.stringify(packageValue(f.book.project.id)) })
   assert.equal(preview.status, 'previewed')
@@ -71,6 +74,8 @@ test('bound Work design package previews and applies every supported design laye
   assert.equal(applied.status, 'applied')
   const state = f.sync.state(f.book.project.id)
   assert.equal(state.binding.lastAppliedVersion, 'RW-20260921-001')
+  assert.match(f.sync.prompt(f.book.project.id, 'incremental'), /后续增量设计同步包/)
+  assert.throws(() => f.sync.prompt(f.book.project.id, 'initial'), /基线已经建立/)
   const project = f.workspace.loadWorkspaceSnapshot(f.book.project.id)
   assert.equal(project.project.idea, '九年生存认证留下九张回执。')
   assert.equal(project.chapters[0].manuscript, originalManuscript)

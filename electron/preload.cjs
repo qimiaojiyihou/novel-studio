@@ -98,7 +98,7 @@ contextBridge.exposeInMainWorld('novelStudio', {
   openCodexProject: (projectId) => ipcRenderer.invoke('codex:open-project', projectId),
   getWorkDesignSync: (projectId) => ipcRenderer.invoke('work-design:state', projectId),
   bindWorkDesignSync: (payload) => ipcRenderer.invoke('work-design:bind', payload),
-  getWorkDesignPrompt: (projectId) => ipcRenderer.invoke('work-design:prompt', projectId),
+  getWorkDesignPrompt: (payload) => ipcRenderer.invoke('work-design:prompt', payload),
   previewWorkDesignPackage: (payload) => ipcRenderer.invoke('work-design:preview', payload),
   applyWorkDesignPackage: (payload) => ipcRenderer.invoke('work-design:apply', payload),
   getSessionModelApproval: (projectId) => ipcRenderer.invoke('approvals:session-model-policy', { projectId }),

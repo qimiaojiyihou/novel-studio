@@ -244,7 +244,7 @@ export const appService = {
   },
   getWorkDesignSync(projectId) { return electronApi.getWorkDesignSync(projectId) },
   bindWorkDesignSync(payload) { return electronApi.bindWorkDesignSync(payload) },
-  getWorkDesignPrompt(projectId) { return electronApi.getWorkDesignPrompt(projectId) },
+  getWorkDesignPrompt(payload) { return electronApi.getWorkDesignPrompt(payload) },
   previewWorkDesignPackage(payload) { return electronApi.previewWorkDesignPackage(payload) },
   applyWorkDesignPackage(payload) { return electronApi.applyWorkDesignPackage(payload) },
   getSessionModelApproval(projectId) {

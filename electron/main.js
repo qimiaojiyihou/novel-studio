@@ -2348,7 +2348,9 @@ function registerIpc() {
   })
   ipcMain.handle('work-design:state', (_event, projectId) => workDesignSync?.state(String(projectId || '')))
   ipcMain.handle('work-design:bind', (_event, payload) => workDesignSync?.saveBinding(payload || {}))
-  ipcMain.handle('work-design:prompt', (_event, projectId) => workDesignSync?.prompt(String(projectId || '')))
+  ipcMain.handle('work-design:prompt', (_event, payload) => typeof payload === 'string'
+    ? workDesignSync?.prompt(payload, 'auto')
+    : workDesignSync?.prompt(String(payload?.projectId || ''), String(payload?.mode || 'auto')))
   ipcMain.handle('work-design:preview', (_event, payload) => workDesignSync?.preview(payload || {}))
   ipcMain.handle('work-design:apply', (_event, payload) => workDesignSync?.apply(payload || {}))
   ipcMain.handle('approvals:session-model-policy', (_event, payload = {}) => {

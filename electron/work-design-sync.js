@@ -169,18 +169,29 @@ export class WorkDesignSync {
     return publicBinding(this.db.prepare('SELECT * FROM work_design_bindings WHERE project_id=?').get(projectId))
   }
 
-  prompt(projectId) {
+  prompt(projectId, requestedMode = 'auto') {
     const project = this.assertProject(projectId)
     const binding = this.db.prepare('SELECT * FROM work_design_bindings WHERE project_id=?').get(projectId)
     if (!binding) throw new Error('请先绑定 ChatGPT Work 对话')
     const base = binding.last_applied_version || ''
+    const mode = requestedMode === 'auto' ? (base ? 'incremental' : 'initial') : requestedMode
+    if (!['initial','incremental'].includes(mode)) throw new Error('同步提示词模式无效')
+    if (mode === 'initial' && base) throw new Error('首次全量基线已经建立，请使用后续增量同步')
+    if (mode === 'incremental' && !base) throw new Error('尚未建立设计基线，请先使用首次全量同步')
+    const initial = mode === 'initial'
     return [
-      `为 Novel Studio 项目《${project.title}》发布一个增量设计同步包。`,
+      `为 Novel Studio 项目《${project.title}》发布${initial ? '首次全量设计基线包' : '后续增量设计同步包'}。`,
       `sourceThreadId 必须填写：${binding.thread_id}`,
       `projectId 必须填写：${projectId}`,
       `baseVersion 必须填写：${base}`,
       '',
-      '只包含自上一个同步版本以来已经确认的变化；不要包含讨论草案。只返回一个 JSON 对象，不要解释，不要使用 Markdown 代码围栏。',
+      initial
+        ? '这是第一次同步。请系统梳理本对话中所有已经确认且仍然有效的小说设计，建立完整基线；不要只输出最近一轮变化，不要把讨论草案写入。'
+        : '只包含自上一个同步版本以来已经确认的变化；不要重复无变化的旧内容，不要包含讨论草案。',
+      initial
+        ? '逐类检查项目信息、三份规划文档、人物/世界元素/分卷、人物关系、章节规划、情节弧/节点、事实/时间线/伏笔；没有确认内容的类别使用空数组或空对象，不要自行补写。'
+        : '没有变化的顶层字段可省略或填写空数组/空对象。',
+      '只返回一个 JSON 对象，不要解释，不要使用 Markdown 代码围栏。',
       'packageVersion 使用新的稳定版本号，例如 RW-20260921-001。ref 是同一对象跨版本不变的英文或数字标识。不得输出正文和删除指令。',
       '',
       '{',
@@ -189,7 +200,7 @@ export class WorkDesignSync {
       `  "baseVersion": ${JSON.stringify(base)},`,
       `  "sourceThreadId": ${JSON.stringify(binding.thread_id)},`,
       `  "projectId": ${JSON.stringify(projectId)},`,
-      '  "summary": "本轮确认的设计变化",',
+      `  "summary": ${JSON.stringify(initial ? '首次全量设计基线' : '本轮确认的设计变化')},`,
       '  "project": { "genre": "", "idea": "", "style": "" },',
       '  "documents": { "foundation": {}, "world": {}, "outline": {} },',
       '  "entities": [{ "ref": "character.protagonist", "kind": "character", "title": "人物名", "data": {} }],',
@@ -199,7 +210,7 @@ export class WorkDesignSync {
       '  "knowledge": [{ "ref": "fact.identity", "kind": "fact", "title": "事实", "content": {}, "status": "open" }]',
       '}',
       '',
-      '没有变化的顶层字段可省略或填写空数组/空对象。人物关系只能引用 character ref；节点可引用 volume 或 chapter ref。',
+      '人物关系只能引用 character ref；节点可引用 volume 或 chapter ref。',
     ].join('\n')
   }
 
