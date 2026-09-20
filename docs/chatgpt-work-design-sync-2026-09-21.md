@@ -74,3 +74,11 @@
 ## 跨电脑说明
 
 Work 对话本身位于云端，但同步绑定和版本历史随 Novel Studio 书库保存。迁移到另一台电脑时，先按现有备份/恢复流程迁移书库；恢复后可继续使用原 Work 对话和版本链。Codex 专属任务仍需在新电脑上按本机路径重新生成，二者不是同一种绑定。
+
+## 本机安装验证
+
+- 已覆盖安装并启动 `/Applications/Novel Studio.app`；界面回读 schema v27、构建标识 `creative-upgrade-2026.09.21-work-sync.2`，作品菜单已显示“同步 ChatGPT Work 设计”。
+- 安装前备份：`release-2026.09.21/chatgpt-work-sync/backup-before-20260921-014824/`。目录含 SQLite 在线备份、安装前/安装后审计报告及完整旧应用。
+- 备份和升级后 `PRAGMA quick_check` 均为 `ok`；五本未归档书籍、章节状态和正文摘要逐项一致。升级只更新迁移/应用设置相关表，并新增三张 Work 设计同步表。
+- 已安装 `app.asar` 与测试构建逐字节一致，SHA-256 为 `697b0c95ac413bbba3bf719af43c143577548687000ff346efc6a59885763010`。
+- DMG SHA-256：`b655cec2716da3fdc7b542593d408c5ea6cc243ca6579da18166d501fe0cd568`；ZIP SHA-256：`704e2eff58986da674b13a258d3a080be6dceb3ff3e583d58eebd245d633f4c3`。
