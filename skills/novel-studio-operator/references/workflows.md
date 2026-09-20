@@ -33,6 +33,8 @@ snapshot 的规划条目可能含 `content_json`、`data_json`；解析后阅读
 }
 ```
 
+如果内容来自已经绑定的 ChatGPT Work 设计对话，优先使用界面的“同步 ChatGPT Work 设计”导入其增量 JSON 包，让应用一次预览全部对象引用、版本和冲突；不要在专属作家任务里把同一包拆成多次无关联直写。同步包仍需作者在界面确认，且不会修改正文。Work 包写入完成后，本任务重新读取 `snapshot` 再继续创作。
+
 一次写入成功后，下一项写入前重新读取 snapshot；不要连续复用旧摘要。项目元信息和故事种子用 `project.update`；正文、章名、完整章卡或场景计划用 `chapter.update`；故事基础/世界总设定/总纲整卡用 `planning.document.save`；人物、世界元素、分卷、关系、情节弧及节点用对应 `planning.*.update`；事实/时间线/伏笔用 `knowledge.item.create/update`；上下文预算用 `context.update`；项目/卷/章文风用 `prompt.style.save`。
 
 完整直写矩阵如下。表中的“可写字段”之外，仍需带本节开头的 `sourceDigest`、`confirm:true`、`reason`；`projectId` 由专属绑定自动注入，不要用输入切换书籍。

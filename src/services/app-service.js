@@ -242,6 +242,11 @@ export const appService = {
   openCodexProject(projectId) {
     return electronApi.openCodexProject(projectId)
   },
+  getWorkDesignSync(projectId) { return electronApi.getWorkDesignSync(projectId) },
+  bindWorkDesignSync(payload) { return electronApi.bindWorkDesignSync(payload) },
+  getWorkDesignPrompt(projectId) { return electronApi.getWorkDesignPrompt(projectId) },
+  previewWorkDesignPackage(payload) { return electronApi.previewWorkDesignPackage(payload) },
+  applyWorkDesignPackage(payload) { return electronApi.applyWorkDesignPackage(payload) },
   getSessionModelApproval(projectId) {
     return electronApi.getSessionModelApproval(projectId)
   },

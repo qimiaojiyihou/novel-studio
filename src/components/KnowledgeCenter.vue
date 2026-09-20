@@ -683,7 +683,7 @@ function candidateKindMark(kind) { return ({ fact: 'F', timeline: 'T', foreshado
 function checkKindLabel(kind) { return ({ 'missing-contract': '章节合同', 'missing-scene-plan': '场景计划', 'overdue-foreshadow': '伏笔回收', 'conflicting-fact': '事实冲突', 'ai-continuity': 'AI 审计' }[kind] || '连续性') }
 function checkStatusLabel(status) { return status === 'resolved' ? '已处理' : status === 'dismissed' ? '已忽略' : '待处理' }
 
-defineExpose({ flushSaves })
+defineExpose({ flushSaves, reload: loadCenter })
 </script>
 
 <style scoped>

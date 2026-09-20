@@ -26,6 +26,15 @@ description: 操作已绑定书籍的 Novel Studio 专属创作任务。用于�
 - 若界面入口失败，从目标电脑的应用资源目录运行 `node scripts/setup-operator-workspace.mjs --workspace "书籍工作区绝对路径"`。脚本会自动发现 Windows `%APPDATA%`、macOS `~/Library/Application Support` 或 Linux `$XDG_CONFIG_HOME` 下的本机创作接口；应用必须正在运行。
 - 在目标电脑的 Codex 项目中新建一个用户可继续交互的任务，以 `NOVEL-STUDIO-TASK.md` 为首次消息，或直接要求“按本书启动说明接手”。新任务会读取本目录 `AGENTS.md` 与本 Skill，首次只读核验后等待作者继续。每本书单独创建一个任务；不要从另一书 fork，也不要复制第一台电脑的 task/thread ID。
 
+## ChatGPT Work 设计同步
+
+- ChatGPT Work 对话不直接读写本机书库。需要长期保留 Work 里的设计讨论时，在 Novel Studio 的作品菜单选择“同步 ChatGPT Work 设计”，按精确项目绑定该 Work 对话的任务 ID 或链接。
+- 绑定后复制应用生成的“增量同步提示词”发给同一个 Work 对话。Work 只返回 schemaVersion 1 的 JSON 包；把完整 JSON 粘回应用，先检查差异，再由作者确认写入。
+- 同步包只处理设计层：项目题材/故事种子/项目文风、故事基础/世界设定/总纲、人物/世界元素/分卷、人物关系、章节卡/场景计划、情节弧/节点、事实/时间线/伏笔。它不写正文、不接受候选、不定稿，也不执行删除。
+- 每个包使用新的 packageVersion，并以上次成功版本作为 baseVersion；ref 在同一对象的后续包中保持不变。来源对话、项目 ID、基线版本、预览摘要和项目来源摘要均由应用校验。首次成功写入后不可把该项目换绑到另一段 Work 对话。
+- 已存在的同名唯一对象会在预览中显示“绑定并更新”；同名多项、跨项目引用、缺失引用或前台在预览后发生变化时停止写入。中断后保留逐项结果，重启会标记为“写入中断”，重新检查后再继续。
+- 这套 Work 同步与书籍 Codex 专属任务相互补充：Work 负责讨论并发布结构化设计增量，Codex 专属任务继续通过本 Skill 操作应用、生成候选和创作正文。不要把 Work 对话当成另一台电脑上的本地操作客户端。
+
 ## 首次接手或恢复
 
 1. 读取本文件，再读取 [操作流程](references/workflows.md)。遇到错误按 [恢复与接口边界](references/recovery.md) 查对应状态。

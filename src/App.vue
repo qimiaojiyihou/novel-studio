@@ -60,6 +60,7 @@
             <button class="row-more" :aria-label="`管理《${item.title}》`" @click.stop="toggleProjectActions(item.id)">⋯</button>
             <div v-if="projectActionId === item.id" class="row-action-menu project-action-menu" @click.stop>
               <button @click="openEditProject(item)">编辑项目信息</button>
+              <button @click="openWorkDesignSync(item)">同步 ChatGPT Work 设计</button>
               <button @click="openBookInCodex(item)">准备并打开 Codex 专属任务</button>
               <button @click="openProjectTransfer(item)">导入与导出</button>
               <button @click="askArchiveProject(item)">归档项目</button>
@@ -425,6 +426,13 @@
       @export="exportProjectFile"
       @import="importProjectFile"
     />
+    <ChatGPTWorkSync
+      :visible="workDesignSyncOpen"
+      :project="project"
+      @close="workDesignSyncOpen = false"
+      @toast="showToast"
+      @applied="refreshAfterWorkDesignSync"
+    />
     <DiffReview
       :visible="candidate.visible"
       :original="candidate.original"
@@ -576,6 +584,7 @@ import CreativeCandidateEditor from './components/CreativeCandidateEditor.vue'
 import { checkManuscript } from '../electron/manuscript-checks.js'
 import PlanningCenter from './components/PlanningCenter.vue'
 import ProjectTransfer from './components/ProjectTransfer.vue'
+import ChatGPTWorkSync from './components/ChatGPTWorkSync.vue'
 import PromptCenter from './components/PromptCenter.vue'
 import VersionHistory from './components/VersionHistory.vue'
 import { REWRITE_PRESETS } from '../electron/prompt-templates.js'
@@ -659,6 +668,7 @@ const projectCreating = ref(false)
 const projectTransferOpen = ref(false)
 const projectTransferBusy = ref(false)
 const transferProject = ref(null)
+const workDesignSyncOpen = ref(false)
 const editProjectOpen = ref(false)
 const newChapterOpen = ref(false)
 const renameChapterOpen = ref(false)
@@ -1005,6 +1015,26 @@ async function openBookInCodex(item = project) {
   } catch (error) {
     showToast(`打开 Codex 项目失败：${error.message}`)
   }
+}
+
+async function openWorkDesignSync(item = project) {
+  try {
+    if (item.id && item.id !== project.id) await switchProject(item.id)
+    if (item.id && item.id !== project.id) throw new Error('请先结束当前运行，再切换到目标作品')
+    projectActionId.value = ''
+    projectMenuOpen.value = false
+    workDesignSyncOpen.value = true
+  } catch (error) {
+    showToast(`打开设计同步失败：${error.message}`)
+  }
+}
+
+async function refreshAfterWorkDesignSync() {
+  const loaded = await appService.loadWorkspaceSnapshot(project.id)
+  applyWorkspace(loaded)
+  await planningCenterRef.value?.reload?.()
+  await knowledgeCenterRef.value?.reload?.()
+  externalChange.value = false
 }
 
 async function exportProjectFile(format) {

@@ -159,6 +159,7 @@ import { createCodexBookWorkspace, createCodexProjectMirror, findCodexBookWorksp
 import { codexTaskDisplayTitle } from './codex-task-label.js'
 import { projectForInlineTarget, sanitizeProjectDraftContext } from './inline-creative.js'
 import { planningBundleSchema } from './planning-bundle.js'
+import { WorkDesignSync } from './work-design-sync.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 let goServiceProcess = null
@@ -176,6 +177,7 @@ let agentRuntime = null
 let chapterFinalizer = null
 let creativeInterface = null
 let creativeServer = null
+let workDesignSync = null
 const creativeMutationQueue = new CreativeMutationQueue()
 const creativeHandlers = new Map()
 const nativeIpcMain = ipcMain
@@ -2168,6 +2170,9 @@ async function initializeCreativeInterface() {
     },
     onChange:payload => publishCodexEvent('creative:changed',payload),
   })
+  workDesignSync = new WorkDesignSync({ database:db, queue:creativeMutationQueue,
+    snapshot:projectId => readCreativeSnapshot(db,projectId),
+    onChange:payload => publishCodexEvent('creative:changed',payload) })
   creativeServer = await startCreativeServer({ api:creativeInterface,directory,databasePath:getDatabaseInfo().path,buildId:CREATIVE_BUILD_ID })
 }
 
@@ -2341,6 +2346,11 @@ function registerIpc() {
     const opened = await codexGateway.openDesktopWorkspace({ workspaceRoot: workspace.root, waitForRegistration: true })
     return { ...opened, operator: { projectId: operator.projectId, clientId: operator.clientId, taskGuide: operator.taskGuide, changedFiles: operator.changedFiles } }
   })
+  ipcMain.handle('work-design:state', (_event, projectId) => workDesignSync?.state(String(projectId || '')))
+  ipcMain.handle('work-design:bind', (_event, payload) => workDesignSync?.saveBinding(payload || {}))
+  ipcMain.handle('work-design:prompt', (_event, projectId) => workDesignSync?.prompt(String(projectId || '')))
+  ipcMain.handle('work-design:preview', (_event, payload) => workDesignSync?.preview(payload || {}))
+  ipcMain.handle('work-design:apply', (_event, payload) => workDesignSync?.apply(payload || {}))
   ipcMain.handle('approvals:session-model-policy', (_event, payload = {}) => {
     const projectId = String(payload.projectId || '')
     if (!projectId || !listProjects().some((item) => item.id === projectId)) throw new Error('项目不存在')

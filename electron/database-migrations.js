@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url'
 import { validateCreativePack } from './creative-pack.js'
 import { creativeUpgradeMigrations } from './creative-upgrade-migrations.js'
 
-export const LATEST_SCHEMA_VERSION = 26
+export const LATEST_SCHEMA_VERSION = 27
 
 function bundledOfficialPack(version = '1.2.0') {
   const directory = version === '1.3.0' ? 'dist' : 'historical'
@@ -1400,6 +1400,52 @@ const migrations = [
       // Existing project bindings deliberately remain pinned until the user confirms an upgrade.
     },
   }),
+  {
+    version: 27,
+    name: 'chatgpt-work-design-sync',
+    up(database) {
+      database.exec(`
+        CREATE TABLE work_design_bindings (
+          project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+          thread_id TEXT NOT NULL,
+          thread_title TEXT NOT NULL,
+          last_applied_version TEXT NOT NULL DEFAULT '',
+          last_applied_digest TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        CREATE TABLE work_design_packages (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+          package_version TEXT NOT NULL,
+          base_version TEXT NOT NULL DEFAULT '',
+          package_digest TEXT NOT NULL,
+          source_digest TEXT NOT NULL,
+          preview_digest TEXT NOT NULL,
+          summary TEXT NOT NULL DEFAULT '',
+          payload_json TEXT NOT NULL,
+          preview_json TEXT NOT NULL,
+          results_json TEXT NOT NULL DEFAULT '{}',
+          error_json TEXT NOT NULL DEFAULT '{}',
+          status TEXT NOT NULL CHECK(status IN ('previewed', 'applying', 'applied', 'failed')),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          applied_at TEXT NOT NULL DEFAULT '',
+          UNIQUE(project_id, package_version)
+        );
+        CREATE TABLE work_design_objects (
+          project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+          object_type TEXT NOT NULL,
+          external_ref TEXT NOT NULL,
+          target_id TEXT NOT NULL,
+          package_version TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY(project_id, object_type, external_ref)
+        );
+        CREATE INDEX work_design_packages_project ON work_design_packages(project_id, created_at DESC);
+      `)
+    },
+  },
 ]
 
 function readForeignKeyCheck(database) {
