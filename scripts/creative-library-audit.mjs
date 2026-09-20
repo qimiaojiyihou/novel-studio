@@ -15,8 +15,11 @@ function audit(database) {
   const tables={}
   for(const {name} of database.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all()) {
     assert.match(name,/^[a-zA-Z_][a-zA-Z0-9_]*$/)
-    const rows=database.prepare(`SELECT * FROM "${name}"`).all().map(row=>JSON.stringify(row)).sort()
-    tables[name]={count:rows.length,digest:hash(rows)}
+    const rows=createHash('sha256');let count=0
+    for(const row of database.prepare(`SELECT * FROM "${name}" ORDER BY rowid`).iterate()) {
+      rows.update(JSON.stringify(row));rows.update('\n');count+=1
+    }
+    tables[name]={count,digest:rows.digest('hex')}
   }
   const books=database.prepare("SELECT id,title FROM projects WHERE project_type='user' AND archived_at='' ORDER BY id").all().map(book=>({
     ...book,chapters:database.prepare('SELECT id,chapter_no,title,status,manuscript FROM chapters WHERE project_id=? ORDER BY chapter_no').all(book.id)
@@ -27,14 +30,18 @@ function audit(database) {
 try {
   if(args.includes('--capture')) {
     const directory=path.resolve(option('--capture'))
-    assert.ok(!fs.existsSync(directory),'Capture directory must be new')
-    fs.mkdirSync(directory,{recursive:true,mode:0o700})
     const file=path.join(directory,'novel-studio.before.sqlite')
-    await backup(db,file);fs.chmodSync(file,0o600)
+    const reportFile=path.join(directory,'before.json')
+    if(fs.existsSync(directory)) {
+      assert.ok(fs.existsSync(file) && !fs.existsSync(reportFile),'Existing capture must contain only an unfinished database backup')
+    } else {
+      fs.mkdirSync(directory,{recursive:true,mode:0o700})
+      await backup(db,file);fs.chmodSync(file,0o600)
+    }
     const copied=new DatabaseSync(file,{readOnly:true})
     const report=audit(copied);copied.close()
     assert.deepEqual(report.integrity.map(row=>row.quick_check),['ok'])
-    fs.writeFileSync(path.join(directory,'before.json'),JSON.stringify(report,null,2),{mode:0o600,flag:'wx'})
+    fs.writeFileSync(reportFile,JSON.stringify(report,null,2),{mode:0o600,flag:'wx'})
     console.log(JSON.stringify({backupDirectory:directory,integrity:report.integrity,books:report.books},null,2))
   } else if(args.includes('--compare')) {
     const beforeFile=path.resolve(option('--compare')),before=JSON.parse(fs.readFileSync(beforeFile,'utf8')),after=audit(db)
