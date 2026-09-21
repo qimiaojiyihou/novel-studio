@@ -202,6 +202,11 @@
           <button id="editor-tab-card" role="tab" :aria-selected="activeTab === 'card'" :tabindex="activeTab === 'card' ? 0 : -1" aria-controls="chapter-editor-content" :class="{ active: activeTab === 'card' }" @click="activeTab = 'card'">章节卡</button>
           <button id="editor-tab-scene" role="tab" :aria-selected="activeTab === 'scene'" :tabindex="activeTab === 'scene' ? 0 : -1" aria-controls="chapter-editor-content" :class="{ active: activeTab === 'scene' }" @click="activeTab = 'scene'">场景计划</button>
           <span class="tab-spacer"></span>
+          <ManuscriptFormatMenu
+            v-if="activeTab === 'manuscript'"
+            :disabled="saveState === 'saving' || taskIsRunning()"
+            @format="applyManuscriptFormat"
+          />
           <button v-if="activeTab === 'manuscript'" type="button" title="查找正文（Ctrl+F / ⌘F）" @click="novelEditorRef?.find()">查找</button>
           <span class="editor-mode">{{ saveState === 'saving' ? '正在保存' : '编辑内容自动保存' }}</span>
         </div>
@@ -575,10 +580,12 @@ import ChapterFinalization from './components/ChapterFinalization.vue'
 import StoryChangePanel from './components/StoryChangePanel.vue'
 import ModelSettings from './components/ModelSettings.vue'
 import NovelEditor from './components/NovelEditor.vue'
+import ManuscriptFormatMenu from './components/ManuscriptFormatMenu.vue'
 import ProjectBriefFields from './components/ProjectBriefFields.vue'
 import QualityCenter from './components/QualityCenter.vue'
 import { composeGenerationCandidate } from './utils/generation-intents.js'
 import { creativeRoutePresentation, draftDigest, projectExecutionMode } from './utils/inline-creative.js'
+import { formatManuscript, MANUSCRIPT_FORMAT_OPTIONS } from './utils/manuscript-formatting.js'
 import ScenePlanEditor from './components/ScenePlanEditor.vue'
 import CreativeCandidateEditor from './components/CreativeCandidateEditor.vue'
 import { checkManuscript } from '../electron/manuscript-checks.js'
@@ -1492,6 +1499,26 @@ async function saveManuscript({ createRevision = true, source = 'manual-save', f
     return await savePromise
   } finally {
     savePromise = null
+  }
+}
+
+async function applyManuscriptFormat(action) {
+  if (!activeChapter.value || saveState.value === 'saving' || taskIsRunning()) return
+  const option = MANUSCRIPT_FORMAT_OPTIONS.find((item) => item.id === action)
+  try {
+    const result = formatManuscript(editorText.value, action)
+    if (!result.changed) {
+      showToast(`“${option?.label || '正文排版'}”没有发现需要处理的内容`)
+      return
+    }
+    await saveManuscript({ createRevision: true, source: 'before-manuscript-format', forceRevision: true })
+    editorText.value = result.text
+    isDirty.value = true
+    saveState.value = 'dirty'
+    await saveManuscript({ createRevision: false, source: 'manuscript-format' })
+    showToast(`已完成“${option?.label || '正文排版'}”，处理前版本可在版本历史中恢复`)
+  } catch (error) {
+    showToast(`正文排版失败：${error.message}`)
   }
 }
 

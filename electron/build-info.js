@@ -1,1 +1,1 @@
-export const CREATIVE_BUILD_ID = 'creative-upgrade-2026.09.21-work-sync.2'
+export const CREATIVE_BUILD_ID = 'creative-upgrade-2026.09.22-manuscript-format.1'

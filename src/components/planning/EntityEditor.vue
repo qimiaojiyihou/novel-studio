@@ -42,6 +42,11 @@
         @edit-default="$emit('edit-default')"
       />
     </div>
+    <ExtraDataEditor
+      :model-value="entity.data"
+      :known-keys="fields.map(field => field.key)"
+      @update="$emit('update-field', $event)"
+    />
     <details v-if="fields.some(item => item.optional)">
       <summary>人物声音（可选）</summary>
       <div class="entity-field-grid">
@@ -57,6 +62,7 @@
 import { computed } from 'vue'
 import PlanningField from '../PlanningField.vue'
 import CreativeExecutionControl from '../CreativeExecutionControl.vue'
+import ExtraDataEditor from './ExtraDataEditor.vue'
 
 const props = defineProps({
   kind: { type: String, required: true },

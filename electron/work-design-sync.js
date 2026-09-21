@@ -5,6 +5,22 @@ import { createKnowledgeRepository } from './knowledge-repository.js'
 
 const ENTITY_KINDS = new Set(['character', 'world', 'volume'])
 const KNOWLEDGE_KINDS = new Set(['fact', 'timeline', 'foreshadow'])
+const KNOWLEDGE_STATUS_ALIASES = new Map([
+  ['open', 'open'],
+  ['confirmed', 'open'],
+  ['active', 'open'],
+  ['current', 'open'],
+  ['已确认', 'open'],
+  ['有效', 'open'],
+  ['resolved', 'resolved'],
+  ['completed', 'resolved'],
+  ['已解决', 'resolved'],
+  ['已回收', 'resolved'],
+  ['archived', 'archived'],
+  ['deprecated', 'archived'],
+  ['已归档', 'archived'],
+  ['已废弃', 'archived'],
+])
 const PACKAGE_VERSION = /^[A-Za-z0-9][A-Za-z0-9._-]{2,79}$/
 const REF_VALUE = /^[A-Za-z0-9][A-Za-z0-9._:-]{1,119}$/
 const MAX_PACKAGE_BYTES = 2 * 1024 * 1024
@@ -37,6 +53,14 @@ function normalizeRef(value, label) {
   const ref = boundedText(value, label, 120)
   if (!REF_VALUE.test(ref)) throw new Error(`${label}只能使用字母、数字、点、下划线、冒号或短横线`)
   return ref
+}
+
+function normalizeKnowledgeStatus(value, label) {
+  if (value === undefined || value === null || String(value).trim() === '') return undefined
+  const raw = String(value).trim()
+  const status = KNOWLEDGE_STATUS_ALIASES.get(raw.toLowerCase()) || KNOWLEDGE_STATUS_ALIASES.get(raw)
+  if (!status) throw new Error(`${label}不受支持；请使用 open、resolved 或 archived`)
+  return status
 }
 
 export function parseWorkDesignPackage(text) {
@@ -97,7 +121,8 @@ export function normalizePackage(raw) {
   const knowledge = listValue(raw.knowledge, 'knowledge').map((item, index) => {
     objectValue(item, `knowledge[${index}]`)
     if (!KNOWLEDGE_KINDS.has(item.kind)) throw new Error(`knowledge[${index}].kind 不受支持`)
-    return { ...item, ref:uniqueRef(item.ref, `knowledge[${index}].ref`), title:boundedText(item.title, `knowledge[${index}].title`), content:objectValue(item.content || {}, `knowledge[${index}].content`) }
+    const status = normalizeKnowledgeStatus(item.status, `knowledge[${index}].status`)
+    return { ...item, ...(status ? { status } : {}), ref:uniqueRef(item.ref, `knowledge[${index}].ref`), title:boundedText(item.title, `knowledge[${index}].title`), content:objectValue(item.content || {}, `knowledge[${index}].content`) }
   })
   return {
     schemaVersion:1,
@@ -189,8 +214,10 @@ export class WorkDesignSync {
         ? '这是第一次同步。请系统梳理本对话中所有已经确认且仍然有效的小说设计，建立完整基线；不要只输出最近一轮变化，不要把讨论草案写入。'
         : '只包含自上一个同步版本以来已经确认的变化；不要重复无变化的旧内容，不要包含讨论草案。',
       initial
-        ? '逐类检查项目信息、三份规划文档、人物/世界元素/分卷、人物关系、章节规划、情节弧/节点、事实/时间线/伏笔；没有确认内容的类别使用空数组或空对象，不要自行补写。'
+        ? '逐类检查项目信息、三份规划文档、人物/世界元素/分卷、人物关系、章节规划、情节弧/节点、事实/时间线/伏笔，以及现行设定决策台账；没有内容的类别使用空数组或空对象，不要自行补写。'
         : '没有变化的顶层字段可省略或填写空数组/空对象。',
+      '已经明确标记为暂定或待确定、且仍属于现行基线的内容也要同步，并在 knowledge.content.certainty 中分别写“暂定”或“待核对”；讨论草案不要同步。明确废弃但需要防止旧版回流的决策，可用 archived 状态保存。',
+      '设定决策使用 knowledge.kind="fact"，content.category="设定决策"，并保留 decisionId、statement、rationale、module、openQuestion、source、certainty 等可用字段。不要把不同决策压缩成一条摘要。',
       '只返回一个 JSON 对象，不要解释，不要使用 Markdown 代码围栏。',
       'packageVersion 使用新的稳定版本号，例如 RW-20260921-001。ref 是同一对象跨版本不变的英文或数字标识。不得输出正文和删除指令。',
       '',
@@ -207,10 +234,11 @@ export class WorkDesignSync {
       '  "chapters": [{ "ref": "chapter.001", "title": "章节名", "card": {}, "scenePlan": "" }],',
       '  "relationships": [{ "ref": "relationship.a-b", "fromRef": "character.a", "toRef": "character.b", "label": "关系", "surface": "", "tension": "", "direction": "mutual", "trend": "stable", "status": "active" }],',
       '  "arcs": [{ "ref": "arc.main", "title": "主线", "category": "main", "premise": "", "destination": "", "status": "planned", "colorKey": "copper", "beats": [{ "ref": "beat.main.001", "label": "关键变化", "changeText": "", "volumeRef": "volume.001", "chapterRef": "chapter.001" }] }],',
-      '  "knowledge": [{ "ref": "fact.identity", "kind": "fact", "title": "事实", "content": {}, "status": "open" }]',
+      '  "knowledge": [{ "ref": "decision.d001", "kind": "fact", "title": "D001 · 设定决策", "content": { "category": "设定决策", "decisionId": "D001", "statement": "现行决定", "rationale": "采用理由", "module": "关联模块", "openQuestion": "", "source": "来源", "certainty": "已确认" }, "status": "open" }]',
       '}',
       '',
       '人物关系只能引用 character ref；节点可引用 volume 或 chapter ref。',
+      '知识条目 status 只使用 open（已确认且当前有效）、resolved（已回收）或 archived（已归档）；不要使用 confirmed。',
     ].join('\n')
   }
 
@@ -383,9 +411,12 @@ export class WorkDesignSync {
       const id = map.get(`knowledge:${change.ref}`) || change.targetId || ''
       const current = id ? this.db.prepare('SELECT content_json FROM knowledge_items WHERE id=? AND project_id=?').get(id,projectId) : null
       const content = { ...parseJson(current?.content_json, {}), ...value.content }
-      const result = id ? this.knowledge.updateItem({ id, title:value.title, content, status:value.status,
+      // Packages previewed by older builds may still contain `confirmed`. Normalize
+      // again at execution time so an interrupted/failed package can resume safely.
+      const status = normalizeKnowledgeStatus(value.status, `知识条目“${value.title}”状态`)
+      const result = id ? this.knowledge.updateItem({ id, title:value.title, content, status,
         effectiveFromChapter:value.effectiveFromChapter, effectiveToChapter:value.effectiveToChapter, knowledgeScope:value.knowledgeScope })
-        : this.knowledge.createItem({ projectId, kind:value.kind, title:value.title, content, status:value.status })
+        : this.knowledge.createItem({ projectId, kind:value.kind, title:value.title, content, status:status || 'open' })
       this.saveMap(projectId,map,'knowledge',change.ref,result.id,packageVersion)
       return result
     }

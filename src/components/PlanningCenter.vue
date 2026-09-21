@@ -152,6 +152,12 @@
               @edit-default="$emit('edit-project')"
             />
           </div>
+          <ExtraDataEditor
+            :model-value="center.documents.foundation.content"
+            :known-keys="foundationFields.map(field => field.key)"
+            title="外接同步的故事基础"
+            @update="updateDocumentField('foundation', $event.key, $event.value)"
+          />
         </div>
 
         <div v-else-if="section === 'characters'" class="planning-sheet">
@@ -250,6 +256,12 @@
                 @edit-default="$emit('edit-project')"
               />
             </div>
+            <ExtraDataEditor
+              :model-value="center.documents.world.content"
+              :known-keys="worldOverviewFields.map(field => field.key)"
+              title="外接同步的世界设定"
+              @update="updateDocumentField('world', $event.key, $event.value)"
+            />
           </template>
           <EntityEditor
             v-else-if="worldMode === 'cards' && selectedWorldElement"
@@ -317,6 +329,12 @@
                 @edit-default="$emit('edit-project')"
               />
             </div>
+            <ExtraDataEditor
+              :model-value="center.documents.outline.content"
+              :known-keys="outlineFields.map(field => field.key)"
+              title="外接同步的全书规划"
+              @update="updateDocumentField('outline', $event.key, $event.value)"
+            />
           </template>
           <EntityEditor
             v-else-if="structureMode === 'volumes' && selectedVolume"
@@ -489,6 +507,7 @@ import { chapterPlanFields, entityFields, foundationFields, outlineFields, secti
 import PlanningField from './PlanningField.vue'
 import EntityEditor from './planning/EntityEditor.vue'
 import EmptyPlanning from './planning/EmptyPlanning.vue'
+import ExtraDataEditor from './planning/ExtraDataEditor.vue'
 import CreativeExecutionControl from './CreativeExecutionControl.vue'
 import { draftDigest } from '../utils/inline-creative.js'
 

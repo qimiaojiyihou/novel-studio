@@ -423,6 +423,15 @@ body {
 #app .editor-tabs { min-height: 46px; padding: 0 32px; border-bottom-color: var(--ns-border); background: #f4f7fa; }
 #app .editor-tabs button { height: 46px; padding: 0 14px; color: var(--ns-text-muted); font-weight: 550; }
 #app .editor-tabs button.active { color: var(--ns-accent-hover); border-bottom-color: var(--ns-accent); }
+#app .editor-tabs .manuscript-format-trigger[aria-expanded='true'] { color: var(--ns-accent-hover); border-bottom-color: var(--ns-accent); background: var(--ns-accent-soft); }
+#app .manuscript-format-popover { border-color: var(--ns-border); background: var(--ns-surface); box-shadow: var(--ns-shadow-lg); }
+#app .manuscript-format-popover header { border-bottom-color: var(--ns-border); }
+#app .manuscript-format-popover header strong { color: var(--ns-text); }
+#app .manuscript-format-popover header small,
+#app .manuscript-format-popover button small { color: var(--ns-text-muted); }
+#app .editor-tabs .manuscript-format-popover button { height: auto; min-height: 50px; padding: 9px 10px; border: 0; border-radius: 7px; }
+#app .editor-tabs .manuscript-format-popover button:hover,
+#app .editor-tabs .manuscript-format-popover button:focus-visible { color: var(--ns-text); background: var(--ns-surface-muted); }
 #app .editor-body { background: var(--ns-surface); }
 #app .artifact-view { padding: 42px clamp(36px, 8%, 110px); }
 #app .artifact-grid { gap: 10px; border: 0; background: transparent; }

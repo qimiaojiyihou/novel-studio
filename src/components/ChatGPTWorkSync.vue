@@ -59,7 +59,13 @@
 
         <section v-if="packages.length" class="work-sync-card work-sync-history">
           <div class="work-sync-card-heading"><div><small>同步记录</small><h3>最近版本</h3></div></div>
-          <article v-for="item in packages" :key="item.id"><div><strong>{{ item.packageVersion }}</strong><small>{{ item.summary || '未填写摘要' }}</small></div><span :class="item.status">{{ statusLabel(item.status) }}</span></article>
+          <article v-for="item in packages" :key="item.id">
+            <div><strong>{{ item.packageVersion }}</strong><small>{{ item.summary || '未填写摘要' }}</small></div>
+            <div class="work-sync-history-actions">
+              <span :class="item.status">{{ statusLabel(item.status) }}</span>
+              <button v-if="['failed','previewed'].includes(item.status)" type="button" class="secondary" :disabled="busy" @click="resumePackage(item)">{{ item.status === 'failed' ? '继续写入' : '继续确认' }}</button>
+            </div>
+          </article>
         </section>
       </div>
       <footer class="work-sync-footer"><span>{{ message }}</span><button type="button" @click="emit('close')">关闭</button></footer>
@@ -142,6 +148,13 @@ async function applyPackage() {
     emit('applied', result)
   } catch (error) { notify(`写入失败：${error.message}`); await loadState() }
   finally { busy.value = false }
+}
+function resumePackage(item) {
+  preview.value = item
+  confirmed.value = false
+  message.value = item.status === 'failed'
+    ? `已恢复 ${item.packageVersion} 的中断现场；已完成项目会跳过，请核对后继续写入`
+    : `已恢复 ${item.packageVersion} 的待确认预览`
 }
 function actionLabel(value) { return ({ create:'新增', update:'更新', match:'绑定并更新' })[value] || value }
 function typeLabel(value) { return ({ project:'项目',document:'规划文档',entity:'人物/设定/分卷',chapter:'章节规划',relationship:'人物关系',arc:'情节弧',beat:'情节节点',knowledge:'知识与连续性' })[value] || value }

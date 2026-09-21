@@ -79,6 +79,7 @@ function sourceLabel(source) {
     'before-ai-rewrite': '局部重写前',
     'ai-generation-accepted': 'AI 正文已接受',
     'ai-rewrite-accepted': '局部候选已接受',
+    'before-manuscript-format': '正文排版前',
     'before-version-restore': '版本恢复前',
   }[source] || source || '历史版本'
 }

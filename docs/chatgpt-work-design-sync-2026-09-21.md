@@ -1,6 +1,6 @@
 # ChatGPT Work 设计同步
 
-构建标识：`creative-upgrade-2026.09.21-work-sync.2`
+构建标识：`creative-upgrade-2026.09.21-work-sync.5`
 
 ## 目标
 
@@ -77,8 +77,28 @@ Work 对话本身位于云端，但同步绑定和版本历史随 Novel Studio �
 
 ## 本机安装验证
 
-- 已覆盖安装并启动 `/Applications/Novel Studio.app`；界面回读 schema v27、构建标识 `creative-upgrade-2026.09.21-work-sync.2`，作品菜单已显示“同步 ChatGPT Work 设计”。
-- 安装前备份：`release-2026.09.21/chatgpt-work-sync/backup-before-20260921-014824/`。目录含 SQLite 在线备份、安装前/安装后审计报告及完整旧应用。
+- 已覆盖安装 `/Applications/Novel Studio.app`；安装包内回读构建标识 `creative-upgrade-2026.09.21-work-sync.5`，作品菜单保留“同步 ChatGPT Work 设计”。
+
+## 兼容性修复（work-sync.3）
+
+- ChatGPT Work 将“已确认且当前有效”的知识条目写成 `status: "confirmed"` 时，导入器会将其归一化为 Novel Studio 的 `open` 状态。
+- 已经在旧构建中预览、部分写入并因该状态失败的同步包，可以在新版中直接再次确认写入；已完成的操作会跳过，只继续剩余条目。
+- 新生成的同步提示词明确限定知识条目状态为 `open`、`resolved` 或 `archived`，并在预览阶段拦截其它未知状态。
+
+## 中断恢复入口（work-sync.4）
+
+- “最近版本”会为写入中断的同步包显示“继续写入”，恢复原差异预览并跳过已经完成的操作。
+- 尚未确认的预览会显示“继续确认”，不必重新寻找或粘贴原始 JSON 同步包。
+
+## 完整结构可见与设定决策（work-sync.5）
+
+- ChatGPT Work 写入的自定义结构字段会在故事基础、世界设定、全书规划、人物卡、世界卡、分卷卡和知识条目中显示为“外接同步详细设定”。
+- 字符串、数字、布尔值、数组和对象都可查看；结构化字段按 JSON 编辑，保存时保持原有数据类型。
+- 同步提示词要求逐条保留现行设定决策，不再把决策台账压缩成摘要。已确认、暂定、待核对和为防止旧版回流而归档的决策均可保留。
+- 设定决策沿用事实库，类别为“设定决策”，并保留决策编号、采用理由、关联模块、待确定问题与来源。
+- 《现实遗物》已完成 `RW-20260921-001`（153 项）和 `RW-20260921-002`（205 项）写入。后者包含 175 条设定决策和 30 条伏笔；逐字段核对 2,080 个来源字段，缺失和内容差异均为 0。
+- 写入后真实书库 `PRAGMA quick_check(1)` 为 `ok`；本书仍只有 1 个空白章节、正文 0 字，设计同步未改动正文。
+- 本轮安装前在线备份：`release-2026.09.21/chatgpt-work-sync/backup-before-work-sync5/novel-studio.sqlite`。此前完整旧应用和安装审计仍保留在 `release-2026.09.21/chatgpt-work-sync/backup-before-20260921-014824/`。
 - 备份和升级后 `PRAGMA quick_check` 均为 `ok`；五本未归档书籍、章节状态和正文摘要逐项一致。升级只更新迁移/应用设置相关表，并新增三张 Work 设计同步表。
-- 已安装 `app.asar` 与测试构建逐字节一致，SHA-256 为 `697b0c95ac413bbba3bf719af43c143577548687000ff346efc6a59885763010`。
-- DMG SHA-256：`b655cec2716da3fdc7b542593d408c5ea6cc243ca6579da18166d501fe0cd568`；ZIP SHA-256：`704e2eff58986da674b13a258d3a080be6dceb3ff3e583d58eebd245d633f4c3`。
+- 已安装 `app.asar` 与测试构建逐字节一致，SHA-256 为 `ebad24fc2bc62556ada30153ca6228deb0b729834966d9fc8f031fbbedef5320`。
+- DMG SHA-256：`fba9812ff66a602eab6219a29360b43c11779f17fda2b9e8d9f0d07b7e8dc077`；ZIP SHA-256：`cf044b896800c3f69bc0b436e484324a8d43936934665fbcafde85e5c1a10f4f`。

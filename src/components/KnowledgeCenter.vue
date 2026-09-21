@@ -101,6 +101,12 @@
                   <textarea v-else :value="selectedItem.content[field.key] || ''" :aria-label="field.label" :placeholder="field.placeholder" @input="updateField(selectedItem, field.key, $event.target.value)"></textarea>
                 </label>
               </div>
+              <ExtraDataEditor
+                :model-value="selectedItem.content"
+                :known-keys="fieldsForMode.map(field => field.key)"
+                title="外接同步的完整记录"
+                @update="updateField(selectedItem, $event.key, $event.value)"
+              />
             </article>
             <div v-else class="knowledge-no-selection">选择一条{{ modeMeta.title }}，开始整理它的事实边界。</div>
           </div>
@@ -288,6 +294,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { appService } from '../services/app-service.js'
 import CreativeExecutionControl from './CreativeExecutionControl.vue'
+import ExtraDataEditor from './planning/ExtraDataEditor.vue'
 import { draftDigest } from '../utils/inline-creative.js'
 
 const props = defineProps({
@@ -320,7 +327,7 @@ const modes = {
 }
 const fieldSets = {
   facts: [
-    { key: 'category', label: '事实类别', hint: '人物、世界、剧情或规则', type: 'select', options: ['人物', '世界', '剧情', '规则', '关系', '其他'] },
+    { key: 'category', label: '事实类别', hint: '人物、世界、剧情、规则或设定决策', type: 'select', options: ['人物', '世界', '剧情', '规则', '关系', '设定决策', '其他'] },
     { key: 'statement', label: '事实陈述', hint: '写成可以判断真假的句子', type: 'textarea', wide: true, placeholder: '例如：改稿室只有原作者能在午夜打开。' },
     { key: 'key', label: '事实键', hint: '同一件事保持同一个键名', type: 'input', placeholder: '例如：改稿室开放时间' },
     { key: 'value', label: '事实值', hint: '用于发现前后冲突', type: 'input', placeholder: '例如：午夜' },

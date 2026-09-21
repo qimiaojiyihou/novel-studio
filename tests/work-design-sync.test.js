@@ -41,7 +41,10 @@ function packageValue(projectId, overrides = {}) {
     chapters:[{ ref:'chapter.001', title:'第一章', card:{ goal:'发现异常', volumeRef:'volume.001' }, scenePlan:'窗口核对失败认证。' }],
     relationships:[{ ref:'relationship.clerk-woman', fromRef:'character.clerk', toRef:'character.woman', label:'调查与被调查', direction:'mutual', trend:'hostile', status:'active' }],
     arcs:[{ ref:'arc.main', title:'认证调查线', category:'main', premise:'追查九张回执', destination:'两线汇流', status:'planned', colorKey:'copper', beats:[{ ref:'beat.main.001', label:'认证失败', changeText:'第九年认证首次失败', volumeRef:'volume.001', chapterRef:'chapter.001' }] }],
-    knowledge:[{ ref:'fact.certification', kind:'fact', title:'认证更替', content:{ statement:'九年间认证方式更换四轮' }, status:'open' }],
+    knowledge:[
+      { ref:'fact.certification', kind:'fact', title:'认证更替', content:{ statement:'九年间认证方式更换四轮' }, status:'open' },
+      { ref:'decision.d001', kind:'fact', title:'D001 · 书名', content:{ category:'设定决策', decisionId:'D001', statement:'在世证明', rationale:'当前正式书名', module:'故事基础', certainty:'已确认', source:'用户确认' }, status:'open' },
+    ],
     ...overrides,
   }
 }
@@ -53,6 +56,20 @@ test('ChatGPT Work package parser accepts pure or fenced JSON and rejects prose'
   assert.throws(() => parseWorkDesignPackage(`这是同步包：${JSON.stringify(value)}`), /不是有效 JSON/)
 })
 
+test('knowledge statuses from Work are normalized before preview', () => {
+  const value = packageValue('project-1', {
+    knowledge:[
+      { ref:'fact.confirmed', kind:'fact', title:'已确认事实', content:{}, status:'confirmed' },
+      { ref:'timeline.archived', kind:'timeline', title:'废弃时间线', content:{}, status:'已废弃' },
+    ],
+  })
+  const parsed = parseWorkDesignPackage(JSON.stringify(value))
+  assert.deepEqual(parsed.knowledge.map(item => item.status), ['open', 'archived'])
+  assert.throws(() => parseWorkDesignPackage(JSON.stringify(packageValue('project-1', {
+    knowledge:[{ ref:'fact.invalid', kind:'fact', title:'未知状态', content:{}, status:'draft' }],
+  }))), /knowledge\[0\]\.status不受支持/)
+})
+
 test('bound Work design package previews and applies every supported design layer without touching manuscript', async t => {
   const f = setup(); t.after(() => f.database.close())
   const originalManuscript = '这段正文必须保留。'
@@ -62,6 +79,9 @@ test('bound Work design package previews and applies every supported design laye
   assert.match(prompt, new RegExp(f.book.project.id))
   assert.match(prompt, /首次全量设计基线包/)
   assert.match(prompt, /不要只输出最近一轮变化/)
+  assert.match(prompt, /现行设定决策台账/)
+  assert.match(prompt, /content\.category="设定决策"/)
+  assert.match(prompt, /暂定或待确定/)
   assert.throws(() => f.sync.prompt(f.book.project.id, 'incremental'), /先使用首次全量同步/)
 
   const preview = await f.sync.preview({ projectId:f.book.project.id, packageText:JSON.stringify(packageValue(f.book.project.id)) })
@@ -87,6 +107,9 @@ test('bound Work design package previews and applies every supported design laye
   assert.equal(planning.storyArcs[0].beats.length, 1)
   const knowledge = createKnowledgeRepository(f.database).loadKnowledgeCenter(f.book.project.id)
   assert.equal(knowledge.items.some(item => item.title === '认证更替'), true)
+  const decision = knowledge.items.find(item => item.title === 'D001 · 书名')
+  assert.equal(decision.content.decisionId, 'D001')
+  assert.equal(decision.content.rationale, '当前正式书名')
   assert.equal((await f.sync.apply({ projectId:f.book.project.id, packageId:preview.id, previewDigest:preview.previewDigest, confirm:true })).status, 'applied')
   const replay = await f.sync.preview({ projectId:f.book.project.id, packageText:JSON.stringify(packageValue(f.book.project.id)) })
   assert.equal(replay.id, preview.id)
@@ -140,4 +163,20 @@ test('an interrupted applying package is marked resumable on startup', async t =
   const row = recovered.state(f.book.project.id).packages.find(item => item.id === preview.id)
   assert.equal(row.status, 'failed')
   assert.match(row.error.message, /退出/)
+})
+
+test('a package previewed by an older build resumes with confirmed knowledge statuses', async t => {
+  const f = setup(); t.after(() => f.database.close())
+  const preview = await f.sync.preview({ projectId:f.book.project.id, packageText:JSON.stringify(packageValue(f.book.project.id)) })
+  const row = f.database.prepare('SELECT preview_json FROM work_design_packages WHERE id=?').get(preview.id)
+  const legacyPreview = JSON.parse(row.preview_json)
+  const knowledgeChange = legacyPreview.changes.find(item => item.type === 'knowledge')
+  knowledgeChange.payload.status = 'confirmed'
+  f.database.prepare("UPDATE work_design_packages SET preview_json=?,status='failed',error_json=? WHERE id=?")
+    .run(JSON.stringify(legacyPreview), JSON.stringify({ message:'知识条目状态不受支持' }), preview.id)
+
+  const applied = await f.sync.apply({ projectId:f.book.project.id, packageId:preview.id, previewDigest:preview.previewDigest, confirm:true })
+  assert.equal(applied.status, 'applied')
+  const item = createKnowledgeRepository(f.database).loadKnowledgeCenter(f.book.project.id).items.find(value => value.title === '认证更替')
+  assert.equal(item.status, 'open')
 })
