@@ -62,6 +62,7 @@
               <button @click="openEditProject(item)">编辑项目信息</button>
               <button @click="openWorkDesignSync(item)">同步 ChatGPT Work 设计</button>
               <button @click="openBookInCodex(item)">准备并打开 Codex 专属任务</button>
+              <button @click="exportBookFile(item)">导出 Word 书籍</button>
               <button @click="openProjectTransfer(item)">导入与导出</button>
               <button @click="askArchiveProject(item)">归档项目</button>
               <button class="danger" @click="askDeleteProject(item)">删除项目</button>
@@ -1044,13 +1045,21 @@ async function refreshAfterWorkDesignSync() {
   externalChange.value = false
 }
 
-async function exportProjectFile(format) {
-  if (projectTransferBusy.value || !project.id) return
+async function exportBookFile(item = project) {
+  projectActionId.value = ''
+  projectMenuOpen.value = false
+  await exportProjectFile('docx', item.id)
+}
+
+async function exportProjectFile(format, targetProjectId = project.id) {
+  if (projectTransferBusy.value || !targetProjectId) return
   projectTransferBusy.value = true
   try {
-    await flushPlanningMemory()
-    await saveManuscript({ createRevision: false, source: 'before-project-export' })
-    const result = await appService.exportProjectFile({ projectId: project.id, format })
+    if (targetProjectId === project.id) {
+      await flushPlanningMemory()
+      await saveManuscript({ createRevision: false, source: 'before-project-export' })
+    }
+    const result = await appService.exportProjectFile({ projectId: targetProjectId, format })
     if (!result.cancelled) {
       const fileName = result.filePath.split(/[\\/]/).pop()
       showToast(`已导出 ${fileName}`)

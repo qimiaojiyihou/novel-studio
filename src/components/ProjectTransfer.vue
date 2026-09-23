@@ -62,7 +62,7 @@ const emit = defineEmits(['close', 'export', 'import'])
 const manuscriptFormats = [
   { id: 'txt', mark: 'TXT', name: '纯文本', note: '适合平台上传与轻量交换' },
   { id: 'markdown', mark: 'MD', name: 'Markdown', note: '保留书名与章节标题层级' },
-  { id: 'docx', mark: 'W', name: 'Word 文档', note: '小说排版，可继续编辑与交付' },
+  { id: 'docx', mark: 'W', name: 'Word 书籍', note: '章节标题加粗，正文首行缩进且段间无空行' },
 ]
 </script>
 

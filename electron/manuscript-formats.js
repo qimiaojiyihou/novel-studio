@@ -36,6 +36,27 @@ function chapterHeading(chapter) {
   return `第 ${chapter.chapterNo} 章 · ${chapter.title}`
 }
 
+function cleanChapterTitle(value = '') {
+  return String(value)
+    .trim()
+    .replace(/^第\s*[零〇一二三四五六七八九十百千万两\d]+\s*[章节回卷部集]\s*[：:\s·-]*/i, '')
+    .replace(/^chapter\s+\d+\s*[：:\s·-]*/i, '')
+    .trim()
+}
+
+function wordChapterHeading(chapter) {
+  const title = cleanChapterTitle(chapter.title)
+  return `第${chapter.chapterNo}章${title ? ` ${title}` : ''}`
+}
+
+function manuscriptParagraphs(value = '') {
+  return String(value)
+    .replace(/\r\n?/g, '\n')
+    .split('\n')
+    .map((line) => line.replace(/^[\t \u3000]+/, '').replace(/[\t \u3000]+$/, ''))
+    .filter(Boolean)
+}
+
 export function createTextManuscript(workspace) {
   const chapters = normalizeChapters(workspace.chapters)
   return [workspace.project.title, ...chapters.flatMap((chapter) => [chapterHeading(chapter), chapter.manuscript])]
@@ -163,19 +184,15 @@ function readZipEntry(buffer, requestedName) {
 
 function wordParagraph(text, style = 'Normal', { pageBreakBefore = false } = {}) {
   const breakXml = pageBreakBefore ? '<w:pageBreakBefore/>' : ''
-  const runFont = '<w:rPr><w:rFonts w:ascii="Arial Unicode MS" w:eastAsia="Arial Unicode MS" w:hAnsi="Arial Unicode MS" w:cs="Arial Unicode MS" w:hint="eastAsia"/><w:lang w:val="zh-CN" w:eastAsia="zh-CN"/></w:rPr>'
+  const runFont = '<w:rPr><w:rFonts w:ascii="Times New Roman" w:eastAsia="Songti SC" w:hAnsi="Times New Roman" w:cs="Times New Roman" w:hint="eastAsia"/><w:lang w:val="zh-CN" w:eastAsia="zh-CN"/></w:rPr>'
   return `<w:p><w:pPr><w:pStyle w:val="${style}"/>${breakXml}</w:pPr><w:r>${runFont}<w:t xml:space="preserve">${escapeXml(sanitizeXmlText(text))}</w:t></w:r></w:p>`
 }
 
 function documentXml(workspace) {
   const paragraphs = [wordParagraph(workspace.project.title, 'Title')]
   normalizeChapters(workspace.chapters).forEach((chapter, index) => {
-    paragraphs.push(wordParagraph(chapterHeading(chapter), 'Heading1', { pageBreakBefore: index > 0 }))
-    const blocks = chapter.manuscript.replace(/\r\n?/g, '\n').split(/\n\s*\n/)
-    for (const block of blocks) {
-      const text = block.replace(/\n/g, '')
-      if (text || blocks.length === 1) paragraphs.push(wordParagraph(text))
-    }
+    paragraphs.push(wordParagraph(wordChapterHeading(chapter), 'Heading1', { pageBreakBefore: index > 0 }))
+    for (const paragraph of manuscriptParagraphs(chapter.manuscript)) paragraphs.push(wordParagraph(paragraph))
   })
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${paragraphs.join('')}<w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="708" w:footer="708" w:gutter="0"/></w:sectPr></w:body></w:document>`
@@ -183,10 +200,10 @@ function documentXml(workspace) {
 
 const STYLES_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
-  <w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Arial Unicode MS" w:eastAsia="Arial Unicode MS" w:hAnsi="Arial Unicode MS" w:cs="Arial Unicode MS" w:hint="eastAsia"/><w:lang w:val="zh-CN" w:eastAsia="zh-CN"/><w:sz w:val="22"/><w:szCs w:val="22"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="120" w:line="360" w:lineRule="auto"/><w:jc w:val="both"/><w:kinsoku/><w:overflowPunct/></w:pPr></w:pPrDefault></w:docDefaults>
-  <w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/><w:pPr><w:spacing w:after="120" w:line="360" w:lineRule="auto"/><w:ind w:firstLine="440"/><w:jc w:val="both"/><w:kinsoku/><w:overflowPunct/></w:pPr><w:rPr><w:rFonts w:ascii="Arial Unicode MS" w:eastAsia="Arial Unicode MS" w:hAnsi="Arial Unicode MS" w:cs="Arial Unicode MS" w:hint="eastAsia"/><w:lang w:val="zh-CN" w:eastAsia="zh-CN"/><w:sz w:val="22"/><w:szCs w:val="22"/><w:color w:val="282522"/></w:rPr></w:style>
-  <w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Title"/><w:qFormat/><w:pPr><w:spacing w:before="0" w:after="320"/><w:jc w:val="center"/></w:pPr><w:rPr><w:rFonts w:ascii="Arial Unicode MS" w:eastAsia="Arial Unicode MS" w:hAnsi="Arial Unicode MS" w:cs="Arial Unicode MS" w:hint="eastAsia"/><w:lang w:val="zh-CN" w:eastAsia="zh-CN"/><w:b/><w:sz w:val="48"/><w:szCs w:val="48"/><w:color w:val="282522"/></w:rPr></w:style>
-  <w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:qFormat/><w:pPr><w:keepNext/><w:spacing w:before="360" w:after="200"/><w:outlineLvl w:val="0"/><w:jc w:val="left"/><w:ind w:firstLine="0"/></w:pPr><w:rPr><w:rFonts w:ascii="Arial Unicode MS" w:eastAsia="Arial Unicode MS" w:hAnsi="Arial Unicode MS" w:cs="Arial Unicode MS" w:hint="eastAsia"/><w:lang w:val="zh-CN" w:eastAsia="zh-CN"/><w:b/><w:sz w:val="32"/><w:szCs w:val="32"/><w:color w:val="A85E47"/></w:rPr></w:style>
+  <w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Times New Roman" w:eastAsia="Songti SC" w:hAnsi="Times New Roman" w:cs="Times New Roman" w:hint="eastAsia"/><w:lang w:val="zh-CN" w:eastAsia="zh-CN"/><w:sz w:val="22"/><w:szCs w:val="22"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:before="0" w:after="0" w:line="360" w:lineRule="auto"/><w:jc w:val="both"/><w:kinsoku/><w:overflowPunct/></w:pPr></w:pPrDefault></w:docDefaults>
+  <w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/><w:pPr><w:spacing w:before="0" w:after="0" w:line="360" w:lineRule="auto"/><w:ind w:firstLine="440" w:firstLineChars="200"/><w:jc w:val="both"/><w:kinsoku/><w:overflowPunct/></w:pPr><w:rPr><w:rFonts w:ascii="Times New Roman" w:eastAsia="Songti SC" w:hAnsi="Times New Roman" w:cs="Times New Roman" w:hint="eastAsia"/><w:lang w:val="zh-CN" w:eastAsia="zh-CN"/><w:sz w:val="22"/><w:szCs w:val="22"/><w:color w:val="282522"/></w:rPr></w:style>
+  <w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Title"/><w:qFormat/><w:pPr><w:spacing w:before="0" w:after="320"/><w:jc w:val="center"/></w:pPr><w:rPr><w:rFonts w:ascii="Times New Roman" w:eastAsia="Songti SC" w:hAnsi="Times New Roman" w:cs="Times New Roman" w:hint="eastAsia"/><w:lang w:val="zh-CN" w:eastAsia="zh-CN"/><w:b/><w:sz w:val="48"/><w:szCs w:val="48"/><w:color w:val="282522"/></w:rPr></w:style>
+  <w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:qFormat/><w:pPr><w:keepNext/><w:spacing w:before="360" w:after="200"/><w:outlineLvl w:val="0"/><w:jc w:val="left"/><w:ind w:firstLine="0" w:firstLineChars="0"/></w:pPr><w:rPr><w:rFonts w:ascii="Times New Roman" w:eastAsia="Songti SC" w:hAnsi="Times New Roman" w:cs="Times New Roman" w:hint="eastAsia"/><w:lang w:val="zh-CN" w:eastAsia="zh-CN"/><w:b/><w:sz w:val="32"/><w:szCs w:val="32"/><w:color w:val="000000"/></w:rPr></w:style>
 </w:styles>`
 
 const SETTINGS_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
