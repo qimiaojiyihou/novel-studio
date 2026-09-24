@@ -23,7 +23,7 @@
   "dependencies": {
     "@agentclientprotocol/codex-acp": "1.6.2",
     "@agentclientprotocol/sdk": "1.4.0",
-    "@openai/codex": "0.153.4",
+    "@openai/codex": "0.156.1",
     "@codemirror/commands": "^6.10.1",
     "@codemirror/lang-markdown": "^6.5.0",
     "@codemirror/search": "^6.5.10",

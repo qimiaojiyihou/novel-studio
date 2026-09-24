@@ -54,7 +54,7 @@ const manifest = {
   adapterVersion: adapterPackage.version,
   cliVersion: cliPackage.version,
   capabilities: {
-    // Fixed CLI 0.153.4 declares --output-schema; post-run validation still applies.
+    // The fixed CLI declares --output-schema; post-run validation still applies.
     execOutputSchema: true,
   },
   files: { adapter: digest(packagedAdapter), cli: digest(packagedCli) },

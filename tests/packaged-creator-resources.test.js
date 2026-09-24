@@ -10,7 +10,7 @@ test('Creator Skill is shipped outside ASAR and copied into a real run mirror', 
   const pkg = JSON.parse(fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf8'))
   const resource = pkg.build.extraResources.find(item => item.to === 'skills/novel-studio-creator')
   assert.ok(resource, 'Creator Skill must be an unpacked extraResource for fs.cpSync')
-  assert.equal(pkg.dependencies['@openai/codex'], '0.153.4')
+  assert.equal(pkg.dependencies['@openai/codex'], '0.156.1')
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'novel-packaged-skill-'))
   try {
     const skill = path.join(temp, 'Resources', resource.to)

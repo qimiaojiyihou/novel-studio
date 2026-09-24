@@ -46,7 +46,7 @@
                 <option v-for="option in filteredCodexModels" :key="option.value" :value="option.value">{{ option.name }} · {{ modelAvailability(option.status) }}</option>
               </select>
               <details><summary>高级模型 ID</summary><input v-model.trim="codexDraft.model" placeholder="例如 gpt-6-astra" aria-label="高级 Codex 模型 ID" /></details>
-              <small>GPT-6 Astra 对应 gpt-6-astra。可用性以当前 ACP 目录为准；已有对话继续使用启动时锁定的模型。</small>
+              <small>已加入 GPT-6 Astra、Sol 与 Luna。可用性及推理强度以当前 ACP 目录回读为准；已有对话继续使用启动时锁定的模型。</small>
             </label>
             <label v-if="codexDraft.agentProvider === 'codex'"><span>推理强度</span><select v-model="codexDraft.reasoningEffort"><option value="">模型默认</option><option v-for="option in codexReasoningOptions" :key="option.value" :value="option.value">{{ option.name }}</option><option v-if="codexDraft.reasoningEffort && !codexReasoningOptions.some(o => o.value === codexDraft.reasoningEffort)" :value="codexDraft.reasoningEffort">{{ codexDraft.reasoningEffort }} · 待刷新验证</option></select></label>
             <label v-if="codexDraft.agentProvider === 'codex'" class="codex-toggle"><span>Fast mode{{ codexFastSupported ? '' : ' · 待验证支持' }}</span><input v-model="codexDraft.fastMode" type="checkbox" :disabled="!codexFastSupported" /></label>

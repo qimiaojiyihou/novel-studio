@@ -42,11 +42,19 @@ test('v21→v27 preserves pinned historical packs, runs sequentially and cascade
   db.close()
 })
 
-test('GPT6 hints are not capabilities, grouped catalog works, exec keeps explicit parameters', () => {
-  assert.equal(modelDirectory()[0].status,'pending')
-  assert.equal(modelDirectory([],true)[0].status,'unsupported')
-  const options = [{ id:'model', currentValue:'gpt-6-astra', options:[{ name:'Models',options:[{ value:'gpt-6-astra',name:'GPT-6 Astra' }] }] }, { id:'reasoning_effort',currentValue:'high',options:[{ value:'high' }] }]
-  assert.equal(modelDirectory(options,true)[0].status,'available')
+test('GPT6 family hints are not capabilities, grouped catalog works, exec keeps explicit parameters', () => {
+  assert.deepEqual(modelDirectory().map(item=>[item.value,item.status]),[
+    ['gpt-6-astra','pending'],
+    ['gpt-6-sol','pending'],
+    ['gpt-6-luna','pending'],
+  ])
+  assert.ok(modelDirectory([],true).every(item=>item.status==='unsupported'))
+  const options = [{ id:'model', currentValue:'gpt-6-astra', options:[{ name:'Models',options:[{ value:'gpt-6-astra',name:'GPT-6 Astra' },{ value:'gpt-6-sol',name:'GPT-6 Sol' }] }] }, { id:'reasoning_effort',currentValue:'high',options:[{ value:'high' }] }]
+  assert.deepEqual(modelDirectory(options,true).map(item=>[item.value,item.status]),[
+    ['gpt-6-astra','available'],
+    ['gpt-6-sol','available'],
+    ['gpt-6-luna','unsupported'],
+  ])
   assert.equal(sessionModelSnapshot(options).fastModeSupported,false)
   assert.equal(sessionModelSnapshot(options).verified,true)
   assert.deepEqual(execModelArgs({ model:'gpt-6-astra',reasoningEffort:'high',fastMode:true }),['--model','gpt-6-astra','-c','model_reasoning_effort="high"','-c','service_tier="fast"'])
