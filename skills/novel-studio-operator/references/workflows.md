@@ -10,6 +10,7 @@
 | `snapshot` | `{}` | 正式项目、chapters、planning、knowledge、memories、styles、候选/运行/定稿摘要 |
 | `request.get` | `{"requestId":"REQUEST_ID"}` | 回执丢失或重启后查询原幂等写请求；先查结果，不盲目换 ID 重做 |
 | `chapter.get` | `{"chapterId":"CHAPTER_ID"}` | 本章完整正文和章节卡，不只截取首尾 |
+| `zhuque.get` | `{"chapterId":"CHAPTER_ID"}` | 本章最近一次朱雀检测结果；含 `stale` 与 `manuscriptDigest`，不返回 API Key |
 | `revisions.list` | `{"chapterId":"CHAPTER_ID"}` | 旧稿版本 |
 | `runs.list` | `{}` | 本书运行列表 |
 | `run.get` | `{"runId":"RUN_ID"}` | 步骤、候选、冻结模型、错误和会话信息 |
@@ -90,6 +91,8 @@ snapshot 的规划条目可能含 `content_json`、`data_json`；解析后阅读
 这里的 3200 和 GPT-6 / xhigh 只是示例：沿用当前作者要求。`targetLength` 是目标值，不等于最少字数设置；“至少 3000 字”等要求还应在 instruction 写清并在生成后核验。这个 API 没有全局字数设置操作，不要声称已修改全局设置。
 
 先读 `run.get` 核对冻结模型和实际后端，等待审批或输出；一轮发起后以返回的 runId 跟进，不连续点生成。ACP/exec 由应用控制，不以应用模型替代用户指定 Codex。已有运行模型被冻结；改变 Codex 聊天任务模型不会自动改变应用调用的模型。
+
+参考朱雀检测改稿时，先读 `zhuque.get`，确认结果存在且 `stale:false`。随后把 `intent` 设为 `repair`，在同一个章节正文目标的 `target` 中加入 `"zhuqueDigest":"刚读取的 manuscriptDigest"`。应用会核对正文和检测来源，并把分段标注作为编辑线索加入提示；如果正文已变化，先在应用里重新检测。模型返回的仍是完整正文候选，不直接写入。检测分数不是来源证明，不为压低分数而机械改写。
 
 ## 4. 规划与整卡
 

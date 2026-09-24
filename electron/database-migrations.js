@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url'
 import { validateCreativePack } from './creative-pack.js'
 import { creativeUpgradeMigrations } from './creative-upgrade-migrations.js'
 
-export const LATEST_SCHEMA_VERSION = 27
+export const LATEST_SCHEMA_VERSION = 29
 
 function bundledOfficialPack(version = '1.2.0') {
   const directory = version === '1.3.0' ? 'dist' : 'historical'
@@ -1443,6 +1443,44 @@ const migrations = [
           PRIMARY KEY(project_id, object_type, external_ref)
         );
         CREATE INDEX work_design_packages_project ON work_design_packages(project_id, created_at DESC);
+      `)
+    },
+  },
+  {
+    version: 28,
+    name: 'zhuque-chapter-detections',
+    up(database) {
+      database.exec(`
+        CREATE TABLE zhuque_chapter_detections (
+          chapter_id TEXT PRIMARY KEY REFERENCES chapters(id) ON DELETE CASCADE,
+          project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+          manuscript_digest TEXT NOT NULL,
+          result_json TEXT NOT NULL,
+          checked_at TEXT NOT NULL
+        );
+        CREATE INDEX zhuque_chapter_detections_project ON zhuque_chapter_detections(project_id);
+      `)
+    },
+  },
+  {
+    version: 29,
+    name: 'zhuque-global-api-keys',
+    up(database) {
+      database.exec(`
+        CREATE TABLE zhuque_api_keys (
+          id TEXT PRIMARY KEY,
+          label TEXT NOT NULL,
+          key_cipher TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        INSERT INTO zhuque_api_keys (id, label, key_cipher, created_at, updated_at)
+          SELECT 'legacy', '原有密钥', value, updated_at, updated_at
+          FROM app_settings WHERE key = 'zhuque_api_key_cipher' AND value <> '';
+        INSERT INTO app_settings (key, value, updated_at)
+          SELECT 'zhuque_selected_key_id', 'legacy', updated_at
+          FROM app_settings WHERE key = 'zhuque_api_key_cipher' AND value <> '';
+        DELETE FROM app_settings WHERE key = 'zhuque_api_key_cipher';
       `)
     },
   },

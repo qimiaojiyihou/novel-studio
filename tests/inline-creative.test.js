@@ -76,6 +76,16 @@ test('inline actions enforce target/task boundaries and stable target keys', () 
   assert.equal(repair.intent, 'repair')
   assert.deepEqual(repair.target.issueIds, ['causality', 'continuity'])
   assert.equal(repair.candidateType, 'manuscript')
+  const detectionDigest = 'a'.repeat(64)
+  const zhuqueRepair = normalizeInlineCreativeAction({
+    projectId: 'project-1', chapterId: 'chapter-1', task: 'chapter', intent: 'repair',
+    target: { kind: 'manuscript', targetId: 'chapter-1', zhuqueDigest: detectionDigest },
+  })
+  assert.equal(zhuqueRepair.target.zhuqueDigest, detectionDigest)
+  assert.throws(() => normalizeInlineCreativeAction({
+    projectId: 'project-1', chapterId: 'chapter-1', task: 'chapter', intent: 'rewrite',
+    target: { kind: 'manuscript', targetId: 'chapter-1', zhuqueDigest: detectionDigest },
+  }), /修复意图/)
   const chapterTitle = normalizeInlineCreativeAction({
     projectId: 'project-1', chapterId: 'chapter-1', task: 'planning_field', executionMode: 'app_model',
     target: { kind: 'chapter_field', targetId: 'chapter-1', fieldKey: 'title', fieldLabel: '章节名' },

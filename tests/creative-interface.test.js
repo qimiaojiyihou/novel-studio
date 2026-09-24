@@ -16,6 +16,7 @@ import { createCodexRepository } from '../electron/codex-repository.js'
 import { AgentRuntime } from '../electron/agent-runtime.js'
 import { ChapterFinalizer, contentDigest, createFinalizationRepository } from '../electron/chapter-finalization.js'
 import { CreativeInterface, creativeDigest } from '../electron/creative-interface.js'
+import { createZhuqueDetectionService } from '../electron/zhuque-detection.js'
 import { readCreativeSnapshot } from '../electron/creative-snapshot.js'
 import { startCreativeServer } from '../electron/creative-server.js'
 import { bindCreative, callCreative } from '../scripts/creative-client.mjs'
@@ -80,6 +81,20 @@ function setup(t) {
   return {directory,file,db,workspace,planning,knowledge,context,prompts,authoring,repository,runtime,finalizer,api,createApi,a,b,tokens,call,start,calls,gates,cancelled}
 }
 const waitFor=async predicate=>{for(let i=0;i<200;i++){if(predicate())return;await new Promise(resolve=>setTimeout(resolve,5))}assert.fail('fixture timeout')}
+
+test('bound author reads only its own Zhuque result and sees source staleness after editing', async t => {
+  const f=setup(t)
+  const chapterId=f.a.chapters[0].id
+  f.workspace.updateChapter({id:chapterId,manuscript:'甲书测试正文。'})
+  const detector=createZhuqueDetectionService(f.db,{getApiKey:()=> 'fixture-key',fetchImpl:async()=>({ok:true,status:200,json:async()=>({status:'success',ratio_confidence:.2,segment_labels:[{text:'甲书测试正文。',label:2,conf:.6}]})})})
+  const result=await detector.detect({projectId:f.a.project.id,chapterId})
+  f.workspace.loadWorkspace(f.b.project.id)
+  assert.equal((await f.call(0,'zhuque.get',{chapterId})).manuscriptDigest,result.manuscriptDigest)
+  assert.equal(await f.call(1,'zhuque.get',{chapterId:f.b.chapters[0].id}),null)
+  await assert.rejects(f.call(1,'zhuque.get',{chapterId}),{code:'PROJECT_MISMATCH'})
+  f.workspace.updateChapter({id:chapterId,manuscript:'甲书更新后的正文。'})
+  assert.equal((await f.call(0,'zhuque.get',{chapterId})).stale,true)
+})
 
 test('two book clients interleave model turns, keep fixed identities across UI switching, and isolate events and approvals',async t=>{
   const f=setup(t), before=creativeDigest(readCreativeSnapshot(f.db,f.a.project.id))

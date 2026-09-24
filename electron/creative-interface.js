@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { createCodexRepository } from './codex-repository.js'
 import { createFinalizationRepository } from './chapter-finalization.js'
+import { createZhuqueDetectionService } from './zhuque-detection.js'
 
 export class CreativeInterfaceError extends Error {
   constructor(code, message, details = null) { super(message); this.code = code; this.details = details }
@@ -48,6 +49,7 @@ export class CreativeInterface {
     this.inflight = new Map()
     this.reader = createCodexRepository(database)
     this.finalizations = createFinalizationRepository(database)
+    this.zhuque = createZhuqueDetectionService(database)
     // Extension tables are intentionally separate from the published story schema.
     // No existing row is migrated or rebound. The host backs up before first install.
     database.exec(`
@@ -350,6 +352,11 @@ export class CreativeInterface {
       return { requestId: row.request_key, operation: row.operation, status: row.status, result: parse(row.result_json), error: parse(row.error_json) }
     }
     if (operation === 'chapter.get') return this.owned('chapters', input.chapterId, projectId)
+    if (operation === 'zhuque.get') {
+      if (!input.chapterId) fail('INVALID_INPUT', '请指定章节')
+      this.owned('chapters', input.chapterId, projectId)
+      return this.zhuque.getResult({ projectId, chapterId: input.chapterId })
+    }
     if (operation === 'revisions.list') { this.owned('chapters', input.chapterId, projectId); return this.invoke('revisions:list', input.chapterId) }
     if (operation === 'run.get') { this.owned('agent_runs', input.runId, projectId); return this.reader.getRun(input.runId) }
     if (operation === 'run.events') {
@@ -500,5 +507,5 @@ export class CreativeInterface {
 
 const pick = (value, keys) => Object.fromEntries(keys.filter(key => value[key] !== undefined).map(key => [key, value[key]]))
 function confirmed(input) { if (input.confirm !== true || !String(input.reason || input.note || '').trim()) fail('CONFIRMATION_REQUIRED', '正式决定需要 confirm:true 和作者确认说明 reason 或 note') }
-export const READ_OPERATIONS = new Set(['identity','snapshot','request.get','chapter.get','revisions.list','runs.list','run.get','run.events','approvals.list','finalization.get','finalization.correction-preview','finalization.manual-preview'])
+export const READ_OPERATIONS = new Set(['identity','snapshot','request.get','chapter.get','zhuque.get','revisions.list','runs.list','run.get','run.events','approvals.list','finalization.get','finalization.correction-preview','finalization.manual-preview'])
 export const WRITE_OPERATIONS = new Set(['run.start','run.start-inline','run.continue','run.pause','run.cancel','run.resume','run.retry','run.finish','candidate.propose','candidate.resolve','approval.resolve','chapter.create','project.update','chapter.update','chapters.reorder','planning.document.save','planning.entity.create','planning.entity.update','planning.entities.reorder','planning.relationship.create','planning.relationship.update','planning.arc.create','planning.arc.update','planning.arc-beat.create','planning.arc-beat.update','knowledge.item.create','knowledge.item.update','knowledge.items.reorder','knowledge.check.resolve','context.update','prompt.style.save','authoring.sample.save','authoring.protection.save','finalization.start','finalization.act','finalization.correct','finalization.manual'])

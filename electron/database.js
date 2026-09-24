@@ -13,6 +13,7 @@ import { createPromptRepository } from './prompt-repository.js'
 import { createQualityRepository } from './quality-repository.js'
 import { createStoryChangeRepository } from './story-change-repository.js'
 import { createWorkspaceRepository } from './workspace-repository.js'
+import { createZhuqueKeyStore } from './zhuque-key-store.js'
 
 let database
 let workspaceRepository
@@ -23,6 +24,7 @@ let promptRepository
 let qualityRepository
 let codexRepository
 let storyChangeRepository
+let zhuqueKeyStore
 
 function timestamp() {
   return new Date().toISOString()
@@ -66,6 +68,21 @@ function decryptApiKey(value) {
   }
   return value.startsWith('plain:') ? value.slice(6) : ''
 }
+
+function zhuqueKeys() {
+  if (!zhuqueKeyStore) zhuqueKeyStore = createZhuqueKeyStore(openDatabase(), {
+    encrypt: encryptApiKey,
+    decrypt: decryptApiKey,
+    encryptionAvailable: () => safeStorage.isEncryptionAvailable(),
+  })
+  return zhuqueKeyStore
+}
+
+export function getZhuqueApiKey() { return zhuqueKeys().selectedKey() }
+export function getZhuqueKeysStatus() { return zhuqueKeys().status() }
+export function addZhuqueApiKey(input) { return zhuqueKeys().add(input) }
+export function selectZhuqueApiKey(id) { return zhuqueKeys().select(id) }
+export function removeZhuqueApiKey(id) { return zhuqueKeys().remove(id) }
 
 export function getDatabasePath() {
   const directory = app.getPath('userData')

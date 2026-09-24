@@ -174,6 +174,7 @@
             <div class="editor-version-actions" aria-label="版本操作">
               <button class="outline-button" @click="openVersionHistory">版本历史</button>
               <button class="outline-button" @click="saveManuscript">保存版本</button>
+              <button class="outline-button" :disabled="zhuqueOpening" @click="openZhuqueDetection">{{ zhuqueOpening ? '准备检测…' : '朱雀 AI 检测' }}</button>
               <button class="outline-button finalize-chapter-button" @click="openFinalization"><AppIcon name="quality" :size="15" />完成本章</button>
               <button v-if="runningTask" class="cancel-generation-button" :disabled="generationCancelPending" @click="cancelGeneration">
                 {{ generationCancelPending ? '正在取消…' : '取消生成' }}
@@ -381,6 +382,7 @@
     />
     <ApprovalDrawer :project-id="project.id" />
     <ChapterFinalization v-if="finalizationOpen" :project-id="project.id" :chapter-id="activeChapter.id" :settings="modelSettings" @close="finalizationOpen = false" @completed="reloadAfterFinalization" />
+    <ZhuqueDetection v-if="zhuqueOpen && zhuqueTarget" :project-id="zhuqueTarget.projectId" :chapter-id="zhuqueTarget.chapterId" :default-mode="defaultExecutionMode" :app-model-label="modelName('chapter')" :repair-busy="zhuqueRepairBusy" @close="zhuqueOpen = false" @repair="runZhuqueRepair" />
     <InlineCodexPanel
       :visible="inlinePanelOpen"
       :run-id="inlineRunId"
@@ -578,6 +580,7 @@ import GenerationHistory from './components/GenerationHistory.vue'
 import KnowledgeCenter from './components/KnowledgeCenter.vue'
 import InlineCodexPanel from './components/InlineCodexPanel.vue'
 import ChapterFinalization from './components/ChapterFinalization.vue'
+import ZhuqueDetection from './components/ZhuqueDetection.vue'
 import StoryChangePanel from './components/StoryChangePanel.vue'
 import ModelSettings from './components/ModelSettings.vue'
 import NovelEditor from './components/NovelEditor.vue'
@@ -640,6 +643,63 @@ const loadError = ref('')
 const settingsOpen = ref(false)
 const qualityCenterOpen = ref(false)
 const finalizationOpen = ref(false)
+const zhuqueOpen = ref(false)
+const zhuqueOpening = ref(false)
+const zhuqueRepairBusy = ref(false)
+const zhuqueTarget = ref(null)
+async function openZhuqueDetection() {
+  if (!activeChapter.value || zhuqueOpening.value) return
+  const target = { projectId: project.id, chapterId: activeChapter.value.id }
+  zhuqueOpening.value = true
+  try {
+    await saveManuscript({ createRevision: false, source: 'before-zhuque-detection' })
+    if (isDirty.value) await saveManuscript({ createRevision: false, source: 'before-zhuque-detection' })
+    if (!isDirty.value && project.id === target.projectId && activeChapter.value?.id === target.chapterId) {
+      zhuqueTarget.value = target
+      zhuqueOpen.value = true
+    }
+  } catch { /* saveManuscript already displays the error */ }
+  finally { zhuqueOpening.value = false }
+}
+async function runZhuqueRepair({ mode, digest }) {
+  const target = zhuqueTarget.value
+  if (!target || zhuqueRepairBusy.value || runningTask.value || !activeChapter.value
+    || target.projectId !== project.id || target.chapterId !== activeChapter.value.id) return
+  zhuqueRepairBusy.value = true
+  try {
+    if (isDirty.value) await saveManuscript({ createRevision: false, source: 'before-zhuque-repair' })
+    const status = await appService.getZhuqueDetection(target)
+    if (!status.result || status.result.stale || status.result.manuscriptDigest !== digest) {
+      throw new Error('检测结果与当前正文不一致，请重新检测后再改稿')
+    }
+    const original = activeChapter.value.manuscript || ''
+    if (editorText.value !== original) throw new Error('正文正在变化，请先保存并重新检测')
+    if (mode === 'codex') {
+      const run = await startInlineCodex({ request: {
+        projectId: target.projectId, chapterId: target.chapterId, task: 'chapter', intent: 'repair',
+        target: { kind: 'manuscript', targetId: target.chapterId, fieldLabel: '朱雀检测辅助改稿', zhuqueDigest: digest },
+        instruction: instruction.value,
+      } })
+      if (run) zhuqueOpen.value = false
+      return
+    }
+    runningTask.value = 'zhuque-repair'
+    const result = await executeGeneration({
+      task: 'chapter', intent: 'repair', projectId: target.projectId, chapterId: target.chapterId,
+      zhuqueDigest: digest, instruction: instruction.value, modelProfileId: modelSettings.routes.chapter,
+    })
+    if (!String(result.manuscript || '').trim()) throw new Error('模型未返回完整章节候选')
+    Object.assign(candidate, {
+      original, content: result.manuscript, title: '朱雀检测辅助改稿候选',
+      subtitle: `生成来源：${executionLabel(result)}。仅以检测标注为编辑线索，请核对剧情与人物声音。`,
+      hint: '候选尚未写入正文；接受后才保存为新版本。', language: 'markdown',
+      task: 'zhuque-repair', candidateId: '', targetTab: 'manuscript', sourceDigest: digest, visible: true,
+    })
+    zhuqueOpen.value = false
+    showToast('改稿候选已生成，请核对差异')
+  } catch (error) { showToast(generationErrorMessage(error, '朱雀辅助改稿失败')) }
+  finally { runningTask.value = ''; zhuqueRepairBusy.value = false }
+}
 async function openFinalization() {
   try {
     await saveManuscript({ createRevision: false })
@@ -2019,6 +2079,16 @@ function discardSelectionPreview() {
 
 async function acceptCandidate() {
   if (!candidate.visible || !activeChapter.value) return
+  if (candidate.task === 'zhuque-repair') {
+    try {
+      const latest = await appService.loadWorkspaceSnapshot(project.id)
+      const chapter = latest.chapters.find((item) => item.id === activeChapter.value.id)
+      if (!chapter || chapter.manuscript !== candidate.original || editorText.value !== candidate.original) {
+        showToast('正文已变化，改稿候选已过期；请放弃候选并重新检测')
+        return
+      }
+    } catch (error) { showToast(`确认候选前核对失败：${error.message}`); return }
+  }
   if (candidate.candidateId) {
     try {
       await appService.resolvePlanningCandidate({ candidateId: candidate.candidateId, decision: 'accepted' })

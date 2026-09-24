@@ -38,6 +38,12 @@ export const appService = {
   updateChapter(patch) {
     return electronApi.updateChapter(patch)
   },
+  getZhuqueDetection(payload) { return electronApi.getZhuqueDetection(payload) },
+  addZhuqueApiKey(input) { return electronApi.addZhuqueApiKey(input) },
+  selectZhuqueApiKey(id) { return electronApi.selectZhuqueApiKey(id) },
+  removeZhuqueApiKey(id) { return electronApi.removeZhuqueApiKey(id) },
+  onZhuqueKeysChanged(callback) { return electronApi.onZhuqueKeysChanged(callback) },
+  detectChapterWithZhuque(payload) { return electronApi.detectChapterWithZhuque(payload) },
   reorderChapters(input) {
     return electronApi.reorderChapters(input)
   },

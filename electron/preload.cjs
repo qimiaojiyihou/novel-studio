@@ -24,6 +24,16 @@ contextBridge.exposeInMainWorld('novelStudio', {
   importProjectFile: () => ipcRenderer.invoke('project:import-file'),
   createChapter: (input) => ipcRenderer.invoke('chapter:create', input),
   updateChapter: (patch) => ipcRenderer.invoke('chapter:update', patch),
+  getZhuqueDetection: (payload) => ipcRenderer.invoke('zhuque:status', payload),
+  addZhuqueApiKey: (input) => ipcRenderer.invoke('zhuque:key-add', input),
+  selectZhuqueApiKey: (id) => ipcRenderer.invoke('zhuque:key-select', id),
+  removeZhuqueApiKey: (id) => ipcRenderer.invoke('zhuque:key-remove', id),
+  onZhuqueKeysChanged: (callback) => {
+    const listener = (_event, status) => callback(status)
+    ipcRenderer.on('zhuque:keys-changed', listener)
+    return () => ipcRenderer.removeListener('zhuque:keys-changed', listener)
+  },
+  detectChapterWithZhuque: (payload) => ipcRenderer.invoke('zhuque:detect', payload),
   reorderChapters: (input) => ipcRenderer.invoke('chapters:reorder', input),
   duplicateChapter: (chapterId) => ipcRenderer.invoke('chapter:duplicate', chapterId),
   deleteChapter: (chapterId) => ipcRenderer.invoke('chapter:delete', chapterId),

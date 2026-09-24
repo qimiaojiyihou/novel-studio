@@ -66,6 +66,7 @@ node .agents/skills/novel-studio-operator/scripts/operate.mjs OPERATION --input 
 - 作者已经明确给出内容并要求保存时，使用对应的 `project.update`、`chapter.update`、`planning.*`、`knowledge.*`、`context.update`、`prompt.style.save` 或 `authoring.*` 直接写入。每次先读 snapshot，把当前 `sourceDigest` 连同 `confirm:true` 和实际 `reason` 提交；一次成功写入后，下一次写入前重新读取。不要因接口已开放而跳过作者确认，也不要把项目摘要当作正文摘要。
 - 模型调用、工具操作和正式写入是不同权限。已有授权仅在其明确范围内有效；没有授权的审批交给用户。`confirm:true` 和 reason 是决定记录，不是凭空产生的授权。
 - 未确认候选可讨论、比较、修改；只有获准接受后才调用 `candidate.resolve`。接受正文只是更新编辑稿，定稿走独立流程。
+- 若作者要求参考朱雀 AI 检测改稿，先对目标章节调用只读 `zhuque.get`。结果为 null 或 `stale:true` 时让作者在应用内重新检测；使用返回的 `manuscriptDigest` 启动 `task:"chapter"`、`intent:"repair"`、`target.kind:"manuscript"` 的 `run.start-inline`，并将摘要放进 `target.zhuqueDigest`。应用会从本机读取结果并加入模型提示，不从任务输入接受伪造的检测分数；模型只产出候选，作者确认后才写入。
 - 作者明确选择跳过审稿和交接时，可走操作流程中的“人工直接定稿”，不限于错字校正。不因审稿耗时或出错自行选择此模式；完成后注明未审稿、交接未更新。
 - 所有 ID、摘要、字段名、版本和证据来自刚读取的应用数据；文档示例中的占位符需要替换，不编造。
 - 持续处理当前用户请求，但不因目标占用、文学评分或短字数而自动取消任务、清空历史、接受候选、整章循环重写或改用其他模型。

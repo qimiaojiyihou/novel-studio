@@ -11,6 +11,7 @@ import { spawn } from 'node:child_process'
 import { randomBytes, createHash } from 'node:crypto'
 import { createCreativePackRepository, OFFICIAL_PACK_ID } from './creative-pack.js'
 import { ChapterFinalizer, createFinalizationRepository } from './chapter-finalization.js'
+import { createZhuqueDetectionService, zhuqueRepairContext } from './zhuque-detection.js'
 import { createChapterAmendmentRepository } from './chapter-amendment.js'
 import { createManualFinalizationRepository } from './chapter-manual-finalization.js'
 import { contextDependencyDigest, recordCreativeDependencies, invalidateCreativeDependencies } from './creative-context.js'
@@ -68,6 +69,8 @@ import {
   getQualityReportByGeneration,
   getBlindQualityReviewPacket,
   getModelApiKey,
+  getZhuqueApiKey,
+  getZhuqueKeysStatus,
   listGenerationRecords,
   listAgentEvents,
   listAgentRuns,
@@ -105,6 +108,9 @@ import {
   savePromptTemplate,
   saveStyleProfile,
   saveModelProfile,
+  addZhuqueApiKey,
+  selectZhuqueApiKey,
+  removeZhuqueApiKey,
   saveAgentSession,
   saveCodexSettings,
   startGenerationRecord,
@@ -178,6 +184,12 @@ let chapterFinalizer = null
 let creativeInterface = null
 let creativeServer = null
 let workDesignSync = null
+let zhuqueDetectionService = null
+
+function zhuqueDetection() {
+  if (!zhuqueDetectionService) zhuqueDetectionService = createZhuqueDetectionService(openDatabase(), { getApiKey: getZhuqueApiKey })
+  return zhuqueDetectionService
+}
 const creativeMutationQueue = new CreativeMutationQueue()
 const creativeHandlers = new Map()
 const nativeIpcMain = ipcMain
@@ -563,6 +575,13 @@ async function prepareCodexPrompt({ run, step, extra = {} }) {
   const qualityRepairInstruction = selectedRepairIssues.length
     ? `只修复以下已选质量问题，保留未涉及的事实、事件顺序、人物状态和章节结尾合同：\n${selectedRepairIssues.map((issue) => `- ${issue.category || issue.criterion}：${issue.repairInstruction || issue.criterion}`).join('\n')}`
     : ''
+  const zhuqueRepair = target?.zhuqueDigest
+    ? zhuqueRepairContext(zhuqueDetection().requireFreshResult({
+      projectId: run.projectId, chapterId: run.chapterId, expectedDigest: target.zhuqueDigest,
+    })) : null
+  if (zhuqueRepair && (step.task !== 'chapter' || intent !== 'repair' || target?.kind !== 'manuscript')) {
+    throw new Error('朱雀辅助改稿只支持当前章节正文的修复候选')
+  }
   const lengthInstruction = lengthRange && step.task === 'chapter'
     ? `本章正文目标约 ${lengthRange.target} 个纯中文字符（不计标点与空白）。篇幅为编辑建议；按人物行动自然展开，不为凑字数重复解释，不因篇幅偏差自行重写。`
     : lengthRange && step.task === 'quality_review'
@@ -597,7 +616,7 @@ async function prepareCodexPrompt({ run, step, extra = {} }) {
     ? `当前任务是在尚未保存的项目资料表单中生成“${target.fieldLabel || target.fieldKey}”。必须按待保存题材“${rendererDraftContext.genre || '未指定'}”创作；只输出字段最终内容，不要说明任务、流程、候选机制或是否写入项目。`
     : '',
   inlineRevision ? '' : inlineAction?.instruction || '',
-  qualityRepairInstruction, lengthInstruction, repairInstruction].filter(Boolean)
+  qualityRepairInstruction, zhuqueRepair?.instruction, lengthInstruction, repairInstruction].filter(Boolean)
   const promptInput = {
     task: step.task,
     intent,
@@ -626,6 +645,7 @@ async function prepareCodexPrompt({ run, step, extra = {} }) {
     manuscriptPrefix: intent === 'continue' ? manuscript.slice(0, cursorOffset) : '',
     manuscriptSuffix: intent === 'continue' ? manuscript.slice(cursorOffset) : '',
     sourceText: intent === 'rewrite' || intent === 'repair' ? manuscript : '',
+    repairIssues: zhuqueRepair?.issues || selectedRepairIssues,
     deterministicChecks: selectedSourceGeneration && step.task === 'quality_review'
       ? deterministicQualityChecks({ task: selectedSourceGeneration.task, output: selectedSourceGeneration.output, chapter, targetLength: run.modelRoutes?.targetLength })
       : undefined,
@@ -1371,6 +1391,7 @@ function generationRequestSnapshot(payload = {}) {
     projectId: String(payload.projectId || ''),
     chapterId: String(payload.chapterId || ''),
     instruction: String(payload.instruction || ''),
+    zhuqueDigest: String(payload.zhuqueDigest || ''),
     modelProfileId: String(payload.modelProfileId || ''),
     selectedText: String(payload.selectedText || ''),
     rewriteMode: String(payload.rewriteMode || ''),
@@ -1444,6 +1465,13 @@ async function runGenerationTask(event, payload = {}, { retryOfId = '' } = {}) {
     : payload.task === 'quality_review' ? 'analysis' : 'draft'
   const intent = allowedIntents.has(payload.intent) ? payload.intent : defaultIntent
   const manuscript = String(chapter?.manuscript || '')
+  const zhuqueRepair = payload.zhuqueDigest
+    ? zhuqueRepairContext(zhuqueDetection().requireFreshResult({
+      projectId: payload.projectId, chapterId: payload.chapterId, expectedDigest: payload.zhuqueDigest,
+    })) : null
+  if (zhuqueRepair && (payload.task !== 'chapter' || intent !== 'repair')) {
+    throw new Error('朱雀辅助改稿只支持当前章节正文的修复候选')
+  }
   const cursorOffset = Math.max(0, Math.min(Number(payload.cursorOffset ?? manuscript.length), manuscript.length))
   const projectDraftContext = payload.planning?.targetType === 'renderer_draft'
     && payload.projectDraftContext
@@ -1466,12 +1494,14 @@ async function runGenerationTask(event, payload = {}, { retryOfId = '' } = {}) {
   } : longContext
   const generationInput = {
     ...payload,
+    instruction: [payload.instruction, zhuqueRepair?.instruction].filter(Boolean).join('\n'),
+    repairIssues: zhuqueRepair?.issues || payload.repairIssues,
     chapterStateMode: frozenRun?.modelRoutes?.chapterStateMode,
     intent,
     cursorOffset,
     manuscriptPrefix: intent === 'continue' ? manuscript.slice(0, cursorOffset) : '',
     manuscriptSuffix: intent === 'continue' ? manuscript.slice(cursorOffset) : '',
-    sourceText: payload.sourceText || (intent === 'rewrite' ? manuscript : ''),
+    sourceText: zhuqueRepair ? manuscript : payload.sourceText || (intent === 'rewrite' || intent === 'repair' ? manuscript : ''),
     project: effectiveProject,
     chapter,
     planningCenter,
@@ -2228,6 +2258,18 @@ function registerIpc() {
   ipcMain.handle('project:import-file', () => importProjectFile())
   ipcMain.handle('chapter:create', (_event, input) => createChapter(input))
   ipcMain.handle('chapter:update', (_event, patch) => updateChapter(patch))
+  ipcMain.handle('zhuque:status', (_event, payload) => ({
+    ...getZhuqueKeysStatus(),
+    result: zhuqueDetection().getResult(payload),
+  }))
+  const publishZhuqueKeys = (status) => {
+    for (const window of BrowserWindow.getAllWindows()) window.webContents.send('zhuque:keys-changed', status)
+    return status
+  }
+  ipcMain.handle('zhuque:key-add', (_event, input) => publishZhuqueKeys(addZhuqueApiKey(input)))
+  ipcMain.handle('zhuque:key-select', (_event, id) => publishZhuqueKeys(selectZhuqueApiKey(id)))
+  ipcMain.handle('zhuque:key-remove', (_event, id) => publishZhuqueKeys(removeZhuqueApiKey(id)))
+  ipcMain.handle('zhuque:detect', (_event, payload) => zhuqueDetection().detect(payload))
   ipcMain.handle('chapters:reorder', (_event, input) => reorderChapters(input))
   ipcMain.handle('chapter:duplicate', (_event, chapterId) => duplicateChapter(chapterId))
   ipcMain.handle('chapter:delete', (_event, chapterId) => deleteChapter(chapterId))
@@ -2383,6 +2425,13 @@ function registerIpc() {
     }, event)
   })
   ipcMain.handle('agent:start-inline', (event, payload = {}) => {
+    if (payload.target?.zhuqueDigest) {
+      if (payload.task !== 'chapter' || payload.intent !== 'repair' || payload.target.kind !== 'manuscript'
+        || payload.chapterId !== payload.target.targetId) throw new Error('朱雀辅助改稿目标必须是当前章节正文')
+      zhuqueDetection().requireFreshResult({
+        projectId: payload.projectId, chapterId: payload.chapterId, expectedDigest: payload.target.zhuqueDigest,
+      })
+    }
     const codexDefaults = loadCodexSettings()
     const agentProvider = normalizeAgentProvider(payload.agentProvider ?? codexDefaults.agentProvider)
     return agentRuntime.startInline({

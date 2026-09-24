@@ -148,6 +148,7 @@ export function normalizeInlineCreativeAction(input = {}) {
     reportId: cleanText(targetInput.reportId, 200),
     issueIds: Array.isArray(targetInput.issueIds) ? targetInput.issueIds.map((item) => cleanText(item, 200)).filter(Boolean).slice(0, 100) : [],
     draftDigest: cleanText(targetInput.draftDigest, 160),
+    zhuqueDigest: cleanText(targetInput.zhuqueDigest, 64),
     scopeType: cleanText(targetInput.scopeType, 40),
     scopeId: cleanText(targetInput.scopeId, 200),
     fieldKeys: Array.isArray(targetInput.fieldKeys)
@@ -158,6 +159,9 @@ export function normalizeInlineCreativeAction(input = {}) {
   }
   if (kind === 'manuscript_selection' && target.selectionTo <= target.selectionFrom) throw new Error('局部重写选区无效')
   if (kind === 'quality_review' && !target.sourceGenerationId) throw new Error('质量评审缺少待评审生成记录')
+  if (target.zhuqueDigest && (kind !== 'manuscript' || task !== 'chapter' || input.intent !== 'repair' || !/^[a-f0-9]{64}$/.test(target.zhuqueDigest))) {
+    throw new Error('朱雀辅助改稿需要当前章节的有效检测摘要与修复意图')
+  }
   if (INLINE_RENDERER_DRAFT_KINDS.includes(kind) && !target.fieldKey) throw new Error('编辑器草稿候选缺少字段标识')
   if (INLINE_RENDERER_DRAFT_KINDS.includes(kind) && !target.draftDigest) throw new Error('编辑器草稿候选缺少草稿摘要')
   return {
