@@ -13,6 +13,7 @@ import { collectSearchMatches, editorSearchStatus, searchTargetForSelection } fr
 
 const props = defineProps({
   modelValue: { type: String, default: '' },
+  documentId: { type: String, default: '' },
   editable: { type: Boolean, default: true },
 })
 
@@ -20,6 +21,7 @@ const emit = defineEmits(['update:modelValue', 'selection-change'])
 const editorRoot = ref(null)
 let view
 let updatingFromParent = false
+let currentDocumentId = ''
 let lastSearchSignature = ''
 const editableCompartment = new Compartment()
 
@@ -141,11 +143,19 @@ function createState(value) {
 
 onMounted(() => {
   view = new EditorView({ state: createState(props.modelValue), parent: editorRoot.value })
+  currentDocumentId = props.documentId
   renderSearchFeedback()
 })
 
-watch(() => props.modelValue, (value) => {
-  if (!view || value === view.state.doc.toString()) return
+watch(() => [props.documentId, props.modelValue], ([documentId, value]) => {
+  if (!view) return
+  if (documentId !== currentDocumentId) {
+    currentDocumentId = documentId
+    lastSearchSignature = ''
+    view.setState(createState(value))
+    return
+  }
+  if (value === view.state.doc.toString()) return
   updatingFromParent = true
   view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: value } })
   updatingFromParent = false

@@ -61,6 +61,7 @@ function mapRun(row) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     completedAt: row.completed_at,
+    inlineTargetKind: row.inline_target_kind || '',
   } : null
 }
 
@@ -172,6 +173,10 @@ export function createCodexRepository(database, {
   const stepById = database.prepare('SELECT * FROM agent_steps WHERE id = ?')
   const candidateById = database.prepare('SELECT * FROM agent_candidates WHERE id = ?')
   const approvalById = database.prepare('SELECT * FROM bridge_action_requests WHERE id = ?')
+  const runProjectId = database.prepare('SELECT project_id FROM agent_runs WHERE id = ?')
+  const runProvider = database.prepare("SELECT CASE WHEN json_valid(model_routes_json) THEN json_extract(model_routes_json, '$.agentProvider') ELSE '' END AS provider FROM agent_runs WHERE id = ?")
+  const projectIdCache = new Map()
+  const eventTotals = new Map()
 
   function getProviderSettings() {
     const row = database.prepare('SELECT * FROM agent_provider_settings WHERE id = ?').get('codex')
@@ -501,10 +506,32 @@ export function createCodexRepository(database, {
 
   function listRuns({ projectId = '', limit = 50 } = {}) {
     const bounded = Math.max(1, Math.min(200, Number(limit || 50)))
+    const summary = `SELECT run.*,
+      CASE WHEN run.workflow_id = 'inline-action' THEN
+        (SELECT CASE WHEN json_valid(step.input_json) THEN json_extract(step.input_json, '$.target.kind') ELSE '' END FROM agent_steps step
+          WHERE step.run_id = run.id ORDER BY step.position LIMIT 1)
+      ELSE '' END AS inline_target_kind
+      FROM agent_runs run`
     const rows = projectId
-      ? database.prepare('SELECT * FROM agent_runs WHERE project_id = ? ORDER BY updated_at DESC, rowid DESC LIMIT ?').all(projectId, bounded)
-      : database.prepare('SELECT * FROM agent_runs ORDER BY updated_at DESC, rowid DESC LIMIT ?').all(bounded)
+      ? database.prepare(`${summary} WHERE run.project_id = ? ORDER BY run.updated_at DESC, run.rowid DESC LIMIT ?`).all(projectId, bounded)
+      : database.prepare(`${summary} ORDER BY run.updated_at DESC, run.rowid DESC LIMIT ?`).all(bounded)
     return rows.map(mapRun)
+  }
+
+  function listIdleInlineRuns({ before, limit = 100 } = {}) {
+    if (!before) return []
+    return database.prepare(`
+      SELECT run.id FROM agent_runs run
+      WHERE run.workflow_id = 'inline-action' AND run.status = 'waiting_confirmation'
+        AND run.updated_at < ?
+        AND NOT EXISTS (SELECT 1 FROM agent_candidates candidate
+          WHERE candidate.run_id = run.id AND candidate.status = 'pending')
+        AND NOT EXISTS (SELECT 1 FROM agent_steps step WHERE step.run_id = run.id
+          AND step.status IN ('pending', 'running', 'waiting_approval', 'interrupted'))
+        AND NOT EXISTS (SELECT 1 FROM bridge_action_requests approval
+          WHERE approval.agent_run_id = run.id AND approval.status = 'pending')
+      ORDER BY run.updated_at LIMIT ?
+    `).all(before, Math.max(1, Math.min(500, Number(limit || 100)))).map(row => row.id)
   }
 
   function getRun(id, { includeEvents = true } = {}) {
@@ -533,6 +560,19 @@ export function createCodexRepository(database, {
       events: includeEvents ? listEvents(id) : [],
       messages: database.prepare('SELECT * FROM creative_messages WHERE run_id = ? ORDER BY created_at, rowid').all(id),
     }
+  }
+
+  function getRunSummary(id) {
+    return mapRun(runById.get(id))
+  }
+
+  function projectIdForRun(id) {
+    if (!projectIdCache.has(id)) projectIdCache.set(id, runProjectId.get(id)?.project_id || '')
+    return projectIdCache.get(id)
+  }
+
+  function agentProviderForRun(id) {
+    return runProvider.get(id)?.provider || ''
   }
 
   function getRunPack(id) {
@@ -769,7 +809,7 @@ export function createCodexRepository(database, {
   }
 
   function appendEvent(input = {}) {
-    if (!runById.get(input.agentRunId)) throw new Error('AgentRun 不存在')
+    if (!projectIdForRun(input.agentRunId)) throw new Error('AgentRun 不存在')
     const redacted = redact(input.payload || {})
     let payloadJson = JSON.stringify(redacted)
     const originalSize = Buffer.byteLength(payloadJson)
@@ -782,9 +822,16 @@ export function createCodexRepository(database, {
         preview: payloadJson.slice(0, EVENT_TOOL_OUTPUT_LIMIT),
       })
     }
-    const used = Number(database.prepare('SELECT COALESCE(SUM(byte_size), 0) AS size FROM agent_events WHERE agent_run_id = ?').get(input.agentRunId).size)
+    let totals = eventTotals.get(input.agentRunId)
+    if (!totals) {
+      totals = database.prepare('SELECT COALESCE(SUM(byte_size), 0) AS size, COALESCE(MAX(sequence), 0) AS sequence FROM agent_events WHERE agent_run_id = ?').get(input.agentRunId)
+      eventTotals.set(input.agentRunId, totals)
+    }
+    const used = Number(totals.size)
     let storedSize = Buffer.byteLength(payloadJson)
-    if (used + storedSize > RUN_EVENT_LIMIT) {
+    const overLimit = used + storedSize > RUN_EVENT_LIMIT
+    if (overLimit && input.type === 'text_delta' && totals.textTruncated) return null
+    if (overLimit) {
       payloadJson = JSON.stringify({
         truncated: true,
         reason: 'agent_run_event_limit',
@@ -793,7 +840,7 @@ export function createCodexRepository(database, {
       })
       storedSize = 0
     }
-    const sequence = Number(database.prepare('SELECT COALESCE(MAX(sequence), 0) + 1 AS sequence FROM agent_events WHERE agent_run_id = ?').get(input.agentRunId).sequence)
+    const sequence = Number(totals.sequence) + 1
     const id = createId('agent-event')
     database.prepare(`
       INSERT INTO agent_events (
@@ -801,6 +848,9 @@ export function createCodexRepository(database, {
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(id, input.agentRunId, input.agentStepId || null, sequence, input.type || 'status',
       String(input.summary || '').slice(0, 2000), payloadJson, storedSize, now())
+    totals.sequence = sequence
+    totals.size = used + storedSize
+    if (overLimit && input.type === 'text_delta') totals.textTruncated = true
     return mapEvent(database.prepare('SELECT * FROM agent_events WHERE id = ?').get(id))
   }
 
@@ -897,7 +947,11 @@ export function createCodexRepository(database, {
     createInlineRun,
     appendInlineRevision,
     listRuns,
+    listIdleInlineRuns,
     getRun,
+    getRunSummary,
+    projectIdForRun,
+    agentProviderForRun,
     getRunPack,
     updateRun,
     updateStep,

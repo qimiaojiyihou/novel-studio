@@ -17,7 +17,10 @@ export class AgentGatewayRouter {
   }
 
   providerForRun(agentRunId) {
-    return normalizeAgentProvider(this.repository?.getRun?.(agentRunId)?.modelRoutes?.agentProvider)
+    const provider = this.repository?.agentProviderForRun?.(agentRunId)
+    if (provider) return normalizeAgentProvider(provider)
+    const run = this.repository?.getRunSummary?.(agentRunId) || this.repository?.getRun?.(agentRunId, { includeEvents: false })
+    return normalizeAgentProvider(run?.modelRoutes?.agentProvider)
   }
 
   prompt(input) {

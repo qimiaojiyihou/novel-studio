@@ -81,6 +81,44 @@ async function waitFor(predicate, timeout = 1000) {
   throw new Error('等待 Agent 状态超时')
 }
 
+test('idle inline release preserves the conversation and skips unresolved candidates', async () => {
+  const { database, repository, runtime } = setup()
+  const create = () => repository.createInlineRun({ projectId: 'project-1', chapterId: 'chapter-1',
+    task: 'chapter_card', executionMode: 'codex', freshStart: true,
+    target: { kind: 'chapter_card', targetId: 'chapter-1', fieldLabel: '章节卡' } })
+  const idle = create()
+  repository.updateStep(idle.steps[0].id, { status: 'completed' })
+  repository.updateRun(idle.id, { status: 'waiting_confirmation' })
+  repository.saveDiscussion({ runId: idle.id, stepId: idle.steps[0].id, text: '保留这段对话' })
+  const pending = create()
+  repository.updateStep(pending.steps[0].id, { status: 'completed' })
+  repository.updateRun(pending.id, { status: 'waiting_confirmation' })
+  repository.createCandidate({ runId: pending.id, stepId: pending.steps[0].id,
+    projectId: 'project-1', chapterId: 'chapter-1', artifactType: 'chapter_card',
+    sourceDigest: 'source', payload: { goal: '取证' } })
+  const closed = []
+  runtime.codexGateway = { closeSession: async id => { closed.push(id) } }
+  assert.equal(await runtime.finishIdleInlineRuns({ before: '2026-08-25T15:00:00.000Z' }), 1)
+  assert.deepEqual(closed, [idle.id])
+  assert.equal(repository.getRun(idle.id).status, 'completed')
+  assert.equal(repository.getRun(idle.id).messages[0].content, '保留这段对话')
+  assert.equal(repository.getRun(pending.id).status, 'waiting_confirmation')
+  database.close()
+})
+
+test('candidate keeps context omission diagnostics for author review', async () => {
+  const { database, repository, runtime } = setup()
+  const original = runtime.runAppModel
+  runtime.runAppModel = async input => ({ ...(await original(input)),
+    contextDiagnostics: { omitted: [{ targetKey: 'knowledge_item:old-clue:content', reason: '上下文预算不足' }], truncated: true } })
+  const run = await runtime.startInline({ projectId: 'project-1', chapterId: 'chapter-1',
+    task: 'chapter_card', executionMode: 'app_model',
+    target: { kind: 'chapter_card', targetId: 'chapter-1', fieldLabel: '章节卡' } })
+  const waiting = await waitFor(() => repository.getRun(run.id).status === 'waiting_confirmation' && repository.getRun(run.id))
+  assert.equal(waiting.candidates[0].evidence.contextDiagnostics.omitted.length, 1)
+  database.close()
+})
+
 test('Agent runtime generates candidates without changing accepted project content', async () => {
   const { database, repository, runtime } = setup()
   const started = await runtime.start({

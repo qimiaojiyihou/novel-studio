@@ -6,6 +6,7 @@ import { Readable, Writable } from 'node:stream'
 import { ClientSideConnection, PROTOCOL_VERSION, ndJsonStream } from '@agentclientprotocol/sdk'
 import { readMirrorText, resolveMirrorPath, writeMirrorText } from './codex-project-mirror.js'
 import { modelDirectory, sessionModelSnapshot, execModelArgs } from './codex-models.js'
+import { AgentEventBuffer } from './agent-event-buffer.js'
 
 const ADAPTER_VERSION = '1.6.2'
 const MAX_EXEC_OUTPUT = 8 * 1024 * 1024
@@ -254,6 +255,7 @@ export class CodexAgentGateway {
     this.appPath = appPath
     this.resourcesPath = resourcesPath
     this.repository = repository
+    this.eventBuffer = new AgentEventBuffer((event) => this.repository?.appendEvent?.(event))
     this.spawnProcess = spawnProcess
     this.connectionFactory = connectionFactory
     this.approvalTimeoutMs = approvalTimeoutMs
@@ -631,6 +633,7 @@ export class CodexAgentGateway {
         this.repository?.completeApproval?.(approval.id, { result: { backend: result.backend, outputStarted: result.outputStarted } })
         return result
       } finally {
+        this.eventBuffer.flush(agentRunId)
         signal?.removeEventListener('abort', abort)
         session.activeStepId = ''
         session.onEvent = null
@@ -757,6 +760,7 @@ export class CodexAgentGateway {
   }
 
   async closeSession(agentRunId) {
+    this.eventBuffer.flush(agentRunId)
     const session = this.sessions.get(agentRunId)
     if (!session) return false
     try {
@@ -799,8 +803,9 @@ export class CodexAgentGateway {
     const event = { type, text: updateText(params.update), update: params.update, agentRunId, agentStepId: session.activeStepId }
     if (['text_delta', 'reasoning', 'plan', 'tool_call', 'tool_result', 'usage'].includes(type)) session.outputStarted = true
     if (type === 'text_delta') session.content += event.text
-    session.events.push(event)
-    this.repository?.appendEvent?.({ agentRunId, agentStepId: session.activeStepId, type, summary: event.text.slice(0, 500), payload: params.update })
+    if (session.events.length < 200) session.events.push(event)
+    this.eventBuffer.push({ agentRunId, agentStepId: session.activeStepId, type,
+      text: event.text, summary: event.text.slice(0, 500), payload: params.update })
     session.onEvent?.(event)
     this.onGlobalEvent(event)
   }
@@ -811,7 +816,7 @@ export class CodexAgentGateway {
     if (!session) return { outcome: { outcome: 'cancelled' } }
     const kind = classifyTool(params.toolCall)
     try { safeToolLocations(session.mirrorRoot, params.toolCall) } catch (error) {
-      this.repository?.appendEvent?.({ agentRunId, agentStepId: session.activeStepId, type: 'permission', summary: '路径越界已拒绝', payload: { kind, error: error.message } })
+      this.eventBuffer.push({ agentRunId, agentStepId: session.activeStepId, type: 'permission', summary: '路径越界已拒绝', payload: { kind, error: error.message } })
       return { outcome: { outcome: 'cancelled' } }
     }
     try {

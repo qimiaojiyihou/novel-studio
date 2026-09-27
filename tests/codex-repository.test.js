@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { DatabaseSync } from 'node:sqlite'
-import { createCodexRepository, EVENT_TOOL_OUTPUT_LIMIT } from '../electron/codex-repository.js'
+import { createCodexRepository, EVENT_TOOL_OUTPUT_LIMIT, RUN_EVENT_LIMIT } from '../electron/codex-repository.js'
 import { runMigrations } from '../electron/database-migrations.js'
 
 const NOW = '2026-08-25T13:00:00.000Z'
@@ -77,6 +77,49 @@ test('Codex events are ordered, redacted and bounded', () => {
   assert.equal(second.payload.truncated, true)
   assert.equal(second.sequence, 2)
   assert.deepEqual(repository.listEvents(run.id).map((event) => event.sequence), [1, 2])
+  assert.equal(repository.getRunSummary(run.id).projectId, 'project-1')
+  assert.equal(repository.getRunSummary(run.id).events, undefined)
+  assert.equal(repository.projectIdForRun(run.id), 'project-1')
+  assert.equal(repository.agentProviderForRun(run.id), '')
+  database.close()
+})
+
+test('event cap records one overflow marker instead of an unbounded row per text fragment', () => {
+  const { database, repository } = setup()
+  const run = repository.createRun({ projectId: 'project-1', chapterId: 'chapter-1', workflowId: 'chapter-creation', executionMode: 'codex' })
+  repository.appendEvent({ agentRunId: run.id, type: 'status', payload: { padding: 'x'.repeat(RUN_EVENT_LIMIT - 100) } })
+  const first = repository.appendEvent({ agentRunId: run.id, type: 'text_delta', payload: { text: '文'.repeat(100) } })
+  const second = repository.appendEvent({ agentRunId: run.id, type: 'text_delta', payload: { text: '字'.repeat(100) } })
+  assert.equal(first.payload.reason, 'agent_run_event_limit')
+  assert.equal(second, null)
+  assert.equal(database.prepare('SELECT COUNT(*) AS count FROM agent_events WHERE agent_run_id=?').get(run.id).count, 2)
+  database.close()
+})
+
+test('idle inline cleanup only selects old runs without candidates, work or approvals', () => {
+  const { database, repository } = setup()
+  const create = () => repository.createInlineRun({
+    projectId: 'project-1', chapterId: 'chapter-1', task: 'chapter_card', freshStart: true,
+    executionMode: 'codex', target: { kind: 'chapter_card', targetId: 'chapter-1', fieldLabel: '章节卡' },
+  })
+  const idle = create()
+  assert.equal(repository.listRuns({ projectId: 'project-1' })[0].inlineTargetKind, 'chapter_card')
+  repository.updateStep(idle.steps[0].id, { status: 'completed' })
+  repository.updateRun(idle.id, { status: 'waiting_confirmation' })
+  const withCandidate = create()
+  repository.updateStep(withCandidate.steps[0].id, { status: 'completed' })
+  repository.updateRun(withCandidate.id, { status: 'waiting_confirmation' })
+  repository.createCandidate({ runId: withCandidate.id, stepId: withCandidate.steps[0].id,
+    projectId: 'project-1', chapterId: 'chapter-1', artifactType: 'chapter_card',
+    sourceDigest: 'source', payload: { goal: '取得日志' } })
+  const active = create()
+  repository.updateRun(active.id, { status: 'waiting_confirmation' })
+  const approval = create()
+  repository.updateStep(approval.steps[0].id, { status: 'completed' })
+  repository.updateRun(approval.id, { status: 'waiting_confirmation' })
+  repository.createApproval({ projectId: 'project-1', agentRunId: approval.id,
+    agentStepId: approval.steps[0].id, actionType: 'command', permission: '等待作者确认', expiresAt: '2099-01-01T00:00:00.000Z' })
+  assert.deepEqual(repository.listIdleInlineRuns({ before: '2026-08-25T14:00:00.000Z' }), [idle.id])
   database.close()
 })
 

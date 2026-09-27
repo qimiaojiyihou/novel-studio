@@ -30,7 +30,7 @@
     </header>
 
     <main id="workspace-main" class="workspace-grid" :class="{ 'sidebar-collapsed': sidebarCollapsed, 'focus-mode': writingFocus && workspaceView === 'writing', 'lens-hidden': !lensVisible }" v-if="workspaceReady">
-      <aside id="workspace-sidebar" class="structure-panel panel-dark" :class="{ collapsed: sidebarCollapsed }">
+      <aside id="workspace-sidebar" ref="sidebarRef" class="structure-panel panel-dark" :class="{ collapsed: sidebarCollapsed }">
         <div class="panel-heading">
           <span class="eyebrow">作品工作台</span>
           <div class="panel-heading-actions">
@@ -99,14 +99,21 @@
           <button class="nav-item" :class="{ active: workspaceView === 'prompts' }" title="提示词与文风" aria-label="提示词与文风" @click="setWorkspaceView('prompts')"><span class="nav-glyph"><AppIcon name="prompts" /></span><span>提示词与文风</span></button>
         </nav>
 
-        <div class="chapter-section">
+        <div ref="chapterSectionRef" class="chapter-section">
           <div class="section-label">
             <span>正文结构</span>
             <span class="section-count">{{ chapters.length }} 章</span>
           </div>
-          <div class="chapter-list">
+          <div class="chapter-page-controls" aria-label="章节目录分页">
+            <button type="button" aria-label="上一组章节" :disabled="chapterPageIndex === 0" @click="changeChapterPage(-1)">‹</button>
+            <select v-model.number="chapterPageIndex" aria-label="选择章节范围" @change="jumpToChapterPage">
+              <option v-for="page in chapterGroups" :key="page.index" :value="page.index">{{ page.label }}</option>
+            </select>
+            <button type="button" aria-label="下一组章节" :disabled="chapterPageIndex >= chapterGroups.length - 1" @click="changeChapterPage(1)">›</button>
+          </div>
+          <div class="chapter-list" aria-label="章节目录">
             <div
-              v-for="(chapter, index) in chapters"
+              v-for="chapter in visibleChapters"
               :key="chapter.id"
               class="chapter-row"
               :class="{ selected: chapter.id === activeChapter?.id }"
@@ -122,12 +129,18 @@
               <button class="chapter-more" :aria-label="`管理${chapter.title}`" @click.stop="toggleChapterActions(chapter.id)">⋯</button>
               <div v-if="chapterActionId === chapter.id" class="row-action-menu chapter-action-menu" @click.stop>
                 <button @click="openRenameChapter(chapter)">重命名</button>
-                <button :disabled="index === 0" @click="moveChapter(chapter, -1)">上移一章</button>
-                <button :disabled="index === chapters.length - 1" @click="moveChapter(chapter, 1)">下移一章</button>
+                <button :disabled="chapter.id === chapters[0]?.id" @click="moveChapter(chapter, -1)">上移一章</button>
+                <button :disabled="chapter.id === chapters[chapters.length - 1]?.id" @click="moveChapter(chapter, 1)">下移一章</button>
                 <button @click="duplicateChapter(chapter)">复制章节</button>
                 <button class="danger" @click="askDeleteChapter(chapter)">删除章节</button>
               </div>
             </div>
+            <div v-if="!visibleChapters.length" class="chapter-list-empty">暂无章节</div>
+          </div>
+          <div v-if="chapterGroups.length > 1" class="chapter-page-bottom">
+            <button type="button" :disabled="chapterPageIndex === 0" @click="changeChapterPage(-1)">上一组</button>
+            <span>{{ chapterPageIndex + 1 }} / {{ chapterGroups.length }}</span>
+            <button type="button" :disabled="chapterPageIndex >= chapterGroups.length - 1" @click="changeChapterPage(1)">下一组</button>
           </div>
         </div>
 
@@ -222,6 +235,7 @@
             v-if="activeTab === 'manuscript'"
             ref="novelEditorRef"
             v-model="editorText"
+            :document-id="activeChapter.id"
             @selection-change="handleSelection"
           />
           <div v-else-if="activeTab === 'card'" class="artifact-view card-view">
@@ -570,7 +584,7 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import DiffReview from './components/DiffReview.vue'
 import AppIcon from './components/AppIcon.vue'
 import ApprovalDrawer from './components/ApprovalDrawer.vue'
@@ -601,6 +615,7 @@ import VersionHistory from './components/VersionHistory.vue'
 import { REWRITE_PRESETS } from '../electron/prompt-templates.js'
 import { appService } from './services/app-service.js'
 import { countChinese, formatRelativeTime } from './services/format.js'
+import { chapterPageIndexFor, chapterPages } from './utils/chapter-navigation.js'
 
 const workspaceReady = ref(false)
 const SIDEBAR_COLLAPSED_KEY = 'novel-studio:structure-sidebar-collapsed'
@@ -610,6 +625,42 @@ const workspace = ref(null)
 const projects = ref([])
 const chapters = ref([])
 const activeChapterId = ref('')
+const sidebarRef = ref(null)
+const chapterSectionRef = ref(null)
+const chapterPageIndex = ref(0)
+const chapterGroups = computed(() => chapterPages(chapters.value))
+const visibleChapters = computed(() => chapterGroups.value[chapterPageIndex.value]?.chapters || [])
+function changeChapterPage(direction) {
+  chapterPageIndex.value = Math.max(0, Math.min(chapterGroups.value.length - 1, chapterPageIndex.value + direction))
+  jumpToChapterPage()
+}
+async function jumpToChapterPage() {
+  chapterActionId.value = ''
+  await nextTick()
+  const sidebar = sidebarRef.value
+  const section = chapterSectionRef.value
+  if (!sidebar || !section) return
+  sidebar.scrollTop += section.getBoundingClientRect().top - sidebar.getBoundingClientRect().top
+}
+function revealActiveChapter() {
+  const sidebar = sidebarRef.value
+  const row = chapterSectionRef.value?.querySelector('.chapter-row.selected')
+  if (!sidebar || !row) return
+  const sidebarTop = sidebar.getBoundingClientRect().top
+  const rowTop = row.getBoundingClientRect().top
+  sidebar.scrollTop = Math.max(0, sidebar.scrollTop + rowTop - sidebarTop - (sidebar.clientHeight - row.clientHeight) / 2)
+}
+watch([activeChapterId, workspaceReady], async ([chapterId, ready]) => {
+  if (!chapterId || !ready) return
+  chapterPageIndex.value = chapterPageIndexFor(chapters.value, chapterId)
+  await nextTick()
+  revealActiveChapter()
+}, { flush: 'post' })
+watch(sidebarCollapsed, async (collapsed) => {
+  if (collapsed) return
+  await nextTick()
+  revealActiveChapter()
+})
 const editorText = ref('')
 const activeTab = ref('manuscript')
 const workspaceView = ref('writing')
@@ -950,7 +1001,9 @@ async function restoreInlineRun() {
   if (!project.id) return
   const runs = await appService.listAgentRuns({ projectId: project.id, limit: 100 })
   const activeRuns = runs.filter((run) => run.workflowId === 'inline-action' && ['pending', 'waiting_approval', 'running', 'waiting_confirmation', 'paused'].includes(run.status))
-  for (const active of activeRuns) {
+  const latestStory = activeRuns.find(run => run.inlineTargetKind === 'story_change_set')
+  const latestInline = activeRuns.find(run => run.inlineTargetKind !== 'story_change_set')
+  for (const active of [latestStory, latestInline].filter(Boolean)) {
     const detailed = await appService.getAgentRun(active.id)
     const storyStep = detailed?.steps?.find((step) => step.input?.target?.kind === 'story_change_set')
     if (storyStep && !storyChangeResumeRunId.value) {
@@ -975,7 +1028,12 @@ async function flushPlanningMemory() {
 }
 
 async function selectChapter(id) {
-  if (id === activeChapterId.value && workspaceView.value === 'writing') return
+  if (id === activeChapterId.value && workspaceView.value === 'writing') {
+    chapterPageIndex.value = chapterPageIndexFor(chapters.value, id)
+    await nextTick()
+    revealActiveChapter()
+    return
+  }
   if (selectionPreview.visible) discardSelectionPreview()
   if (workspaceView.value === 'writing') await saveManuscript({ createRevision: false, source: 'chapter-switch' })
   else await flushPlanningMemory()
@@ -1364,6 +1422,7 @@ async function moveChapter(chapter, direction) {
     const ids = chapters.value.map((item) => item.id)
     ids.splice(to, 0, ids.splice(from, 1)[0])
     chapters.value = await appService.reorderChapters({ projectId: project.id, chapterIds: ids })
+    chapterPageIndex.value = chapterPageIndexFor(chapters.value, chapter.id)
     projects.value = await appService.listProjects()
     showToast(`“${chapter.title}”已${direction < 0 ? '上移' : '下移'}`)
   } catch (error) {

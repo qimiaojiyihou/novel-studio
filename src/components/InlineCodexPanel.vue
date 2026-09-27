@@ -39,6 +39,7 @@
 
       <div v-if="run.actualBackend === 'codex_exec'" class="inline-panel-notice">ACP 在首个输出前中断，本次使用只读 exec 兼容模式。</div>
       <div v-if="run.executionMode === 'codex' && sessionModelApprovalEnabled" class="inline-panel-notice">本项目模型调用已获本次应用会话授权；工具操作与正式写入仍需确认。</div>
+      <div v-if="contextOmittedCount" class="inline-panel-notice" role="status">本次有 {{ contextOmittedCount }} 项参考资料因上下文空间不足未送入模型；确认候选前请核对相关设定与前文。</div>
       <div v-if="run.error || actionError" class="inline-panel-error">{{ actionError || run.error }}</div>
 
       <section v-if="pendingApproval" class="inline-approval">
@@ -427,6 +428,7 @@ const orderedCandidates = computed(() => run.value?.candidates || [])
 const selectedCandidate = computed(() => orderedCandidates.value.find((item) => item.id === selectedCandidateId.value)
   || [...orderedCandidates.value].reverse().find((item) => item.status === 'pending')
   || orderedCandidates.value.at(-1) || null)
+const contextOmittedCount = computed(() => selectedCandidate.value?.evidence?.contextDiagnostics?.omitted?.length || 0)
 const pendingCandidate = selectedCandidate
 const selectedStep = computed(() => run.value?.steps?.find((item) => item.id === selectedCandidate.value?.stepId) || step.value)
 const candidateIsStale = computed(() => selectedCandidate.value?.status === 'stale')

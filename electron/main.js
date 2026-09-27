@@ -16,6 +16,7 @@ import { createChapterAmendmentRepository } from './chapter-amendment.js'
 import { createManualFinalizationRepository } from './chapter-manual-finalization.js'
 import { contextDependencyDigest, recordCreativeDependencies, invalidateCreativeDependencies } from './creative-context.js'
 import { buildContextDelta } from './context-reuse.js'
+import { AgentEventBuffer } from './agent-event-buffer.js'
 import { createAuthoringRepository } from './authoring-repository.js'
 import { TEXT_PATCH_SCHEMA, assertProtectedText } from './manuscript-patches.js'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -180,6 +181,8 @@ let codexGateway = null
 let qoderGateway = null
 let agentGateway = null
 let agentRuntime = null
+let idleInlineTimer = null
+let idleInlineSweepRunning = false
 let chapterFinalizer = null
 let creativeInterface = null
 let creativeServer = null
@@ -1531,6 +1534,7 @@ async function runGenerationTask(event, payload = {}, { retryOfId = '' } = {}) {
   })
   let generationParameters = {}
   const recordEvents = []
+  const eventBuffer = payload.agentRunId ? new AgentEventBuffer(appendAgentEvent) : null
   try {
     const result = await modelGateway.generate(
       { ...generationInput, compiledPrompt },
@@ -1538,9 +1542,10 @@ async function runGenerationTask(event, payload = {}, { retryOfId = '' } = {}) {
         taskId,
         onEvent: (generationEvent) => {
           if (generationEvent.type !== 'delta' && recordEvents.length < 60) recordEvents.push(compactGenerationEvent(generationEvent))
-          if (payload.agentRunId) appendAgentEvent({ agentRunId:payload.agentRunId, agentStepId:payload.agentStepId,
+          if (eventBuffer) eventBuffer.push({ agentRunId:payload.agentRunId, agentStepId:payload.agentStepId,
             type:generationEvent.type === 'delta' ? 'text_delta' : generationEvent.type,
-            summary:generationEvent.type, payload:generationEvent.type === 'delta' ? {text:generationEvent.delta} : compactGenerationEvent(generationEvent) })
+            text:generationEvent.delta, summary:generationEvent.type,
+            payload:generationEvent.type === 'delta' ? {text:generationEvent.delta} : compactGenerationEvent(generationEvent) })
           if (event?.sender && !event.sender.isDestroyed()) event.sender.send('generation:event', generationEvent)
         },
         onPrepared: (prepared) => { generationParameters = prepared.parameters },
@@ -1556,7 +1561,7 @@ async function runGenerationTask(event, payload = {}, { retryOfId = '' } = {}) {
       events: recordEvents,
       executionSnapshot: { backend: result.execution || 'app_model', model: result.model || modelProfile?.model || null },
     })
-    return { ...result, generationRecordId: generationRecord.id, intent, cursorOffset }
+    return { ...result, generationRecordId: generationRecord.id, contextDiagnostics: compiledPrompt.snapshot.contextDiagnostics, intent, cursorOffset }
   } catch (error) {
     const attemptCount = Math.max(1, ...recordEvents.map((entry) => Number(entry.attempt || 1)))
     if (error?.name === 'GenerationCancelledError') {
@@ -1574,6 +1579,8 @@ async function runGenerationTask(event, payload = {}, { retryOfId = '' } = {}) {
     })
     error.generationRecordId = generationRecord.id
     throw error
+  } finally {
+    eventBuffer?.flush(payload.agentRunId)
   }
 }
 
@@ -2531,11 +2538,7 @@ function registerIpc() {
   })
   ipcMain.handle('agent:finish-inline', (_event, runId) => agentRuntime.finishInline(runId))
   ipcMain.handle('agent:list', (_event, payload) => listAgentRuns(payload))
-  ipcMain.handle('agent:get', (_event, runId) => {
-    const run = getAgentRun(runId)
-    if (run) invalidateCreativeDependencies(openDatabase(), run.projectId)
-    return getAgentRun(runId)
-  })
+  ipcMain.handle('agent:get', (_event, runId) => getAgentRun(runId))
   ipcMain.handle('agent:pause', (_event, runId) => agentRuntime.pause(runId))
   ipcMain.handle('agent:resume', (event, runId) => agentRuntime.resume(runId, event))
   ipcMain.handle('agent:cancel', (_event, runId) => agentRuntime.cancel(runId))
@@ -2692,10 +2695,24 @@ app.whenReady().then(async () => {
   openDatabase()
   repairMissingCodexBookWorkspaces()
   initializeCodexIntegration()
+  const sweepIdleInlineRuns = async () => {
+    if (idleInlineSweepRunning || !agentRuntime) return
+    idleInlineSweepRunning = true
+    try {
+      await agentRuntime.finishIdleInlineRuns({ before: new Date(Date.now() - 60 * 60 * 1000).toISOString(), limit: 50 })
+    } catch (error) {
+      console.warn('空闲创作会话回收失败：', error)
+    } finally {
+      idleInlineSweepRunning = false
+    }
+  }
+  idleInlineTimer = setInterval(() => { void sweepIdleInlineRuns() }, 5 * 60 * 1000)
+  idleInlineTimer.unref?.()
   registerIpc()
   await initializeCreativeInterface()
   startGoService()
   createWindow()
+  setTimeout(() => { void sweepIdleInlineRuns() }, 10_000).unref?.()
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
@@ -2709,6 +2726,7 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', () => {
+  if (idleInlineTimer) clearInterval(idleInlineTimer)
   void creativeServer?.close()
   stopGoService()
   expirePendingApprovalRequests()

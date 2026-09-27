@@ -866,6 +866,13 @@ body { background: #dce7ea; }
 #app .nav-item.active .nav-glyph { color: #f5fffd; border-color: #6f9e96; background: #6f9e96; box-shadow: 0 0 0 4px rgba(92,141,133,.11); }
 #app .chapter-row:hover { border-color: #c0d1d5; background: rgba(255,255,255,.55); }
 #app .chapter-row.selected { color: #314850; border-color: #acc5c8; background: rgba(255,255,255,.74); }
+#app .chapter-page-controls button,
+#app .chapter-page-controls select { color: #506b73; border-color: #c0d1d6; background: rgba(255,255,255,.58); }
+#app .chapter-page-controls button:hover:not(:disabled) { color: #315e56; border-color: #83aaa3; background: #f7fbfa; }
+#app .chapter-page-bottom { color: #748b94; }
+#app .chapter-page-bottom button { color: #506b73; border-color: #c0d1d6; background: rgba(255,255,255,.58); }
+#app .chapter-page-bottom button:hover:not(:disabled) { color: #315e56; border-color: #83aaa3; background: #f7fbfa; }
+#app .chapter-list-empty { color: #748b94; }
 #app .chapter-copy strong { color: #344a53; }
 #app .chapter-copy small { color: #74868f; }
 #app .panel-footer { border-top-color: #c7d5da; background: rgba(255,255,255,.22); }

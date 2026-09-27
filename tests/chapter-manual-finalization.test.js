@@ -90,6 +90,26 @@ test('old review and handoff stay historical; repeated dependency checks never d
   assert.equal(result.review_run_id, null)
 })
 
+test('many author-direct chapters contribute one compact required context dependency', t => {
+  const f = fixture(t)
+  const insert = f.db.prepare(`INSERT INTO chapter_finalizations
+    (id, project_id, chapter_id, source_digest, manuscript, reviewer_json, reviewer_digest,
+      status, checks_json, created_at, updated_at, completed_at)
+    VALUES (?, ?, ?, ?, '已确认正文', '{}', 'manual', 'completed', ?, ?, ?, ?) `)
+  for (let index = 1; index <= 80; index++) {
+    const chapter = index === 1 ? { id: f.chapterId } : f.workspace.createChapter({ projectId: f.projectId, title: `第 ${index} 章` })
+    insert.run(`manual-${index}`, f.projectId, chapter.id, `source-${index}`,
+      JSON.stringify({ manualFinalization: { reviewSkipped: true, handoffSkipped: true } }),
+      '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')
+  }
+  const next = f.workspace.createChapter({ projectId: f.projectId, title: '新章' })
+  const context = buildCreativeContext(f.db, { projectId: f.projectId, chapterId: next.id })
+  assert.equal(context.sources.filter(source => source.targetKey.endsWith(':manual-handoff-index')).length, 1)
+  assert.match(context.text, /第 1、2、3/)
+  assert.ok(context.text.length < 32000)
+  assert.equal(context.sources.find(source => source.targetKey.endsWith(':style')).required, true)
+})
+
 test('formal failure rolls back the revision, decision and old memory invalidation together', t => {
   const f = fixture(t)
   f.db.prepare(`INSERT INTO chapter_memories(chapter_id,project_id,chapter_no,title,summary,keywords_json,source_updated_at,created_at,updated_at,confirmed,needs_review)

@@ -8,6 +8,16 @@ const manualHandoff = (db, chapterId) => {
   const row = db.prepare("SELECT checks_json,source_digest FROM chapter_finalizations WHERE chapter_id=? AND completed_at<>'' ORDER BY completed_at DESC,rowid DESC LIMIT 1").get(chapterId)
   return row && parse(row.checks_json).manualFinalization ? { mode: 'author-direct', handoff: '未生成交接，请以当前正文为准，不推断已审稿或交接已确认', sourceDigest: row.source_digest } : null
 }
+const manualHandoffIndex = (db, projectId, chapterNo) => db.prepare(`
+  SELECT chapter.id, chapter.chapter_no, finalization.checks_json, finalization.source_digest
+  FROM chapters chapter JOIN chapter_finalizations finalization ON finalization.chapter_id = chapter.id
+  WHERE chapter.project_id = ? AND chapter.chapter_no < ? AND finalization.completed_at <> ''
+    AND finalization.rowid = (SELECT latest.rowid FROM chapter_finalizations latest
+      WHERE latest.chapter_id = chapter.id AND latest.completed_at <> ''
+      ORDER BY latest.completed_at DESC, latest.rowid DESC LIMIT 1)
+  ORDER BY chapter.chapter_no
+`).all(projectId, chapterNo).filter(row => parse(row.checks_json).manualFinalization)
+  .map(row => ({ chapterNo: row.chapter_no, sourceDigest: row.source_digest }))
 const memoryValue = row => {
   const { authorCorrections, ...handoff } = parse(row.handoff_json)
   return { summary: row.summary, handoff, sourceDigest: row.source_digest }
@@ -46,16 +56,16 @@ export function buildCreativeContext(db, input = {}) {
   for (const doc of documents.filter(item => item.kind === 'foundation')) add(`planning_document:${project.id}:${doc.kind}`, '相关硬事实 · 故事基础', parse(doc.content_json), true)
   const world = documents.find(item => item.kind === 'world')
   if (world) { const data = parse(world.content_json); add(`planning_document:${project.id}:world-hardRules`, '世界硬规则与代价', { hardRules: data.hardRules || '', costs: data.costs || '', powerSystem: data.powerSystem || '' }, true) }
+  add(`project:${project.id}:style`, '作者文风（表达要求，不是剧情事实）', project.style || '', true)
   const knowledge = db.prepare("SELECT * FROM knowledge_items WHERE project_id = ? AND status = 'open'").all(project.id).map(item => ({ ...item, content: parse(item.content_json) }))
     .filter(item => (item.effective_from_chapter == null || item.effective_from_chapter <= chapterNo) && (item.effective_to_chapter == null || item.effective_to_chapter >= chapterNo))
   for (const fact of knowledge.filter(item => item.kind === 'fact' && score(item.title + JSON.stringify(item.content), query) > 0)) add(`knowledge_item:${fact.id}:content`, '硬事实（知情范围以标记为准）', knowledgeValue(fact), true)
   const memories = db.prepare('SELECT * FROM chapter_memories WHERE project_id = ? AND chapter_no < ? AND confirmed = 1 AND needs_review = 0 ORDER BY chapter_no DESC').all(project.id, chapterNo)
   const previous = memories[0]
   if (previous) add(`chapter_memory:${previous.chapter_id}:handoff`, previous.chapter_no === chapterNo - 1 ? '上一章已确认交接' : `第 ${previous.chapter_no} 章最近有效交接（历史记录，非上一章最新状态）`, memoryValue(previous), true)
-  for (const prior of db.prepare('SELECT id,chapter_no FROM chapters WHERE project_id=? AND chapter_no<? ORDER BY chapter_no').all(project.id, chapterNo)) {
-    const skipped = manualHandoff(db, prior.id)
-    if (skipped) add(`chapter:${prior.id}:manual-handoff`, `第 ${prior.chapter_no} 章人工定稿说明`, skipped, true)
-  }
+  const manualIndex = manualHandoffIndex(db, project.id, chapterNo)
+  if (chapter && manualIndex.length) add(`chapter:${chapter.id}:manual-handoff-index`, '人工定稿章节',
+    `第 ${manualIndex.map(item => item.chapterNo).join('、')} 章由作者直接定稿，未经过审稿、未生成交接；相关事实以已确认正文为准。`, true, manualIndex)
   // Delta handoffs leave history at its original source. Recall relevant earlier
   // records with their chapter scope, never present them as a new/current state.
   for (const memory of memories.slice(1).map(item => ({ ...item, rank: score(JSON.stringify(memoryValue(item)), query) }))
@@ -73,7 +83,6 @@ export function buildCreativeContext(db, input = {}) {
     .flatMap(item => String(item.manuscript).split(/\n\s*\n/).map((text, index) => ({ id: item.id, index, text, rank: score(text, query) })))
     .filter(item => item.text && item.rank > 0).sort((a, b) => b.rank - a.rank).slice(0, 12)
   for (const passage of passages) add(`chapter:${passage.id}:paragraph-${passage.index}`, '相关正文证据（按段落召回）', passage.text)
-  add(`project:${project.id}:style`, '作者文风（表达要求，不是剧情事实）', project.style || '')
   const samples = db.prepare('SELECT * FROM author_style_samples WHERE project_id = ? AND active = 1 ORDER BY updated_at DESC').all(project.id)
     .sort((a, b) => score(b.reason + b.text, query) - score(a.reason + a.text, query)).slice(0, 3)
   for (const sample of samples) add(`style_sample:${sample.id}:text`, '认可片段：只参考表达与取舍，不继承人物/事件/事实', { text: sample.text, reason: sample.reason })
@@ -104,6 +113,7 @@ function dependencyValue(db, key) {
     const row = db.prepare('SELECT * FROM chapters WHERE id=?').get(id)
     if (!row) return null
     if (field === 'manuscript') return row.manuscript
+    if (field === 'manual-handoff-index') return manualHandoffIndex(db, row.project_id, row.chapter_no)
     if (field === 'manual-handoff') return manualHandoff(db, id)
     return field === 'planning' ? { title: row.title, card: parse(row.card_json), scenes: parse(row.scene_plan, row.scene_plan) }
       : row.manuscript.split(/\n\s*\n/)[Number(field.replace('paragraph-', ''))] ?? null

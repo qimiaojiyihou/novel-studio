@@ -104,6 +104,7 @@ const completionMode = ref('review')
 let modeTouched = false
 function amendmentCompleted(value) { operationEpoch += 1; refreshSerial += 1; record.value = value; emit('completed', value) }
 let timer, clockTimer, disposed = false, reviewerTouched = false, operationEpoch = 0, refreshSerial = 0
+let handoffEventRunId = ''
 const labels = { checking: '准备检查', ready_for_review: '本地检查已完成，等待启动审稿', reviewing: '独立审稿中', waiting_review_confirmation: '等待审稿确认', extracting: '提取交接中', waiting_state_correction: '交接已保留，等待核对来源', waiting_confirmation: '等待交接确认', completed: '本章已定稿', stale: '正文已变动，需要重新检查', failed: '任务中断，可恢复', blocked: '请先补充正文', cancelled: '已取消' }
 const statusLabel = computed(() => record.value?.status === 'paused' ? '已暂停，可恢复定稿' : labels[record.value?.status] || '待检查')
 const progressIndex = computed(() => ['extracting','waiting_state_correction','waiting_confirmation','completed'].includes(record.value?.status) ? 2 : Object.keys(record.value?.review || {}).length || record.value?.status === 'reviewing' ? 1 : 0)
@@ -147,7 +148,7 @@ function clearEvidenceFeedback() { evidenceError.value = ''; evidenceFeedback.va
 function resetEvidenceEdits() { evidenceEdits.value = {}; editStateDigest.value = ''; stateReason.value = ''; clearEvidenceFeedback() }
 watch(stateReason, value => { if (reasonMissing.value && value.trim()) { evidenceError.value = ''; reasonMissing.value = false } })
 watch(() => record.value?.id, resetEvidenceEdits)
-watch(() => record.value?.state_run_id, () => { handoffEvents.value = [] })
+watch(() => record.value?.state_run_id, () => { handoffEvents.value = []; handoffEventRunId = '' })
 function editEvidence(item, values) {
   clearEvidenceFeedback()
   if (!corrections.value.length) editStateDigest.value = record.value.stateDigest
@@ -195,13 +196,16 @@ async function refresh() {
     record.value = value
     if (initializeChoice && value) reviewerChoice.value = choiceForRecord(value)
     if (value) {
+      const sameHandoffRun = value.state_run_id && value.state_run_id === handoffEventRunId
+      const after = sameHandoffRun ? handoffEvents.value.at(-1)?.sequence || 0 : 0
       const [pending, events] = await Promise.all([
         appService.listApprovals({ projectId: props.projectId, status: 'pending' }),
-        value.state_run_id ? appService.listAgentEvents({ agentRunId: value.state_run_id, after: 0, limit: 5000 }) : Promise.resolve([]),
+        value.state_run_id ? appService.listAgentEvents({ agentRunId: value.state_run_id, after, limit: 250 }) : Promise.resolve([]),
       ])
       if (disposed || epoch !== operationEpoch || serial !== refreshSerial) return
       approvals.value = pending.filter(item => [value.review_run_id, value.state_run_id].includes(item.agentRunId))
-      handoffEvents.value = events
+      handoffEventRunId = value.state_run_id || ''
+      handoffEvents.value = sameHandoffRun ? [...handoffEvents.value, ...events].slice(-500) : events.slice(-500)
     }
   } catch (e) { if (!disposed && epoch === operationEpoch && serial === refreshSerial) error.value = e.message }
 }

@@ -350,6 +350,7 @@ export class AgentRuntime {
           sessionId: result.sessionId || '',
           fallbackReason: result.fallbackReason || '',
           generationRecordId: result.generationRecordId || '',
+          contextDiagnostics: result.contextDiagnostics || null,
           modelSnapshot: result.modelSnapshot || null,
           localCheck: step.task === 'chapter' ? checkManuscript(payload.manuscript, { targetLength: run.modelRoutes?.targetLength }) : null,
         },
@@ -493,7 +494,9 @@ export class AgentRuntime {
         continuationMessages: prepared.continuationMessages || null,
         outputSchema: prepared.outputSchema,
         signal,
-        onEvent: (event) => this._emit(run.id, 'codex_event', event),
+        // The ACP gateway already publishes live updates on codex:event.
+        // Re-emitting every token as agent:event made assistant views reread
+        // the full run on every text fragment.
         settings: {
           mirrorRoot: mirror.root,
           workspaceRoot: mirror.workspaceRoot || mirror.root,
@@ -510,6 +513,7 @@ export class AgentRuntime {
       if (signal.aborted) throw new CodexCancelledError()
       await this.completeCodexGeneration({ prepared, result, status: 'completed', attempt: extra.structuredRepair?.attempt || 1 })
       if (prepared.generationRecordId) result.generationRecordId = prepared.generationRecordId
+      result.contextDiagnostics = prepared.promptSnapshot?.contextDiagnostics || null
       return result
     } catch (error) {
       await this.completeCodexGeneration({
@@ -665,8 +669,8 @@ export class AgentRuntime {
     return this.repository.updateRun(runId, { status: 'cancelled', completedAt: new Date().toISOString() })
   }
 
-  async finishInline(runId) {
-    const run = this.repository.getRun(runId)
+  async finishInline(runId, { reason = 'author_finished_inline_conversation' } = {}) {
+    const run = this.repository.getRun(runId, { includeEvents: false })
     if (!run || run.workflowId !== 'inline-action') throw new Error('就地 Codex 对话不存在')
     if (run.candidates.some((candidate) => candidate.status === 'pending')) throw new Error('请先接受、修改或放弃当前候选')
     if (run.steps.some((step) => ['pending', 'waiting_approval', 'running', 'interrupted'].includes(step.status))) {
@@ -676,8 +680,8 @@ export class AgentRuntime {
     this.repository.appendEvent?.({
       agentRunId: runId,
       type: 'inline_connection_released',
-      summary: '作者释放连接，保留创作对话及续接资格',
-      payload: { reason: 'author_finished_inline_conversation' },
+      summary: reason === 'idle_timeout' ? '空闲一小时后释放连接，保留创作对话及续接资格' : '作者释放连接，保留创作对话及续接资格',
+      payload: { reason },
     })
     const completed = this.repository.updateRun(runId, {
       status: 'completed',
@@ -686,7 +690,22 @@ export class AgentRuntime {
       connectionReleasedAt: new Date().toISOString(),
       error: '',
     })
-    this._emit(runId, 'run_completed', { run: completed, reason: 'author_finished_inline_conversation' })
+    this._emit(runId, 'run_completed', { run: completed, reason })
+    return completed
+  }
+
+  async finishIdleInlineRuns({ before, limit = 100 } = {}) {
+    const ids = this.repository.listIdleInlineRuns?.({ before, limit }) || []
+    let completed = 0
+    for (const id of ids) {
+      if (this.active.has(id) || this.controllers.has(id)) continue
+      const run = this.repository.getRun(id, { includeEvents: false })
+      if (!run || run.status !== 'waiting_confirmation' || run.updatedAt >= before
+        || run.candidates.some(candidate => candidate.status === 'pending')
+        || run.approvals.some(approval => approval.status === 'pending')) continue
+      await this.finishInline(id, { reason: 'idle_timeout' })
+      completed += 1
+    }
     return completed
   }
 
@@ -720,7 +739,10 @@ export class AgentRuntime {
   }
 
   _emit(agentRunId, type, payload = {}) {
-    const event = { agentRunId, projectId:this.repository.getRun(agentRunId)?.projectId || '', type, payload, createdAt: new Date().toISOString() }
+    const projectId = this.repository.projectIdForRun?.(agentRunId)
+      || this.repository.getRunSummary?.(agentRunId)?.projectId
+      || this.repository.getRun?.(agentRunId, { includeEvents: false })?.projectId || ''
+    const event = { agentRunId, projectId, type, payload, createdAt: new Date().toISOString() }
     if (type !== 'codex_event') this.repository.appendEvent?.({ agentRunId, agentStepId:payload.stepId || '', type, summary:type,
       payload:{ stepId:payload.stepId || '', candidateId:payload.candidate?.id || '', error:payload.error || '' } })
     this.onEvent(event)
