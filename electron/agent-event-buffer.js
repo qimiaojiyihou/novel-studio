@@ -2,7 +2,7 @@
 // A flush always inserts a new sequence, so cursor readers never miss an update
 // to an event they have already seen.
 export class AgentEventBuffer {
-  constructor(appendEvent, { maxChars = 256, flushMs = 250, onError = error => console.warn('创作事件暂存失败：', error) } = {}) {
+  constructor(appendEvent, { maxChars = 2048, flushMs = 1000, onError = error => console.warn('创作事件暂存失败：', error) } = {}) {
     this.appendEvent = appendEvent
     this.maxChars = maxChars
     this.flushMs = flushMs
@@ -50,7 +50,7 @@ export class AgentEventBuffer {
         agentRunId: entry.agentRunId,
         agentStepId: entry.agentStepId,
         type: 'text_delta',
-        summary: entry.text,
+        summary: entry.text.slice(0, 200),
         payload: { content: { type: 'text', text: entry.text } },
       })
       this.pending.delete(key)

@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url'
 import { validateCreativePack } from './creative-pack.js'
 import { creativeUpgradeMigrations } from './creative-upgrade-migrations.js'
 
-export const LATEST_SCHEMA_VERSION = 29
+export const LATEST_SCHEMA_VERSION = 32
 
 function bundledOfficialPack(version = '1.2.0') {
   const directory = version === '1.3.0' ? 'dist' : 'historical'
@@ -1482,6 +1482,42 @@ const migrations = [
           FROM app_settings WHERE key = 'zhuque_api_key_cipher' AND value <> '';
         DELETE FROM app_settings WHERE key = 'zhuque_api_key_cipher';
       `)
+    },
+  },
+  {
+    version: 30,
+    name: 'project-deletion-foreign-key-indexes',
+    up(database) {
+      database.exec(`
+        CREATE INDEX agent_events_step_idx ON agent_events(agent_step_id);
+        CREATE INDEX agent_candidates_step_idx ON agent_candidates(step_id);
+        CREATE INDEX bridge_action_requests_step_idx ON bridge_action_requests(agent_step_id);
+        CREATE INDEX generation_records_agent_step_idx ON generation_records(agent_step_id);
+        CREATE INDEX agent_steps_generation_record_idx ON agent_steps(generation_record_id);
+        CREATE INDEX agent_steps_quality_report_idx ON agent_steps(quality_report_id);
+      `)
+    },
+  },
+  {
+    version: 31,
+    name: 'resumable-agent-event-compaction',
+    up(database) {
+      database.exec(`
+        CREATE TABLE agent_event_compaction_state (
+          agent_run_id TEXT PRIMARY KEY REFERENCES agent_runs(id) ON DELETE CASCADE,
+          last_sequence INTEGER NOT NULL DEFAULT 0,
+          updated_at TEXT NOT NULL
+        );
+      `)
+    },
+  },
+  {
+    version: 32,
+    name: 'rescan-metadata-preserving-agent-events',
+    up(database) {
+      // The first compactor deliberately skipped legacy ACP deltas carrying
+      // message metadata. Revisit completed runs with the metadata-aware rule.
+      database.exec('DELETE FROM agent_event_compaction_state;')
     },
   },
 ]

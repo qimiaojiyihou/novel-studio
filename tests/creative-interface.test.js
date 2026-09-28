@@ -82,6 +82,20 @@ function setup(t) {
 }
 const waitFor=async predicate=>{for(let i=0;i<200;i++){if(predicate())return;await new Promise(resolve=>setTimeout(resolve,5))}assert.fail('fixture timeout')}
 
+test('large write receipt replays exactly after restart without repeating the write', async t => {
+  const f = setup(t)
+  const sourceDigest = (await f.call(0, 'snapshot')).sourceDigest
+  const input = { idea: '模拟长篇设定。'.repeat(3000), sourceDigest, confirm: true, reason: '测试大回执' }
+  const first = await f.call(0, 'project.update', input, 'large-receipt-0001')
+  const stored = f.db.prepare("SELECT result_json FROM creative_requests WHERE request_key='large-receipt-0001'").get().result_json
+  assert.ok(stored.startsWith('gzip-v1:'))
+  const restarted = f.createApi()
+  assert.deepEqual(await restarted.call(f.tokens[0], { operation: 'project.update', input, requestId: 'large-receipt-0001' }), first)
+  const receipt = await restarted.call(f.tokens[0], { operation: 'request.get', input: { requestId: 'large-receipt-0001' } })
+  assert.deepEqual(receipt.result, first)
+  assert.equal(f.db.prepare("SELECT COUNT(*) AS n FROM creative_requests WHERE request_key='large-receipt-0001'").get().n, 1)
+})
+
 test('bound author reads only its own Zhuque result and sees source staleness after editing', async t => {
   const f=setup(t)
   const chapterId=f.a.chapters[0].id

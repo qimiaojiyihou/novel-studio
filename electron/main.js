@@ -1,6 +1,8 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu } from 'electron'
 import { applicationMenuTemplate } from './application-menu.js'
 import { CREATIVE_BUILD_ID } from './build-info.js'
+import { deleteProjectOffMainThread } from './project-deletion.js'
+import { runStorageMaintenanceBatch } from './storage-maintenance-runner.js'
 import { CreativeInterface, CreativeMutationQueue } from './creative-interface.js'
 import { readCreativeSnapshot } from './creative-snapshot.js'
 import { startCreativeServer } from './creative-server.js'
@@ -53,7 +55,6 @@ import {
   deleteKnowledgeItem,
   deleteModelProfile,
   deletePlanningEntity,
-  deleteProject,
   duplicateChapter,
   finishGenerationRecord,
   finishBenchmarkStep,
@@ -182,6 +183,8 @@ let qoderGateway = null
 let agentGateway = null
 let agentRuntime = null
 let idleInlineTimer = null
+let storageMaintenanceTimer = null
+let storageMaintenanceStopped = false
 let idleInlineSweepRunning = false
 let chapterFinalizer = null
 let creativeInterface = null
@@ -2255,11 +2258,21 @@ function registerIpc() {
   ipcMain.handle('project:update', (_event, patch) => updateProject(patch))
   ipcMain.handle('project:archive', (_event, projectId) => archiveProject(projectId))
   ipcMain.handle('project:restore', (_event, projectId) => restoreProject(projectId))
+  let pendingProjectDelete = null
   ipcMain.handle('project:delete', (_event, projectId) => {
-    const result = deleteProject(projectId)
-    try { removeCodexBookWorkspace({ baseDirectory: app.getPath('userData'), projectId }) }
-    catch (error) { console.warn(`[Codex] 清理书籍工作区失败：${error.message}`) }
-    return result
+    if (pendingProjectDelete) {
+      if (pendingProjectDelete.projectId === projectId) return pendingProjectDelete.promise
+      throw new Error('已有书籍正在删除，请稍后再试')
+    }
+    const promise = (async () => {
+      await deleteProjectOffMainThread({ databasePath: getDatabaseInfo().path, projectId })
+      try { removeCodexBookWorkspace({ baseDirectory: app.getPath('userData'), projectId }) }
+      catch (error) { console.warn(`[Codex] 清理书籍工作区失败：${error.message}`) }
+      return loadWorkspace()
+    })()
+    pendingProjectDelete = { projectId, promise }
+    promise.finally(() => { pendingProjectDelete = null }).catch(() => {})
+    return promise
   })
   ipcMain.handle('project:export-file', (_event, payload) => exportProjectFile(payload))
   ipcMain.handle('project:import-file', () => importProjectFile())
@@ -2713,6 +2726,26 @@ app.whenReady().then(async () => {
   startGoService()
   createWindow()
   setTimeout(() => { void sweepIdleInlineRuns() }, 10_000).unref?.()
+  const scheduleStorageMaintenance = (delay) => {
+    if (storageMaintenanceStopped) return
+    storageMaintenanceTimer = setTimeout(async () => {
+      if (storageMaintenanceStopped) return
+      if (agentRuntime?.active?.size) {
+        scheduleStorageMaintenance(30_000)
+        return
+      }
+      try {
+        const result = await runStorageMaintenanceBatch(getDatabaseInfo().path)
+        const hasMore = result.receipts.scanned > 0 || result.events.scanned > 0
+        scheduleStorageMaintenance(hasMore ? 2_000 : 5 * 60_000)
+      } catch (error) {
+        console.warn('书库后台整理暂缓：', error)
+        scheduleStorageMaintenance(60_000)
+      }
+    }, delay)
+    storageMaintenanceTimer.unref?.()
+  }
+  scheduleStorageMaintenance(30_000)
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
@@ -2727,6 +2760,8 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   if (idleInlineTimer) clearInterval(idleInlineTimer)
+  storageMaintenanceStopped = true
+  if (storageMaintenanceTimer) clearTimeout(storageMaintenanceTimer)
   void creativeServer?.close()
   stopGoService()
   expirePendingApprovalRequests()

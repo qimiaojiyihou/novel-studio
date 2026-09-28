@@ -3,9 +3,9 @@ const STREAM_WARNING = /^warning\s*:/i
 
 function eventText(event = {}) {
   if (typeof event.text === 'string') return event.text
-  if (typeof event.summary === 'string') return event.summary
   if (event.payload?.content?.type === 'text') return String(event.payload.content.text || '')
   if (typeof event.payload?.content === 'string') return event.payload.content
+  if (typeof event.summary === 'string') return event.summary
   return ''
 }
 

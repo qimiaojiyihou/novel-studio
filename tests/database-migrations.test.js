@@ -46,6 +46,7 @@ test('fresh database migrates to the latest schema with foreign keys enabled', (
     assert.equal(database.prepare('SELECT COUNT(*) AS count FROM schema_migrations').get().count, LATEST_SCHEMA_VERSION)
     assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'app_settings'").get())
     assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'projects_archived_at_idx'").get())
+    assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'agent_events_step_idx'").get())
     assert.ok(database.prepare("PRAGMA table_info(projects)").all().some((column) => column.name === 'archived_at'))
     assert.ok(database.prepare("PRAGMA table_info(projects)").all().some((column) => column.name === 'default_execution_mode'))
     assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'planning_documents'").get())

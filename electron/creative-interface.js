@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { createCodexRepository } from './codex-repository.js'
 import { createFinalizationRepository } from './chapter-finalization.js'
 import { createZhuqueDetectionService } from './zhuque-detection.js'
+import { decodeCreativeReceipt, encodeCreativeReceipt } from './creative-receipt.js'
 
 export class CreativeInterfaceError extends Error {
   constructor(code, message, details = null) { super(message); this.code = code; this.details = details }
@@ -323,7 +324,8 @@ export class CreativeInterface {
       try {
         const payload = this.validate(client, operation, normalized)
         const result = await this.write(operation, payload, id)
-        this.db.prepare("UPDATE creative_requests SET status='completed',result_json=?,updated_at=? WHERE id=?").run(JSON.stringify(result ?? null), stamp(), id)
+        const storedResult = await encodeCreativeReceipt(result)
+        this.db.prepare("UPDATE creative_requests SET status='completed',result_json=?,updated_at=? WHERE id=?").run(storedResult, stamp(), id)
         this.onChange({ projectId: client.project_id, operation, requestId })
         return result
       } catch (error) {
@@ -337,7 +339,7 @@ export class CreativeInterface {
   }
 
   replay(row) {
-    if (row.status === 'completed') return JSON.parse(row.result_json)
+    if (row.status === 'completed') return decodeCreativeReceipt(row.result_json)
     const error = parse(row.error_json)
     fail(error.code || 'REQUEST_INTERRUPTED', error.message || '应用已重启，请读取请求记录与原运行后显式恢复；该请求不会重新执行', error.details || { requestId: row.request_key })
   }
@@ -349,7 +351,7 @@ export class CreativeInterface {
     if (operation === 'request.get') {
       const row = this.db.prepare('SELECT * FROM creative_requests WHERE client_id=? AND request_key=?').get(client.id, input.requestId)
       if (!row) fail('NOT_FOUND', '请求记录不存在')
-      return { requestId: row.request_key, operation: row.operation, status: row.status, result: parse(row.result_json), error: parse(row.error_json) }
+      return { requestId: row.request_key, operation: row.operation, status: row.status, result: decodeCreativeReceipt(row.result_json), error: parse(row.error_json) }
     }
     if (operation === 'chapter.get') return this.owned('chapters', input.chapterId, projectId)
     if (operation === 'zhuque.get') {
