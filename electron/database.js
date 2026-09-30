@@ -14,8 +14,10 @@ import { createQualityRepository } from './quality-repository.js'
 import { createStoryChangeRepository } from './story-change-repository.js'
 import { createWorkspaceRepository } from './workspace-repository.js'
 import { createZhuqueKeyStore } from './zhuque-key-store.js'
+import { resolveStorageDirectory } from './storage-location.js'
 
 let database
+let libraryDirectory
 let workspaceRepository
 let planningRepository
 let knowledgeRepository
@@ -85,9 +87,14 @@ export function selectZhuqueApiKey(id) { return zhuqueKeys().select(id) }
 export function removeZhuqueApiKey(id) { return zhuqueKeys().remove(id) }
 
 export function getDatabasePath() {
-  const directory = app.getPath('userData')
+  const directory = getLibraryDirectory()
   fs.mkdirSync(directory, { recursive: true })
   return path.join(directory, 'novel-studio.sqlite')
+}
+
+export function getLibraryDirectory() {
+  if (!libraryDirectory) libraryDirectory = resolveStorageDirectory(app.getPath('userData'))
+  return libraryDirectory
 }
 
 export function openDatabase() {
@@ -238,6 +245,9 @@ export function loadWorkspace(projectId = '') {
 export function loadWorkspaceSnapshot(projectId) {
   return workspaceStore().loadWorkspaceSnapshot(projectId)
 }
+
+export function loadWorkspaceCatalog(projectId, options) { return workspaceStore().loadWorkspaceCatalog(projectId, options) }
+export function getWorkspaceChapter(payload) { return workspaceStore().getChapter(payload) }
 
 export function listProjects() {
   return workspaceStore().listProjects()

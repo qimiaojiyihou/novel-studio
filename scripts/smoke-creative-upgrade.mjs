@@ -123,13 +123,63 @@ try {
   console.log('Layout audit:', JSON.stringify(layoutAudit))
   await page.getByRole('button', { name: '正在创作', exact: true }).click()
   await page.setViewportSize({ width: 1440, height: 1000 })
+  const realCodexStatus = await page.evaluate(() => window.novelStudio.getCodexStatus())
+  // The packaged worker must resolve its modules from ASAR, without any network/model call.
+  const workerError = await app.evaluate(async ({ app }) => {
+    const { Worker } = process.getBuiltinModule('node:worker_threads')
+    const { join } = process.getBuiltinModule('node:path')
+    return new Promise((resolve, reject) => {
+      const worker = new Worker(join(app.getAppPath(), 'electron/codex-component-worker.js'), { workerData: { action: 'check', target: 'fixture-invalid' } })
+      worker.once('message', message => resolve(message.message))
+      worker.once('error', reject)
+    })
+  })
+  assert.match(workerError, /平台不受支持/)
   await page.getByRole('button', { name: '模型与项目设置', exact: true }).click()
   await page.getByRole('searchbox', { name: '搜索 Codex 模型' }).fill('gpt-6')
   assert.match(await page.locator('.codex-agent-block').innerText(), /GPT-6 Astra/)
   assert.match(await page.locator('.codex-agent-block option').allTextContents().then(items => items.join(' ')), /GPT-6 Astra/)
+  await page.getByRole('searchbox', { name: '搜索 Codex 模型' }).fill('gpt-6.1-sol')
+  assert.match(await page.locator('.codex-agent-block option').allTextContents().then(items => items.join(' ')), /GPT-6.1 Sol/)
   const authHeight = await page.locator('.codex-settings-grid select').first().evaluate(element => element.getBoundingClientRect().height)
   assert.ok(authHeight >= 30 && authHeight <= 60, 'Authentication control should not stretch to the model picker height')
   await page.screenshot({ path: path.join(fixtureDirectory, 'models.png') })
+  await page.getByTitle('关闭设置', { exact: true }).click()
+  // Deterministic IPC fixtures exercise the UI without updating a user's CLI or credentials.
+  await app.evaluate(({ ipcMain }, original) => {
+    const components = { activeVersion: '0.159.2', bundledVersion: '0.159.2', source: 'bundled', previousVersion: '', pendingVersion: '', latestVersion: '', busy: false }
+    const configOptions = [{ id: 'model', type: 'select', currentValue: 'fixture-future-model', options: [{ value: 'fixture-future-model', name: '未来模型测试桩' }] }]
+    let directoryReads = 0
+    const handlers = {
+      'codex:status': () => ({ ...original, components: { ...components }, runtime: { ...original.runtime, configOptions: [] }, modelCatalog: { cached: true, configOptions, refreshedAt: '2026-09-30T00:00:00Z' } }),
+      'codex:models': () => {
+        if (++directoryReads > 1) throw new Error('隔离测试网络断线')
+        return { ok: true, status: { configOptions, selected: { model: 'fixture-future-model', reasoningEffort: '', fastMode: false }, refreshedAt: '2026-09-30T00:00:01Z' }, message: '模型目录工程测试已回读' }
+      },
+      'codex:components-status': () => ({ ...components }),
+      'codex:components-check': () => ({ ...Object.assign(components, { latestVersion: '0.160.0', updateAvailable: true }) }),
+      'codex:components-update': () => ({ ...Object.assign(components, { pendingVersion: '0.160.0' }) }),
+      'codex:components-rollback': () => ({ ...Object.assign(components, { pendingVersion: '', source: 'bundled' }) }),
+    }
+    for (const [channel, handler] of Object.entries(handlers)) { ipcMain.removeHandler(channel); ipcMain.handle(channel, handler) }
+  }, realCodexStatus)
+  await page.getByRole('button', { name: '模型与项目设置', exact: true }).click()
+  await page.getByRole('searchbox', { name: '搜索 Codex 模型' }).fill('fixture-future-model')
+  await page.getByText('模型目录工程测试已回读', { exact: true }).waitFor()
+  assert.match((await page.locator('.codex-agent-block option').allTextContents()).join(' '), /未来模型测试桩/)
+  await page.getByRole('button', { name: '刷新模型列表', exact: true }).click()
+  await page.getByText(/隔离测试网络断线.*已保留上次目录/).waitFor()
+  assert.match((await page.locator('.codex-agent-block option').allTextContents()).join(' '), /未来模型测试桩/)
+  await page.getByRole('button', { name: '检查组件更新', exact: true }).click()
+  await page.getByText('官方版本 0.160.0 · 有更新', { exact: true }).waitFor()
+  await page.getByRole('button', { name: '更新 Codex 组件', exact: true }).click()
+  await page.getByText(/0.160.0 已准备好，等待任务和会话释放后启用/).waitFor()
+  await page.getByRole('button', { name: '使用内置组件', exact: true }).click()
+  await page.getByText(/0.160.0 已准备好，等待任务和会话释放后启用/).waitFor({ state: 'hidden' })
+  const savedCodexSettings = await page.evaluate(() => window.novelStudio.loadModelSettings())
+  assert.equal(calls.length, 0, 'Catalog/update UI fixtures send no inference requests')
+  assert.ok(savedCodexSettings, 'Existing model profiles remain available')
+  await page.screenshot({ path: path.join(fixtureDirectory, 'codex-components.png') })
   await page.getByTitle('关闭设置', { exact: true }).click()
   await page.getByRole('tab', { name: '章节卡', exact: true }).click()
   await page.getByText('手动编辑章节卡', { exact: true }).click()

@@ -11,6 +11,7 @@
       </header>
 
       <div class="settings-content">
+        <StorageSettings />
         <section class="settings-block codex-agent-block">
           <div class="settings-block-heading">
             <div>
@@ -24,7 +25,7 @@
           <p class="codex-agent-intro">作为独立执行方式运行创作工作流。{{ codexDraft.agentProvider === 'qoder' ? 'Qoder 通过本机 qoder / qodercn 的 --acp 模式建立长会话，复用 CLI 登录状态。' : 'Codex 优先使用 ACP 长会话；启动失败且尚未产生输出时，自动进入只读 exec 兼容模式。' }}</p>
           <div class="codex-proof-grid">
             <article><span>ACP</span><strong>{{ selectedAgentRuntime?.adapterVersion || '—' }}</strong><small>{{ integrityLabel }}</small></article>
-            <article><span>CLI</span><strong>{{ selectedAgentRuntime?.cliVersion || (selectedAgentRuntime?.available ? '已检测' : '—') }}</strong><small>{{ codexDraft.agentProvider === 'qoder' ? (selectedAgentRuntime?.executablePath || '等待填写 Qoder CLI 路径') : '随安装包固定发布' }}</small></article>
+            <article><span>CLI</span><strong>{{ selectedAgentRuntime?.cliVersion || (selectedAgentRuntime?.available ? '已检测' : '—') }}</strong><small>{{ codexDraft.agentProvider === 'qoder' ? (selectedAgentRuntime?.executablePath || '等待填写 Qoder CLI 路径') : (codexStatus.runtime?.source === 'managed' ? '独立更新组件' : '应用内置组件') }}</small></article>
             <article><span>认证</span><strong>{{ agentAuthLabel }}</strong><small>{{ agentAuthDetail }}</small></article>
           </div>
           <div class="codex-settings-grid">
@@ -44,9 +45,11 @@
               <select v-model="codexDraft.model" @change="refreshCodexModels(true)">
                 <option value="">运行时默认{{ codexDefaultModel ? ` · ${codexDefaultModel}` : '' }}</option>
                 <option v-for="option in filteredCodexModels" :key="option.value" :value="option.value">{{ option.name }} · {{ modelAvailability(option.status) }}</option>
+                <option v-if="codexDraft.model && !codexModelOptions.some(option => option.value === codexDraft.model)" :value="codexDraft.model">{{ codexDraft.model }} · 待验证</option>
               </select>
-              <details><summary>高级模型 ID</summary><input v-model.trim="codexDraft.model" placeholder="例如 gpt-6-astra" aria-label="高级 Codex 模型 ID" /></details>
-              <small>已加入 GPT-6 Astra、Sol 与 Luna。可用性及推理强度以当前 ACP 目录回读为准；已有对话继续使用启动时锁定的模型。</small>
+              <details><summary>高级模型 ID</summary><input v-model.trim="codexDraft.model" placeholder="例如 gpt-6.1-sol" aria-label="高级 Codex 模型 ID" /></details>
+              <small>打开设置时自动读取模型目录；新模型无需修改应用。目录不代表账号推理权限，已有对话继续使用启动时锁定的模型。</small>
+              <small>{{ catalogTimeLabel }}</small>
             </label>
             <label v-if="codexDraft.agentProvider === 'codex'"><span>推理强度</span><select v-model="codexDraft.reasoningEffort"><option value="">模型默认</option><option v-for="option in codexReasoningOptions" :key="option.value" :value="option.value">{{ option.name }}</option><option v-if="codexDraft.reasoningEffort && !codexReasoningOptions.some(o => o.value === codexDraft.reasoningEffort)" :value="codexDraft.reasoningEffort">{{ codexDraft.reasoningEffort }} · 待刷新验证</option></select></label>
             <label v-if="codexDraft.agentProvider === 'codex'" class="codex-toggle"><span>Fast mode{{ codexFastSupported ? '' : ' · 待验证支持' }}</span><input v-model="codexDraft.fastMode" type="checkbox" :disabled="!codexFastSupported" /></label>
@@ -58,6 +61,20 @@
             <button v-if="codexDraft.agentProvider === 'codex'" class="outline-button" :disabled="codexBusy" @click="refreshCodexModels()">刷新模型列表</button>
             <button class="primary-button" :disabled="codexBusy" @click="saveCodex">保存 Agent 设置</button>
           </div>
+          <section v-if="codexDraft.agentProvider === 'codex'" class="codex-component-box" aria-label="Codex 组件更新">
+            <div class="component-summary"><strong>Codex 组件更新</strong><span>当前 {{ codexStatus.components?.activeVersion || '—' }} · 内置 {{ codexStatus.components?.bundledVersion || '—' }}</span></div>
+            <p v-if="codexStatus.components?.pendingVersion">{{ codexStatus.components.pendingVersion === 'bundled' ? '内置组件' : codexStatus.components.pendingVersion }} 已准备好，等待任务和会话释放后启用；重启应用也会启用。不会打断创作。</p>
+            <p v-else-if="codexStatus.components?.latestVersion">官方版本 {{ codexStatus.components.latestVersion }}{{ codexStatus.components.updateAvailable ? ' · 有更新' : ' · 当前组件已是此版本或更新版本' }}</p>
+            <p v-else>仅更新 Codex CLI，无需重装应用。ACP 适配器保持已测试版本；默认模型与书稿不变。</p>
+            <p v-if="componentMessage || codexStatus.components?.progress || codexStatus.components?.error" role="status" aria-live="polite">{{ codexStatus.components?.progress || codexStatus.components?.error || componentMessage }}</p>
+            <div class="codex-actions">
+              <button class="outline-button" :disabled="componentBusy" @click="componentAction('check')">检查组件更新</button>
+              <button class="test-button" :disabled="componentBusy" @click="componentAction('update')">更新 Codex 组件</button>
+              <button v-if="codexStatus.components?.previousVersion" class="outline-button" :disabled="componentBusy" @click="componentAction('rollback')">回退上一组件</button>
+              <button class="outline-button" :disabled="componentBusy || (!codexStatus.components?.pendingVersion && codexStatus.components?.source !== 'managed')" @click="componentAction('bundled')">使用内置组件</button>
+            </div>
+            <small>仅从官方 npm 下载，校验摘要和 ACP 连接后启用。诊断不发送创作请求。</small>
+          </section>
           <small class="codex-permission-note">工具权限按次审批；不会提供永久允许。{{ agentName }} 只访问当前 AgentRun 的受控镜像，结果只进入候选区。</small>
         </section>
         <section class="settings-block route-block">
@@ -254,8 +271,9 @@
 </template>
 
 <script setup>
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, reactive, ref, watch, onUnmounted } from 'vue'
 import { appService } from '../services/app-service.js'
+import StorageSettings from './StorageSettings.vue'
 import { modelDirectory } from '../../electron/codex-models.js'
 import {
   normalizeRequestConfig,
@@ -288,7 +306,7 @@ const connectionTest = reactive({ state: 'idle', message: '' })
 const requestConfigText = ref('')
 const jsonValidation = reactive({ state: 'idle', message: '保存或测试前会自动校验' })
 const enabledProfiles = computed(() => props.settings.profiles.filter((profile) => profile.enabled))
-const codexStatus = reactive({ runtime: {}, qoderRuntime: {}, settings: {} })
+const codexStatus = reactive({ runtime: {}, qoderRuntime: {}, settings: {}, components: {}, modelCatalog: {} })
 const codexDraft = reactive({ enabled: true, preferredBackend: 'codex_acp', agentProvider: 'codex', qoderCliPath: '', qoderModel: 'auto', model: '', reasoningEffort: 'high', fastMode: false, authMethod: 'chatgpt' })
 const codexMessage = reactive({ state: 'idle', text: '' })
 const codexBusy = ref(false)
@@ -313,11 +331,20 @@ const agentAuthDetail = computed(() => {
 const codexModelConfig = computed(() => codexStatus.runtime?.configOptions?.find((option) => option.id === 'model') || {})
 const codexModelSearch = ref('')
 const codexModelsRefreshed = ref(false)
-const codexModelOptions = computed(() => modelDirectory(codexStatus.runtime?.configOptions || [], codexModelsRefreshed.value))
+const codexModelOptions = computed(() => modelDirectory(codexStatus.runtime?.configOptions || [], codexModelsRefreshed.value).map(option => ({ ...option,
+  status: !codexModelsRefreshed.value && codexStatus.modelCatalog?.cached && option.status === 'available' ? 'cached' : option.status,
+})))
 const filteredCodexModels = computed(() => codexModelOptions.value.filter((option) => option.value === codexDraft.model || `${option.name} ${option.value}`.toLowerCase().includes(codexModelSearch.value.toLowerCase())))
-const codexReasoningOptions = computed(() => codexStatus.runtime?.configOptions?.find(o => o.id === 'reasoning_effort')?.options || [])
-const codexFastSupported = computed(() => Boolean(codexStatus.runtime?.configOptions?.find(o => o.id === 'fast-mode')))
-const modelAvailability = (status) => ({ available: '可用', pending: '待刷新', unsupported: '当前运行时未支持' }[status])
+const currentCapabilitiesVerified = computed(() => codexModelsRefreshed.value && (!codexDraft.model || codexModelConfig.value.currentValue === codexDraft.model))
+const codexReasoningOptions = computed(() => currentCapabilitiesVerified.value ? codexStatus.runtime?.configOptions?.find(o => o.id === 'reasoning_effort')?.options || [] : [])
+const codexFastSupported = computed(() => currentCapabilitiesVerified.value && Boolean(codexStatus.runtime?.configOptions?.find(o => o.id === 'fast-mode')))
+const modelAvailability = (status) => ({ available: '目录已回读', cached: '缓存 · 待回读', pending: '待刷新', unsupported: '当前目录未列出' }[status])
+const catalogTimeLabel = computed(() => codexStatus.modelCatalog?.refreshedAt
+  ? `${codexModelsRefreshed.value ? '目录更新时间' : '上次成功目录（缓存）'}：${new Date(codexStatus.modelCatalog.refreshedAt).toLocaleString()}` : '尚无缓存；刷新失败不会清空已读取的目录。')
+const componentWorking = ref(false)
+const componentBusy = computed(() => componentWorking.value || codexStatus.components?.busy)
+const componentMessage = ref('')
+let componentPoll = null, refreshSequence = 0, componentPolling = false
 const codexDefaultModel = computed(() => codexModelConfig.value.currentValue || '')
 const qoderModelConfig = computed(() => codexStatus.qoderRuntime?.configOptions?.find((option) => option.id === 'model') || {})
 const qoderModelOptions = computed(() => {
@@ -332,18 +359,62 @@ const qoderModelOptions = computed(() => {
 })
 
 watch(() => props.visible, (visible) => {
-  if (!visible) cancelEdit()
-  else void loadCodex()
+  clearInterval(componentPoll); componentPoll = null
+  if (!visible) { cancelEdit(); refreshSequence++ }
+  else {
+    void loadCodex()
+    componentPoll = setInterval(() => { void pollComponents() }, 2000)
+  }
 })
+onUnmounted(() => { clearInterval(componentPoll); refreshSequence++ })
+watch(() => codexDraft.agentProvider, provider => { if (props.visible && provider === 'codex') void refreshCodexModels(false, true) })
 
 async function loadCodex() {
   try {
     const loaded = await appService.getCodexStatus()
     Object.assign(codexStatus, loaded)
     Object.assign(codexDraft, loaded.settings || {})
+    codexModelsRefreshed.value = false
+    if (!loaded.runtime?.configOptions?.length && loaded.modelCatalog?.cached) codexStatus.runtime.configOptions = loaded.modelCatalog.configOptions
+    if (props.visible && codexDraft.agentProvider === 'codex') await refreshCodexModels(false, true)
   } catch (error) {
     Object.assign(codexMessage, { state: 'error', text: `Codex 状态读取失败：${error.message}` })
   }
+}
+
+async function pollComponents() {
+  if (!props.visible || componentPolling) return
+  componentPolling = true
+  try {
+    const status = await appService.getCodexComponentStatus()
+    if (!props.visible) return
+    const changed = status.activeVersion !== codexStatus.components?.activeVersion || status.source !== codexStatus.components?.source
+    codexStatus.components = status
+    if (changed) {
+      const loaded = await appService.getCodexStatus()
+      codexStatus.runtime = loaded.runtime
+      codexStatus.modelCatalog = loaded.modelCatalog
+      codexModelsRefreshed.value = false
+      if (!loaded.runtime?.configOptions?.length && loaded.modelCatalog?.cached) codexStatus.runtime.configOptions = loaded.modelCatalog.configOptions
+      if (codexDraft.agentProvider === 'codex') await refreshCodexModels(false, true)
+    }
+  } catch { /* keep the last component state if IPC is temporarily unavailable */ }
+  finally { componentPolling = false }
+}
+
+async function componentAction(action) {
+  componentWorking.value = true; componentMessage.value = ''
+  try {
+    const result = action === 'check' ? await appService.checkCodexComponents()
+      : action === 'update' ? await appService.updateCodexComponents()
+      : await appService.rollbackCodexComponents({ useBundled: action === 'bundled' })
+    const changed = result.activeVersion !== codexStatus.components?.activeVersion || result.source !== codexStatus.components?.source
+    await pollComponents()
+    componentMessage.value = action === 'check' ? '组件版本检查完成。' : result.pendingVersion ? '组件已准备好，当前创作继续使用原版本。' : changed ? '组件已切换，默认模型保持不变。' : '当前组件已是所选版本，默认模型保持不变。'
+  } catch (error) {
+    componentMessage.value = `组件操作失败：${error.message}；继续使用原组件。`
+    await pollComponents()
+  } finally { componentWorking.value = false }
 }
 
 async function saveCodex() {
@@ -386,20 +457,23 @@ async function testCodex() {
   } finally { codexBusy.value = false }
 }
 
-async function refreshCodexModels(selectModel = false) {
+async function refreshCodexModels(selectModel = false, automatic = false) {
+  const sequence = ++refreshSequence, model = codexDraft.model
   codexBusy.value = true
   try {
-    const result = await appService.getCodexModels({ model: codexDraft.model })
+    const result = await appService.getCodexModels({ model, automatic })
+    if (sequence !== refreshSequence || !props.visible || codexDraft.agentProvider !== 'codex' || codexDraft.model !== model || result.skipped) return
     codexStatus.runtime.configOptions = result.status.configOptions
     codexModelsRefreshed.value = true
-    if (selectModel) {
+    codexStatus.modelCatalog = { refreshedAt: result.status.refreshedAt, cached: false }
+    if (selectModel && result.status.selected.model === model) {
       codexDraft.reasoningEffort = result.status.selected.reasoningEffort
       if (!result.status.selected.fastModeSupported) codexDraft.fastMode = false
     }
     Object.assign(codexMessage, { state: 'success', text: result.message })
   } catch (error) {
-    Object.assign(codexMessage, { state: 'error', text: error.message })
-  } finally { codexBusy.value = false }
+    if (sequence === refreshSequence && props.visible) Object.assign(codexMessage, { state: 'error', text: `${error.message}；已保留上次目录，可检查 Codex 组件更新。` })
+  } finally { if (sequence === refreshSequence || !props.visible) codexBusy.value = false }
 }
 
 watch(() => props.saveState.state, (state) => {

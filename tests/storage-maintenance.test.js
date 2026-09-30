@@ -8,7 +8,7 @@ import { runMigrations } from '../electron/database-migrations.js'
 import { createWorkspaceRepository } from '../electron/workspace-repository.js'
 import { compactCompletedEventBatch, compactRequestReceipts } from '../electron/storage-maintenance.js'
 import { runStorageMaintenanceBatch } from '../electron/storage-maintenance-runner.js'
-import { decodeCreativeReceipt, encodeCreativeReceipt, RECEIPT_PREFIX } from '../electron/creative-receipt.js'
+import { compressStoredReceipt, decodeCreativeReceipt, encodeCreativeReceipt, RECEIPT_PREFIX } from '../electron/creative-receipt.js'
 import { recoverCodexStream } from '../src/utils/codex-stream.js'
 
 test('completed event streams compact without crossing book, step or approval boundaries and resume after restart', async () => {
@@ -119,4 +119,26 @@ test('large receipts round-trip exactly and background compression is idempotent
     database.close()
     rmSync(directory, { recursive: true, force: true })
   }
+})
+
+test('legacy receipt scan has a persistent rowid cursor and late completions are queued after the cursor passed', () => {
+  const database = new DatabaseSync(':memory:')
+  try {
+    database.exec(`CREATE TABLE creative_requests (id TEXT PRIMARY KEY, status TEXT, result_json TEXT)`)
+    const insert = database.prepare('INSERT INTO creative_requests VALUES (?,?,?)')
+    const raw = JSON.stringify({ text: '模拟书稿'.repeat(3000) })
+    for (let i=0;i<350;i++) insert.run(`receipt-${i}`, i === 5 ? 'processing' : 'completed', i === 5 ? '{}' : compressStoredReceipt(raw))
+    for (let i=0;i<4;i++) compactRequestReceipts(database)
+    assert.equal(database.prepare('SELECT last_rowid FROM receipt_compaction_cursor').get().last_rowid, 350)
+    assert.equal(compactRequestReceipts(database).scanned, 0)
+    database.prepare("UPDATE creative_requests SET status='completed',result_json=? WHERE id='receipt-5'").run(raw)
+    assert.equal(compactRequestReceipts(database).compressed, 1)
+    assert.equal(compactRequestReceipts(database).scanned, 0)
+    assert.deepEqual(decodeCreativeReceipt(database.prepare("SELECT result_json FROM creative_requests WHERE id='receipt-5'").get().result_json), JSON.parse(raw))
+    database.prepare("DELETE FROM creative_requests WHERE id='receipt-349'").run()
+    insert.run('new-reused-rowid', 'completed', raw)
+    assert.equal(compactRequestReceipts(database).compressed, 1)
+    const plan = database.prepare('EXPLAIN QUERY PLAN SELECT rowid,id FROM creative_requests WHERE rowid>? ORDER BY rowid LIMIT 100').all(350)
+    assert.ok(plan.some(row => /SEARCH.*INTEGER PRIMARY KEY/.test(row.detail)))
+  } finally { database.close() }
 })

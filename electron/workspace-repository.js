@@ -37,16 +37,44 @@ export function createWorkspaceRepository(database, {
   now = () => new Date().toISOString(),
   createId = (prefix) => `${prefix}-${randomUUID()}`,
 } = {}) {
+  const hasChapterStatistics = Boolean(database.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='chapter_statistics'").get())
   const projectById = database.prepare('SELECT * FROM projects WHERE id = ?')
-  const chapterSelection = `SELECT c.*,
+  const finalizationSelection = `
     (SELECT f.id FROM chapter_finalizations f WHERE f.chapter_id=c.id AND f.completed_at<>'' ORDER BY f.completed_at DESC,f.rowid DESC LIMIT 1) AS finalized_version_id,
     (SELECT json_extract(f.checks_json,'$.authorAmendment.type') FROM chapter_finalizations f WHERE f.chapter_id=c.id AND f.completed_at<>'' ORDER BY f.completed_at DESC,f.rowid DESC LIMIT 1) AS finalization_correction,
     (SELECT json_extract(f.checks_json,'$.manualFinalization.type') FROM chapter_finalizations f WHERE f.chapter_id=c.id AND f.completed_at<>'' ORDER BY f.completed_at DESC,f.rowid DESC LIMIT 1) AS finalization_manual
     FROM chapters c`
+  const chapterSelection = `SELECT c.*,${finalizationSelection}`
   const chapterById = database.prepare(`${chapterSelection} WHERE c.id = ?`)
 
   function listChapters(projectId) {
     return database.prepare(`${chapterSelection} WHERE c.project_id = ? ORDER BY c.chapter_no`).all(projectId).map(mapChapter)
+  }
+
+  function getChapter({ projectId, chapterId }) {
+    const chapter = chapterById.get(chapterId)
+    if (!chapter || chapter.project_id !== projectId) throw new Error('章节不属于指定项目')
+    return { ...mapChapter(chapter), detailLoaded: true }
+  }
+
+  function listChapterCatalog(projectId) {
+    return database.prepare(`SELECT c.id,c.project_id,c.chapter_no,c.title,c.status,c.updated_at,
+      COALESCE((SELECT character_count FROM chapter_statistics WHERE chapter_id=c.id),0) AS characterCount,
+      ${finalizationSelection} WHERE c.project_id=? ORDER BY c.chapter_no`).all(projectId)
+      .map(chapter => ({ ...chapter, detailLoaded: false }))
+  }
+
+  function loadWorkspaceCatalog(projectId = '', { select = true } = {}) {
+    const selectedId = projectId || activeProjectId()
+    let project = selectedId ? projectById.get(selectedId) : null
+    if (project?.archived_at && select) project = null
+    if (!project && projectId && !select) throw new Error('项目不存在')
+    if (!project) project = database.prepare("SELECT * FROM projects WHERE archived_at='' AND project_type='user' ORDER BY updated_at DESC,created_at DESC LIMIT 1").get()
+    if (!project) return { project: null, chapters: [], projects: listProjects() }
+    if (select && activeProjectId() !== project.id) setActiveProject(project.id)
+    const chapters = listChapterCatalog(project.id)
+    if (chapters[0]) chapters[0] = getChapter({ projectId: project.id, chapterId: chapters[0].id })
+    return { project: mapProject(project), chapters, projects: listProjects() }
   }
 
   function renumberChapters(projectId, orderedIds) {
@@ -74,12 +102,13 @@ export function createWorkspaceRepository(database, {
   }
 
   function listProjects() {
+    const activeId = activeProjectId()
     return database.prepare(`
       SELECT p.*,
-        COUNT(c.id) AS chapterCount,
-        COALESCE(SUM(LENGTH(c.manuscript)), 0) AS characterCount
+        COUNT(c.${hasChapterStatistics ? 'chapter_id' : 'id'}) AS chapterCount,
+        COALESCE(SUM(${hasChapterStatistics ? 'c.character_count' : 'LENGTH(c.manuscript)'}), 0) AS characterCount
       FROM projects p
-      LEFT JOIN chapters c ON c.project_id = p.id
+      LEFT JOIN ${hasChapterStatistics ? 'chapter_statistics' : 'chapters'} c ON c.project_id = p.id
       WHERE p.project_type = 'user'
       GROUP BY p.id
       ORDER BY p.updated_at DESC, p.created_at DESC
@@ -88,7 +117,7 @@ export function createWorkspaceRepository(database, {
       chapterCount: Number(project.chapterCount || 0),
       characterCount: Number(project.characterCount || 0),
       archived: Boolean(project.archived_at),
-      active: project.id === activeProjectId(),
+      active: project.id === activeId,
     }))
   }
 
@@ -101,7 +130,7 @@ export function createWorkspaceRepository(database, {
       selectedId = project?.id || ''
     }
     if (!project) return { project: null, chapters: [], projects: [] }
-    setActiveProject(selectedId)
+    if (activeProjectId() !== selectedId) setActiveProject(selectedId)
     return { project: mapProject(project), chapters: listChapters(selectedId), projects: listProjects() }
   }
 
@@ -328,7 +357,7 @@ export function createWorkspaceRepository(database, {
     return mapProject(projectById.get(projectId))
   }
 
-  function deleteProject(projectId) {
+  function deleteProject(projectId, { returnWorkspace = true } = {}) {
     const current = projectById.get(projectId)
     if (!current) throw new Error('项目不存在')
     const availableCount = Number(database.prepare("SELECT COUNT(*) AS count FROM projects WHERE archived_at = '' AND project_type = 'user'").get().count)
@@ -349,11 +378,11 @@ export function createWorkspaceRepository(database, {
       database.exec('ROLLBACK')
       throw error
     }
-    return loadWorkspace()
+    return returnWorkspace ? loadWorkspace() : { deletedProjectId: projectId }
   }
 
   function reorderChapters({ projectId, chapterIds = [] }) {
-    const currentIds = listChapters(projectId).map((chapter) => chapter.id)
+    const currentIds = database.prepare('SELECT id FROM chapters WHERE project_id=? ORDER BY chapter_no').all(projectId).map(chapter => chapter.id)
     if (chapterIds.length !== currentIds.length || new Set(chapterIds).size !== currentIds.length || currentIds.some((id) => !chapterIds.includes(id))) {
       throw new Error('章节排序列表与当前项目不一致')
     }
@@ -375,7 +404,7 @@ export function createWorkspaceRepository(database, {
     if (!source) throw new Error('章节不存在')
     const id = createId('chapter')
     const updatedAt = now()
-    const currentChapters = listChapters(source.project_id)
+    const currentChapters = database.prepare('SELECT id FROM chapters WHERE project_id=? ORDER BY chapter_no').all(source.project_id)
     const sourceIndex = currentChapters.findIndex((chapter) => chapter.id === chapterId)
     const orderedIds = currentChapters.map((chapter) => chapter.id)
     orderedIds.splice(sourceIndex + 1, 0, id)
@@ -398,7 +427,7 @@ export function createWorkspaceRepository(database, {
   function deleteChapter(chapterId) {
     const current = chapterById.get(chapterId)
     if (!current) throw new Error('章节不存在')
-    const currentChapters = listChapters(current.project_id)
+    const currentChapters = database.prepare('SELECT id FROM chapters WHERE project_id=? ORDER BY chapter_no').all(current.project_id)
     if (currentChapters.length <= 1) throw new Error('每个项目至少保留一个章节')
     const currentIndex = currentChapters.findIndex((chapter) => chapter.id === chapterId)
     const remainingIds = currentChapters.filter((chapter) => chapter.id !== chapterId).map((chapter) => chapter.id)
@@ -427,6 +456,8 @@ export function createWorkspaceRepository(database, {
     listProjects,
     loadWorkspace,
     loadWorkspaceSnapshot,
+    loadWorkspaceCatalog,
+    getChapter,
     createProject,
     createChapter,
     updateProject,

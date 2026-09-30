@@ -152,7 +152,7 @@
       </aside>
 
       <template v-if="workspaceView === 'writing'">
-      <section class="editor-panel">
+      <section class="editor-panel" :inert="activeChapter.detailLoaded === false || navigationPending">
         <div class="editor-heading">
           <div class="editor-heading-copy">
             <div class="eyebrow copper">CHAPTER {{ String(activeChapter.chapter_no).padStart(2, '0') }}</div>
@@ -232,12 +232,13 @@
         </details>
         <div id="chapter-editor-content" class="editor-body" role="tabpanel" :aria-labelledby="`editor-tab-${activeTab}`" @mousedown.self="closeSelectionTools">
           <NovelEditor
-            v-if="activeTab === 'manuscript'"
+            v-if="activeTab === 'manuscript' && activeChapter.detailLoaded !== false"
             ref="novelEditorRef"
             v-model="editorText"
             :document-id="activeChapter.id"
             @selection-change="handleSelection"
           />
+          <p v-else-if="activeChapter.detailLoaded === false" role="status">正在读取本章…</p>
           <div v-else-if="activeTab === 'card'" class="artifact-view card-view">
             <details class="formal-card-edit"><summary>手动编辑章节卡</summary>
               <CreativeCandidateEditor :model-value="formalCardDraft" description="修改暂存在表单中，点击保存章节卡后生效" @update:model-value="formalCardDraft = $event" />
@@ -456,6 +457,7 @@
       @applied="refreshAfterWorkDesignSync"
     />
     <DiffReview
+      v-if="candidate.visible"
       :visible="candidate.visible"
       :original="candidate.original"
       :candidate="candidate.content"
@@ -584,8 +586,8 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import DiffReview from './components/DiffReview.vue'
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+const DiffReview = defineAsyncComponent(() => import('./components/DiffReview.vue'))
 import AppIcon from './components/AppIcon.vue'
 import ApprovalDrawer from './components/ApprovalDrawer.vue'
 import CreativeAssistant from './components/CreativeAssistant.vue'
@@ -597,6 +599,7 @@ import ChapterFinalization from './components/ChapterFinalization.vue'
 import ZhuqueDetection from './components/ZhuqueDetection.vue'
 import StoryChangePanel from './components/StoryChangePanel.vue'
 import ModelSettings from './components/ModelSettings.vue'
+import { boundChapterDetails } from './utils/chapter-catalog.js'
 import NovelEditor from './components/NovelEditor.vue'
 import ManuscriptFormatMenu from './components/ManuscriptFormatMenu.vue'
 import ProjectBriefFields from './components/ProjectBriefFields.vue'
@@ -625,6 +628,8 @@ const workspace = ref(null)
 const projects = ref([])
 const chapters = ref([])
 const activeChapterId = ref('')
+const navigationPending = ref(false)
+let navigationSerial = 0
 const sidebarRef = ref(null)
 const chapterSectionRef = ref(null)
 const chapterPageIndex = ref(0)
@@ -759,9 +764,9 @@ async function openFinalization() {
   } catch { /* saving already reports its error */ }
 }
 async function reloadAfterFinalization(record) {
-  const loaded = await appService.loadWorkspace(project.id)
-  const chapter = loaded.chapters.find(item => item.id === activeChapter.value.id)
-  if (chapter) replaceChapter(chapter)
+  const projectId = project.id, chapterId = activeChapter.value.id
+  const chapter = await appService.getWorkspaceChapter({ projectId, chapterId })
+  if (project.id === projectId && activeChapter.value?.id === chapterId) replaceChapter(chapter)
   showToast(record?.checks?.manualFinalization ? '本章已人工定稿；本次未审稿，交接未更新' : '本章已定稿，交接记录已确认')
 }
 const inlinePanelOpen = ref(false)
@@ -832,6 +837,16 @@ let scenePlanSaveTimer = null
 const inlineBindings = new Map()
 
 const activeChapter = computed(() => chapters.value.find((chapter) => chapter.id === activeChapterId.value) || chapters.value[0])
+watch(() => [inlineRun.value?.chapterId, project.id], async ([chapterId, projectId]) => {
+  if (!chapterId || !projectId || inlineRun.value?.projectId !== projectId) return
+  if (chapters.value.find(chapter => chapter.id === chapterId)?.detailLoaded !== false) return
+  try {
+    const detailed = await appService.getWorkspaceChapter({ projectId, chapterId })
+    if (project.id !== projectId || inlineRun.value?.chapterId !== chapterId) return
+    replaceChapter(detailed)
+    chapters.value = boundChapterDetails(chapters.value, [...recentChapterIds, chapterId], activeChapterId.value)
+  } catch (error) { showToast(`读取候选源正文失败：${error.message}`) }
+})
 const chapterTargetLength = computed(() => Math.max(800, Math.min(12000, Math.round(Number(activeChapter.value?.card?.targetLength) || 2000))))
 const liveManuscriptChecks = computed(() => checkManuscript(editorText.value, { targetLength: chapterTargetLength.value }))
 const formalCardDraft = ref({})
@@ -843,10 +858,9 @@ watch(() => [activeChapter.value?.id, activeChapter.value?.card], () => {
 async function saveFormalCard() {
   try {
     const chapterId = activeChapter.value.id
-    const snapshot = await appService.loadWorkspace(project.id)
-    const current = snapshot.chapters.find(chapter => chapter.id === chapterId)
+    const current = await appService.getWorkspaceChapter({ projectId: project.id, chapterId })
     if (JSON.stringify(current?.card || {}) !== formalCardSource) throw new Error('章节卡已在其他位置修改，请重新打开后比较再保存')
-    replaceChapter(await appService.updateChapter({ id: chapterId, card: formalCardDraft.value }))
+    replaceChapter(await appService.updateChapter({ id: chapterId, card: JSON.parse(JSON.stringify(formalCardDraft.value)) }))
     showToast('章节卡已保存')
   } catch (error) { showToast(error.message) }
 }
@@ -899,7 +913,7 @@ function executionRoute(task) {
 }
 
 function applyWorkspace(loaded) {
-  workspace.value = loaded
+  workspace.value = { ...loaded, chapters: [] }
   Object.assign(project, loaded.project || {})
   projects.value = loaded.projects || []
   chapters.value = loaded.chapters || []
@@ -957,7 +971,7 @@ async function refreshExternalWorkspace() {
     return
   }
   const projectId = project.id, chapterId = activeChapterId.value, view = workspaceView.value
-  const loaded = await appService.loadWorkspaceSnapshot(projectId)
+  const loaded = await appService.loadWorkspace(projectId)
   if (project.id !== projectId || isDirty.value) return
   applyWorkspace(loaded)
   if (loaded.chapters.some(chapter => chapter.id === chapterId)) activeChapterId.value = chapterId
@@ -966,8 +980,21 @@ async function refreshExternalWorkspace() {
   showToast('已读取本书创作任务的最新结果')
 }
 
-watch(activeChapter, (chapter) => {
+let chapterReadSerial = 0
+let recentChapterIds = []
+watch(activeChapter, async (chapter) => {
   if (!chapter) return
+  const serial = ++chapterReadSerial
+  if (chapter.detailLoaded === false) {
+    try {
+      const detailed = await appService.getWorkspaceChapter({ projectId: chapter.project_id, chapterId: chapter.id })
+      if (serial !== chapterReadSerial || project.id !== chapter.project_id || activeChapter.value?.id !== chapter.id) return
+      replaceChapter(detailed)
+    } catch (error) { if (serial === chapterReadSerial) showToast(`读取章节失败：${error.message}`) }
+    return
+  }
+  recentChapterIds = [...recentChapterIds.filter(id => id !== chapter.id), chapter.id].slice(-8)
+  chapters.value = boundChapterDetails(chapters.value, [...recentChapterIds, inlineRun.value?.chapterId].filter(Boolean), chapter.id)
   editorText.value = chapter.manuscript || ''
   isDirty.value = false
   saveState.value = 'saved'
@@ -976,6 +1003,7 @@ watch(activeChapter, (chapter) => {
 }, { immediate: true })
 
 watch(editorText, (value) => {
+  if (activeChapter.value?.detailLoaded === false) return
   const dirty = Boolean(activeChapter.value && value !== (activeChapter.value.manuscript || ''))
   isDirty.value = dirty
   if (!dirty) {
@@ -1028,19 +1056,34 @@ async function flushPlanningMemory() {
 }
 
 async function selectChapter(id) {
+  const serial = ++navigationSerial
   if (id === activeChapterId.value && workspaceView.value === 'writing') {
+    navigationPending.value = false
+    if (activeChapter.value?.detailLoaded === false) {
+      try { replaceChapter(await appService.getWorkspaceChapter({ projectId: project.id, chapterId: id })) }
+      catch (error) { showToast(`读取章节失败：${error.message}`) }
+    }
     chapterPageIndex.value = chapterPageIndexFor(chapters.value, id)
     await nextTick()
     revealActiveChapter()
     return
   }
-  if (selectionPreview.visible) discardSelectionPreview()
-  if (workspaceView.value === 'writing') await saveManuscript({ createRevision: false, source: 'chapter-switch' })
-  else await flushPlanningMemory()
-  activeChapterId.value = id
-  activeTab.value = 'manuscript'
-  workspaceView.value = 'writing'
-  versionsOpen.value = false
+  navigationPending.value = true
+  const projectId = project.id
+  try {
+    if (selectionPreview.visible) discardSelectionPreview()
+    if (workspaceView.value === 'writing') {
+      if (!await saveManuscript({ createRevision: false, source: 'chapter-switch' })) return
+    } else await flushPlanningMemory()
+    const detailed = await appService.getWorkspaceChapter({ projectId, chapterId: id })
+    if (serial !== navigationSerial || project.id !== projectId) return
+    replaceChapter(detailed)
+    activeChapterId.value = id
+    activeTab.value = 'manuscript'
+    workspaceView.value = 'writing'
+    versionsOpen.value = false
+  } catch (error) { if (serial === navigationSerial) showToast(`切换章节失败：${error.message}`) }
+  finally { if (serial === navigationSerial) navigationPending.value = false }
 }
 
 async function setWorkspaceView(view) {
@@ -1060,10 +1103,13 @@ async function switchProject(projectId) {
     projectMenuOpen.value = false
     return
   }
+  const serial = ++navigationSerial
+  navigationPending.value = true
   try {
     await flushPlanningMemory()
-    await saveManuscript({ createRevision: false, source: 'project-switch' })
+    if (!await saveManuscript({ createRevision: false, source: 'project-switch' })) return
     const loaded = await appService.loadWorkspace(projectId)
+    if (serial !== navigationSerial) return
     applyWorkspace(loaded)
     inlineRunId.value = ''
     inlineRunStatus.value = ''
@@ -1079,7 +1125,7 @@ async function switchProject(projectId) {
     showToast(`已切换到《${loaded.project.title}》`)
   } catch (error) {
     showToast(`切换项目失败：${error.message}`)
-  }
+  } finally { if (serial === navigationSerial) navigationPending.value = false }
 }
 
 async function toggleProjectMenu() {
@@ -1156,7 +1202,7 @@ async function openWorkDesignSync(item = project) {
 }
 
 async function refreshAfterWorkDesignSync() {
-  const loaded = await appService.loadWorkspaceSnapshot(project.id)
+  const loaded = await appService.loadWorkspace(project.id)
   applyWorkspace(loaded)
   await planningCenterRef.value?.reload?.()
   await knowledgeCenterRef.value?.reload?.()
@@ -1597,6 +1643,7 @@ async function generateChapterTitle(mode = defaultExecutionMode.value) {
 
 async function saveManuscript({ createRevision = true, source = 'manual-save', forceRevision = false } = {}) {
   if (!activeChapter.value) return false
+  if (activeChapter.value.detailLoaded === false) return true
   if (!isDirty.value && !forceRevision) return true
   if (savePromise) return savePromise
   if (autosaveTimer) {
@@ -2140,8 +2187,7 @@ async function acceptCandidate() {
   if (!candidate.visible || !activeChapter.value) return
   if (candidate.task === 'zhuque-repair') {
     try {
-      const latest = await appService.loadWorkspaceSnapshot(project.id)
-      const chapter = latest.chapters.find((item) => item.id === activeChapter.value.id)
+      const chapter = await appService.getWorkspaceChapter({ projectId: project.id, chapterId: activeChapter.value.id })
       if (!chapter || chapter.manuscript !== candidate.original || editorText.value !== candidate.original) {
         showToast('正文已变化，改稿候选已过期；请放弃候选并重新检测')
         return
@@ -2151,8 +2197,7 @@ async function acceptCandidate() {
   if (candidate.candidateId) {
     try {
       await appService.resolvePlanningCandidate({ candidateId: candidate.candidateId, decision: 'accepted' })
-      const loaded = await appService.loadWorkspace(project.id)
-      const updated = loaded.chapters.find((chapter) => chapter.id === activeChapter.value.id)
+      const updated = await appService.getWorkspaceChapter({ projectId: project.id, chapterId: activeChapter.value.id })
       replaceChapter(updated)
       activeTab.value = candidate.targetTab
       const label = candidate.task === 'chapter_card' ? '章节卡' : '场景计划'
@@ -2220,7 +2265,7 @@ async function handleCloseRequest() {
     await flushPlanningMemory()
     if (candidate.visible) await discardCandidate()
     if (selectionPreview.visible) discardSelectionPreview()
-    if (isDirty.value) await saveManuscript({ createRevision: false, source: 'close-autosave' })
+    if (isDirty.value && (!await saveManuscript({ createRevision: false, source: 'close-autosave' }) || isDirty.value)) throw new Error('正文尚未保存，请重试后再退出')
     appService.respondToClose({ saved: true })
   } catch (error) {
     closeInProgress = false
@@ -2280,7 +2325,8 @@ function currentPlanningValue(center, planning = {}) {
 async function presentRetriedGeneration(record, result) {
   const request = record.request || {}
   if (record.task === 'chapter') {
-    const target = chapters.value.find((chapter) => chapter.id === request.chapterId) || activeChapter.value
+    const target = await appService.getWorkspaceChapter({ projectId: project.id, chapterId: request.chapterId || activeChapter.value.id })
+    replaceChapter(target)
     activeChapterId.value = target.id
     workspaceView.value = 'writing'
     activeTab.value = 'manuscript'
@@ -2298,7 +2344,8 @@ async function presentRetriedGeneration(record, result) {
     return
   }
   if (record.task === 'chapter_card' || record.task === 'scene_plan') {
-    const target = chapters.value.find((chapter) => chapter.id === request.chapterId) || activeChapter.value
+    const target = await appService.getWorkspaceChapter({ projectId: project.id, chapterId: request.chapterId || activeChapter.value.id })
+    replaceChapter(target)
     const isCard = record.task === 'chapter_card'
     const originalValue = isCard ? JSON.stringify(target.card || {}) : target.scene_plan || ''
     const generatedValue = isCard ? JSON.stringify(result.card || {}) : result.scenePlan || ''

@@ -103,7 +103,7 @@ const amendmentBusy = ref(false)
 const completionMode = ref('review')
 let modeTouched = false
 function amendmentCompleted(value) { operationEpoch += 1; refreshSerial += 1; record.value = value; emit('completed', value) }
-let timer, clockTimer, disposed = false, reviewerTouched = false, operationEpoch = 0, refreshSerial = 0
+let timer, clockTimer, disposed = false, reviewerTouched = false, operationEpoch = 0, refreshSerial = 0, refreshPending = false
 let handoffEventRunId = ''
 const labels = { checking: '准备检查', ready_for_review: '本地检查已完成，等待启动审稿', reviewing: '独立审稿中', waiting_review_confirmation: '等待审稿确认', extracting: '提取交接中', waiting_state_correction: '交接已保留，等待核对来源', waiting_confirmation: '等待交接确认', completed: '本章已定稿', stale: '正文已变动，需要重新检查', failed: '任务中断，可恢复', blocked: '请先补充正文', cancelled: '已取消' }
 const statusLabel = computed(() => record.value?.status === 'paused' ? '已暂停，可恢复定稿' : labels[record.value?.status] || '待检查')
@@ -185,7 +185,8 @@ async function saveEvidenceCorrections() {
   evidenceFeedbackElement.value?.scrollIntoView({ block: 'nearest' })
 }
 async function refresh() {
-  if (disposed || busy.value || amendmentBusy.value) return
+  if (disposed || busy.value || amendmentBusy.value || refreshPending) return
+  refreshPending = true
   const epoch = operationEpoch
   const serial = ++refreshSerial
   try {
@@ -208,6 +209,7 @@ async function refresh() {
       handoffEvents.value = sameHandoffRun ? [...handoffEvents.value, ...events].slice(-500) : events.slice(-500)
     }
   } catch (e) { if (!disposed && epoch === operationEpoch && serial === refreshSerial) error.value = e.message }
+  finally { refreshPending = false }
 }
 async function start() {
   if (amendmentBusy.value) return
@@ -239,7 +241,10 @@ async function confirm(action, extra = {}) {
 async function resolveApproval(item, approved) {
   try { await appService.resolveApproval({ id: item.id, approved, note: reason.value }); await refresh() } catch (e) { error.value = e.message }
 }
-onMounted(() => { void refresh(); timer = setInterval(refresh, 1500); clockTimer = setInterval(() => { nowMs.value = Date.now() }, 1000) })
+onMounted(() => { void refresh(); timer = setInterval(() => {
+  if (['completed','cancelled','stale'].includes(record.value?.status)) return
+  void refresh()
+}, 1500); clockTimer = setInterval(() => { nowMs.value = Date.now() }, 1000) })
 onBeforeUnmount(() => { disposed = true; clearInterval(timer); clearInterval(clockTimer) })
 </script>
 

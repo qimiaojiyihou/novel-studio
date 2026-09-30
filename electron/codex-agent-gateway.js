@@ -54,7 +54,7 @@ function platformTarget() {
   return null
 }
 
-function runtimeCandidates({ appPath, resourcesPath }) {
+function runtimeCandidates({ appPath, resourcesPath, managedRoot = '' }) {
   const target = platformTarget()
   const executable = process.platform === 'win32' ? 'codex.exe' : 'codex'
   const packagedRoot = target ? path.join(resourcesPath, 'codex-runtime', `${process.platform}-${process.arch}`) : ''
@@ -69,6 +69,16 @@ function runtimeCandidates({ appPath, resourcesPath }) {
           cliPackagePath: path.join(process.env.NOVEL_STUDIO_CODEX_RUNTIME, 'codex', 'package.json'),
           codexPath: process.env.CODEX_PATH || path.join(process.env.NOVEL_STUDIO_CODEX_RUNTIME, target?.packageName || '', 'vendor', target?.triple || '', 'bin', executable),
           manifestPath: path.join(process.env.NOVEL_STUDIO_CODEX_RUNTIME, 'runtime-manifest.json'),
+        }
+      : null,
+    managedRoot && target
+      ? {
+          source: 'managed', root: managedRoot,
+          adapterPath: path.join(managedRoot, 'codex-acp', 'dist', 'index.js'),
+          adapterPackagePath: path.join(managedRoot, 'codex-acp', 'package.json'),
+          cliPackagePath: path.join(managedRoot, 'codex', 'package.json'),
+          codexPath: path.join(managedRoot, target.packageName, 'vendor', target.triple, 'bin', executable),
+          manifestPath: path.join(managedRoot, 'runtime-manifest.json'),
         }
       : null,
     packagedRoot
@@ -94,8 +104,19 @@ function runtimeCandidates({ appPath, resourcesPath }) {
   ].filter(Boolean)
 }
 
-export function inspectCodexRuntime({ appPath, resourcesPath }) {
-  const candidate = runtimeCandidates({ appPath, resourcesPath }).find((item) => fs.existsSync(item.adapterPath) && fs.existsSync(item.codexPath))
+export function inspectCodexRuntime({ appPath, resourcesPath, managedRoot = '' }) {
+  const candidates = runtimeCandidates({ appPath, resourcesPath, managedRoot })
+  const candidate = candidates.find((item) => {
+    if (!fs.existsSync(item.adapterPath) || !fs.existsSync(item.codexPath)) return false
+    if (item.source !== 'managed') return true
+    try {
+      const manifest = packageJson(item.manifestPath)
+      return manifest?.target === `${process.platform}-${process.arch}` && manifest.adapterVersion === ADAPTER_VERSION
+        && packageJson(item.adapterPackagePath)?.version === ADAPTER_VERSION
+        && manifest.cliVersion === packageJson(item.cliPackagePath)?.version
+        && manifest.files?.adapter === sha256File(item.adapterPath) && manifest.files?.cli === sha256File(item.codexPath)
+    } catch { return false }
+  })
   if (!candidate) return {
     available: false,
     adapterAvailable: false,
@@ -251,9 +272,13 @@ export class CodexAgentGateway {
     acpBackend = 'codex_acp',
     adapterVersion = ADAPTER_VERSION,
     supportsExecFallback = true,
+    managedRoot = '',
   }) {
     this.appPath = appPath
     this.resourcesPath = resourcesPath
+    this.managedRoot = managedRoot
+    this.runtimeUsers = 0
+    this.runtimeTransition = null
     this.repository = repository
     this.eventBuffer = new AgentEventBuffer((event) => this.repository?.appendEvent?.(event))
     this.spawnProcess = spawnProcess
@@ -281,7 +306,8 @@ export class CodexAgentGateway {
   }
 
   inspectRuntime() {
-    this.runtime = inspectCodexRuntime({ appPath: this.appPath, resourcesPath: this.resourcesPath })
+    // A live adapter and its idle sessions remain pinned to the same component.
+    if (!this.runtime || !this.connection) this.runtime = this.resolveRuntime()
     return {
       ...this.runtime,
       paths: undefined,
@@ -299,6 +325,7 @@ export class CodexAgentGateway {
   }
 
   async startAdapter() {
+    if (this.runtimeTransition) await this.runtimeTransition
     if (this.connection) return this.inspectRuntime()
     if (this.startPromise) return this.startPromise
     this.startPromise = this._startAdapter().finally(() => { this.startPromise = null })
@@ -306,7 +333,7 @@ export class CodexAgentGateway {
   }
 
   async _startAdapter() {
-    const runtime = this.runtime || inspectCodexRuntime({ appPath: this.appPath, resourcesPath: this.resourcesPath })
+    const runtime = this.runtime || this.resolveRuntime()
     this.runtime = runtime
     if (!runtime.available) {
       const error = new Error(`Codex 运行时不可用：${runtime.integrity}`)
@@ -365,6 +392,10 @@ export class CodexAgentGateway {
   }
 
   async authenticate(methodId = 'chat-gpt') {
+    return this.withRuntimeUsage(() => this._authenticate(methodId))
+  }
+
+  async _authenticate(methodId) {
     await this.startAdapter()
     const available = this.initializeResult?.authMethods || []
     if (!available.some((method) => method.id === methodId)) throw new Error(`${this.agentName} 不支持认证方式 ${methodId}`)
@@ -374,6 +405,10 @@ export class CodexAgentGateway {
   }
 
   async testConnection({ cwd, model = '', reasoningEffort = '', fastMode = false } = {}) {
+    return this.withRuntimeUsage(() => this._testConnection({ cwd, model, reasoningEffort, fastMode }))
+  }
+
+  async _testConnection({ cwd, model = '', reasoningEffort = '', fastMode = false } = {}) {
     await this.startAdapter()
     const created = await this.connection.newSession({ cwd, additionalDirectories: [], mcpServers: [] })
     this.configOptions = created.configOptions || this.configOptions
@@ -400,7 +435,7 @@ export class CodexAgentGateway {
   }
 
   async openDesktopWorkspace({ workspaceRoot, waitForRegistration = false }) {
-    const runtime = this.runtime || inspectCodexRuntime({ appPath: this.appPath, resourcesPath: this.resourcesPath })
+    const runtime = this.runtime || this.resolveRuntime()
     this.runtime = runtime
     if (!runtime.cliAvailable || !workspaceRoot || !fs.existsSync(workspaceRoot)) throw new Error('Codex 书籍工作区或桌面运行时不可用')
     const root = path.resolve(workspaceRoot)
@@ -561,6 +596,10 @@ export class CodexAgentGateway {
   }
 
   async prompt({ agentRunId, agentStepId, messages, continuationMessages = null, outputSchema = null, signal, onEvent = () => {}, allowExecFallback = true, settings = {} }) {
+    return this.withRuntimeUsage(() => this._prompt({ agentRunId, agentStepId, messages, continuationMessages, outputSchema, signal, onEvent, allowExecFallback, settings }))
+  }
+
+  async _prompt({ agentRunId, agentStepId, messages, continuationMessages = null, outputSchema = null, signal, onEvent = () => {}, allowExecFallback = true, settings = {} }) {
     let session = this.sessions.get(agentRunId)
     const useContextDelta = Boolean(session && Array.isArray(continuationMessages) && continuationMessages.length)
     const fullPromptText = codexPromptText({
@@ -685,7 +724,11 @@ export class CodexAgentGateway {
   }
 
   async runExecFallback({ agentRunId, agentStepId, prompt, outputSchema, signal, onEvent = () => {}, mirrorRoot, workspaceRoot = mirrorRoot, model = '', reasoningEffort = '', fastMode = false, fallbackReason = '' }) {
-    const runtime = this.runtime || inspectCodexRuntime({ appPath: this.appPath, resourcesPath: this.resourcesPath })
+    return this.withRuntimeUsage(() => this._runExecFallback({ agentRunId, agentStepId, prompt, outputSchema, signal, onEvent, mirrorRoot, workspaceRoot, model, reasoningEffort, fastMode, fallbackReason }))
+  }
+
+  async _runExecFallback({ agentRunId, agentStepId, prompt, outputSchema, signal, onEvent = () => {}, mirrorRoot, workspaceRoot = mirrorRoot, model = '', reasoningEffort = '', fastMode = false, fallbackReason = '' }) {
+    const runtime = this.runtime || this.resolveRuntime()
     if (!runtime.cliAvailable || !mirrorRoot) throw new Error('Codex exec 兼容模式运行时不完整')
     const execDirectory = path.join(mirrorRoot, '.codex', 'exec')
     fs.mkdirSync(execDirectory, { recursive: true, mode: 0o700 })
@@ -779,6 +822,27 @@ export class CodexAgentGateway {
   async restartAdapter({ suppressErrors = false } = {}) {
     try { await this.shutdown() } catch (error) { if (!suppressErrors) throw error }
     return suppressErrors ? null : this.startAdapter()
+  }
+
+  resolveRuntime() {
+    return inspectCodexRuntime({ appPath: this.appPath, resourcesPath: this.resourcesPath, managedRoot: this.managedRoot })
+  }
+
+  async withRuntimeUsage(work) {
+    if (this.runtimeTransition) await this.runtimeTransition
+    this.runtimeUsers++
+    try { return await work() } finally { this.runtimeUsers-- }
+  }
+
+  async changeRuntimeRoot(root) {
+    if (this.runtimeUsers || this.sessions.size || this.startPromise || this.runtimeTransition) throw new Error('Codex 仍有任务或会话，组件将在空闲后启用')
+    this.runtimeTransition = (async () => {
+      await this.shutdown()
+      this.managedRoot = root
+      this.runtime = null
+      this.configOptions = []
+    })()
+    try { await this.runtimeTransition } finally { this.runtimeTransition = null }
   }
 
   async shutdown() {

@@ -30,12 +30,12 @@ function setup() {
 const reviewer = { executionMode: 'app_model', profileId: 'review-model', model: 'fixture', label: '独立上下文' }
 function state() { return { summary: '周砚付租金并开摊。', facts: [{ text: '租金已付', evidence: '周砚付了摊位租金。' }], characterStates: [], relationshipChanges: [], timelineEvents: [], openThreads: [], foreshadow: { setups: [], payoffs: [] } } }
 
-test('v21→v32 preserves pinned historical packs, runs sequentially and cascades new data', () => {
+test('v21→v33 preserves pinned historical packs, runs sequentially and cascades new data', () => {
   const db = new DatabaseSync(':memory:')
   runMigrations(db, { targetVersion: 21 })
   const before = db.prepare('SELECT version,digest FROM creative_pack_versions ORDER BY version').all()
   runMigrations(db)
-  assert.deepEqual(db.prepare('SELECT version FROM schema_migrations WHERE version>=22 ORDER BY version').all().map(r=>r.version), [22,23,24,25,26,27,28,29,30,31,32])
+  assert.deepEqual(db.prepare('SELECT version FROM schema_migrations WHERE version>=22 ORDER BY version').all().map(r=>r.version), [22,23,24,25,26,27,28,29,30,31,32,33])
   assert.deepEqual(db.prepare("SELECT version,digest FROM creative_pack_versions WHERE version!='1.3.0' ORDER BY version").all(), before)
   runMigrations(db)
   assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(), [])
@@ -45,6 +45,7 @@ test('v21→v32 preserves pinned historical packs, runs sequentially and cascade
 test('GPT6 family hints are not capabilities, grouped catalog works, exec keeps explicit parameters', () => {
   assert.deepEqual(modelDirectory().map(item=>[item.value,item.status]),[
     ['gpt-6-astra','pending'],
+    ['gpt-6.1-sol','pending'],
     ['gpt-6-sol','pending'],
     ['gpt-6-luna','pending'],
   ])
@@ -53,6 +54,7 @@ test('GPT6 family hints are not capabilities, grouped catalog works, exec keeps 
   assert.deepEqual(modelDirectory(options,true).map(item=>[item.value,item.status]),[
     ['gpt-6-astra','available'],
     ['gpt-6-sol','available'],
+    ['gpt-6.1-sol','unsupported'],
     ['gpt-6-luna','unsupported'],
   ])
   assert.equal(sessionModelSnapshot(options).fastModeSupported,false)

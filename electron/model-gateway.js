@@ -198,6 +198,8 @@ export function createModelGateway({ getGoRuntime, onGoUnavailable = () => {} })
       }
     },
 
+    hasActiveTasks() { return activeTasks.size > 0 },
+
     async cancel(taskId) {
       const active = activeTasks.get(taskId)
       if (!active) return { taskId, status: 'not-running' }

@@ -1,15 +1,20 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron'
 import { applicationMenuTemplate } from './application-menu.js'
 import { CREATIVE_BUILD_ID } from './build-info.js'
 import { deleteProjectOffMainThread } from './project-deletion.js'
 import { runStorageMaintenanceBatch } from './storage-maintenance-runner.js'
+import { readStorageConfig, writeStorageConfig, queueStorageMigration, cancelStorageMigration, commitStorageMigration } from './storage-location.js'
+import { runStorageMigration } from './storage-migration-runner.js'
 import { CreativeInterface, CreativeMutationQueue } from './creative-interface.js'
 import { readCreativeSnapshot } from './creative-snapshot.js'
 import { startCreativeServer } from './creative-server.js'
 import { backup } from 'node:sqlite'
 import path from 'node:path'
 import fs from 'node:fs'
-import { spawn } from 'node:child_process'
+import { spawn, execFile } from 'node:child_process'
+import { promisify } from 'node:util'
+import os from 'node:os'
+import { CodexComponentManager, CodexModelCatalog } from './codex-component-manager.js'
 import { randomBytes, createHash } from 'node:crypto'
 import { createCreativePackRepository, OFFICIAL_PACK_ID } from './creative-pack.js'
 import { ChapterFinalizer, createFinalizationRepository } from './chapter-finalization.js'
@@ -60,6 +65,7 @@ import {
   finishBenchmarkStep,
   exportProjectBackup,
   getDatabaseInfo,
+  getLibraryDirectory,
   getGenerationRecord,
   getAgentRun,
   getAgentRunPack,
@@ -90,6 +96,8 @@ import {
   loadModelSettings,
   loadCodexSettings,
   loadWorkspace,
+  loadWorkspaceCatalog,
+  getWorkspaceChapter,
   loadWorkspaceSnapshot,
   importManuscriptData,
   openDatabase,
@@ -176,15 +184,23 @@ let goServiceBaseUrl = ''
 let goServiceAuthToken = ''
 let mainWindow = null
 let closeResponsePending = false
+let quitWasRequested = false
 const activeBenchmarkTasks = new Map()
 const activeBenchmarkControls = new Map()
 let codexGateway = null
+let codexComponents = null
+let codexModelCatalog = null
+let codexComponentTimer = null
 let qoderGateway = null
 let agentGateway = null
 let agentRuntime = null
 let idleInlineTimer = null
 let storageMaintenanceTimer = null
 let storageMaintenanceStopped = false
+let lastForegroundWriteAt = 0
+let storageRestartRequested = false
+let storageMigrationInProgress = false
+let applicationDatabaseReady = false
 let idleInlineSweepRunning = false
 let chapterFinalizer = null
 let creativeInterface = null
@@ -250,7 +266,7 @@ function mirrorForRun(run) {
     ? { ...workspace, project: projectForInlineTarget(workspace.project, inlineTarget) }
     : workspace
   return createCodexProjectMirror({
-    baseDirectory: app.getPath('userData'),
+    baseDirectory: getLibraryDirectory(),
     agentRun: run,
     workspace: mirrorWorkspace,
     codexProject: workspace.project,
@@ -265,11 +281,11 @@ function mirrorForRun(run) {
 function codexBookWorkspaceForProject(projectId) {
   const project = listProjects().find((item) => item.id === projectId)
   if (!project) throw new Error('项目不存在')
-  return createCodexBookWorkspace({ baseDirectory: app.getPath('userData'), project })
+  return createCodexBookWorkspace({ baseDirectory: getLibraryDirectory(), project })
 }
 
 function repairMissingCodexBookWorkspaces() {
-  const baseDirectory = app.getPath('userData')
+  const baseDirectory = getLibraryDirectory()
   for (const project of listProjects()) {
     if (findCodexBookWorkspace({ baseDirectory, projectId: project.id })) continue
     try {
@@ -960,7 +976,7 @@ async function applyAgentCandidate({ run, candidate, applyOptions = {} }) {
       return
     }
     if (inlineTarget.kind === 'chapter_field') {
-      const chapter = loadWorkspaceSnapshot(run.projectId).chapters.find((item) => item.id === inlineTarget.targetId)
+      const chapter = getWorkspaceChapter({ projectId: run.projectId, chapterId: inlineTarget.targetId })
       if (!chapter) throw new Error('章节不存在')
       updateChapter(inlineTarget.fieldKey === 'title'
         ? { id: chapter.id, title: text }
@@ -985,7 +1001,7 @@ async function applyAgentCandidate({ run, candidate, applyOptions = {} }) {
     return
   }
   if (candidate.artifactType === 'manuscript') {
-    const chapter = loadWorkspaceSnapshot(run.projectId).chapters.find((item) => item.id === run.chapterId)
+    const chapter = getWorkspaceChapter({ projectId: run.projectId, chapterId: run.chapterId })
     const generated = String(candidate.payload.manuscript || '')
     const offset = Math.max(0, Math.min(Number(inlineTarget?.cursorOffset ?? chapter?.manuscript?.length ?? 0), String(chapter?.manuscript || '').length))
     const manuscript = inlineIntent === 'continue'
@@ -1001,7 +1017,7 @@ async function applyAgentCandidate({ run, candidate, applyOptions = {} }) {
     return
   }
   if (candidate.artifactType === 'manuscript_selection') {
-    const chapter = loadWorkspaceSnapshot(run.projectId).chapters.find((item) => item.id === run.chapterId)
+    const chapter = getWorkspaceChapter({ projectId: run.projectId, chapterId: run.chapterId })
     if (!chapter || !inlineTarget) throw new Error('局部重写缺少章节目标')
     const source = String(chapter.manuscript || '')
     const from = Math.max(0, Math.min(Number(inlineTarget.selectionFrom), source.length))
@@ -1038,7 +1054,7 @@ async function applyAgentCandidate({ run, candidate, applyOptions = {} }) {
   if (candidate.artifactType === 'quality_review') {
     const sourceGeneration = getGenerationRecord(inlineTarget?.sourceGenerationId || '')
     if (!sourceGeneration || sourceGeneration.projectId !== run.projectId) throw new Error('质量评审缺少有效生成记录')
-    const chapter = loadWorkspaceSnapshot(run.projectId).chapters.find((item) => item.id === run.chapterId)
+    const chapter = getWorkspaceChapter({ projectId: run.projectId, chapterId: run.chapterId })
     const codexBackends = new Set(['codex_acp', 'codex_exec'])
     const sourceRemote = codexBackends.has(sourceGeneration.executionBackend)
       || qualityEvidenceExecution(sourceGeneration, 'remote') === 'remote'
@@ -1062,8 +1078,38 @@ async function applyAgentCandidate({ run, candidate, applyOptions = {} }) {
   throw new Error(`候选类型暂不支持写入：${candidate.artifactType}`)
 }
 
-function initializeCodexIntegration() {
+async function initializeCodexIntegration() {
   const repository = agentRepositoryApi()
+  const appPath = path.join(__dirname, '..')
+  const bundledRuntime = inspectCodexRuntime({ appPath, resourcesPath: process.resourcesPath })
+  codexComponents = new CodexComponentManager({
+    directory: path.join(app.getPath('userData'), 'codex-components'),
+    bundledVersion: bundledRuntime.cliVersion || JSON.parse(fs.readFileSync(path.join(appPath, 'package.json'), 'utf8')).dependencies['@openai/codex'],
+    inspect: root => {
+      const result = inspectCodexRuntime({ appPath, resourcesPath: process.resourcesPath, managedRoot: root })
+      return result.source === 'managed' ? result : { available: false }
+    },
+    isBusy: () => Boolean(agentRuntime?.active.size || codexGateway?.runtimeUsers || codexGateway?.sessions.size || codexGateway?.startPromise || codexGateway?.runtimeTransition || codexModelCatalog?.inflight.size),
+    activate: async root => { if (codexGateway) await codexGateway.changeRuntimeRoot(root) },
+    validate: async root => {
+      const gateway = new CodexAgentGateway({ appPath, resourcesPath: process.resourcesPath, managedRoot: root })
+      const diagnosticDirectory = path.join(app.getPath('userData'), 'codex-diagnostics')
+      fs.mkdirSync(diagnosticDirectory, { recursive: true, mode: 0o700 })
+      let timeout
+      try {
+        const runtime = gateway.inspectRuntime()
+        if (runtime.source !== 'managed' || !runtime.available) throw new Error('Codex 更新组件身份校验失败')
+        const exec = promisify(execFile)
+        const { stdout } = await exec(runtime.paths?.codexPath || gateway.runtime.paths.codexPath, ['exec', '--help'], { timeout: 15000, maxBuffer: 1024 * 1024, windowsHide: true })
+        if (!['--output-schema', '--sandbox', '--ignore-user-config'].every(flag => stdout.includes(flag))) throw new Error('新版 Codex exec 参数不兼容，保留原版本')
+        const status = await Promise.race([gateway.testConnection({ cwd: diagnosticDirectory }), new Promise((_resolve, reject) => {
+          timeout = setTimeout(() => reject(new Error('新版 Codex ACP 诊断超时，保留原版本')), 45000)
+        })])
+        if (!status.configOptions.some(option => option.id === 'model' && option.options?.length)) throw new Error('新版 Codex 未返回模型目录，保留原版本')
+      } finally { clearTimeout(timeout); await gateway.shutdown() }
+    },
+  })
+  await codexComponents.applyPending().catch(error => { codexComponents.error = error.message })
   const onGlobalAgentEvent = (payload) => {
     publishCodexEvent('codex:event', payload)
     if (payload.type === 'permission') {
@@ -1076,6 +1122,7 @@ function initializeCodexIntegration() {
   codexGateway = new CodexAgentGateway({
     appPath: path.join(__dirname, '..'),
     resourcesPath: process.resourcesPath,
+    managedRoot: codexComponents.selectedRoot(),
     repository,
     shouldAutoApprove: ({ actionType, projectId }) => actionType === 'model_call' && codexSessionModelApprovalProjects.has(projectId),
     onGlobalEvent: onGlobalAgentEvent,
@@ -1089,6 +1136,19 @@ function initializeCodexIntegration() {
     onGlobalEvent: onGlobalAgentEvent,
   })
   agentGateway = new AgentGatewayRouter({ repository, codex: codexGateway, qoder: qoderGateway })
+  codexModelCatalog = new CodexModelCatalog({
+    file: path.join(app.getPath('userData'), 'codex-model-catalog.json'),
+    identity: () => {
+      const runtime = codexGateway.runtime || bundledRuntime
+      let authIdentity = 'none'
+      try { const stat = fs.statSync(path.join(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'auth.json')); authIdentity = `${stat.size}:${stat.mtimeMs}` } catch { /* logged-out catalogue has its own identity */ }
+      const authMethod = loadCodexSettings().authMethod
+      const environmentIdentity = authMethod === 'environment' ? createHash('sha256').update(process.env.CODEX_API_KEY || process.env.OPENAI_API_KEY || '').digest('hex') : ''
+      return createHash('sha256').update(`${runtime.cliVersion}:${runtime.source}:${authMethod}:${authIdentity}:${environmentIdentity}`).digest('hex')
+    },
+  })
+  codexComponentTimer = setInterval(() => { if (!codexComponents.operation) void codexComponents.applyPending().catch(error => { codexComponents.error = error.message }) }, 10000)
+  codexComponentTimer.unref?.()
   agentRuntime = new AgentRuntime({
     repository,
     codexGateway: agentGateway,
@@ -1326,7 +1386,7 @@ function startGoService() {
   }
 
   try {
-    const dataDirectory = path.join(app.getPath('userData'), 'service-data')
+    const dataDirectory = path.join(getLibraryDirectory(), 'service-data')
     fs.mkdirSync(dataDirectory, { recursive: true })
     goServiceAuthToken = randomBytes(32).toString('base64url')
     goServiceProcess = spawn(candidate, ['--port', '0', '--data-dir', dataDirectory], {
@@ -2163,6 +2223,7 @@ function registerAppHandler(channel, handler) {
   ipcMain.handle(channel, (event, payload) => {
     const mutations = /:(start|start-inline|continue-inline|pause|resume|cancel|finish-inline|confirm-candidate|reject-candidate|retry-step|resolve|create|update|delete|reorder|document-save|style-save|entity-update|finalize-start|finalize-confirm|amendment-confirm|manual-confirm|restore|protect|save-sample)$/
     if (!mutations.test(channel)) return handler(event, payload)
+    lastForegroundWriteAt = Date.now()
     const value = payload && typeof payload === 'object' ? payload : {}
     let projectId = value.projectId || ''
     const id = value.runId || value.chapterId || value.id || (typeof payload === 'string' ? payload : '')
@@ -2188,7 +2249,7 @@ function registerAppHandler(channel, handler) {
 async function initializeCreativeInterface() {
   const db = openDatabase(), directory=path.join(app.getPath('userData'),'creative-interface')
   if (!db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='creative_clients'").get()) {
-    const backups = path.join(app.getPath('userData'),'backups')
+    const backups = path.join(getLibraryDirectory(),'backups')
     fs.mkdirSync(backups,{ recursive:true,mode:0o700 })
     const backupFile=path.join(backups,`before-dual-book-${Date.now()}.sqlite`)
     await backup(db,backupFile)
@@ -2243,12 +2304,14 @@ function registerIpc() {
   ipcMain.handle('authoring:protections', (_event, payload) => createAuthoringRepository(openDatabase()).protections(payload))
   ipcMain.handle('authoring:protect', (_event, payload) => createAuthoringRepository(openDatabase()).protect(payload))
   ipcMain.handle('workspace:load', (_event, projectId) => loadWorkspace(projectId))
+  ipcMain.handle('workspace:catalog', (_event, payload = {}) => loadWorkspaceCatalog(payload.projectId, { select: payload.select !== false }))
+  ipcMain.handle('workspace:chapter', (_event, payload) => getWorkspaceChapter(payload))
   ipcMain.handle('workspace:snapshot', (_event, projectId) => loadWorkspaceSnapshot(projectId))
   ipcMain.handle('projects:list', listProjects)
   ipcMain.handle('project:create', (_event, input) => {
     const workspace = createProject(input)
     try {
-      const codexWorkspace = createCodexBookWorkspace({ baseDirectory: app.getPath('userData'), project: workspace.project })
+      const codexWorkspace = createCodexBookWorkspace({ baseDirectory: getLibraryDirectory(), project: workspace.project })
       return { ...workspace, codexWorkspace: { root: codexWorkspace.root, descriptor: codexWorkspace.descriptor } }
     } catch (error) {
       console.error(`[Codex] 新书《${workspace.project.title}》的书籍工作区创建失败：${error.message}`)
@@ -2266,9 +2329,9 @@ function registerIpc() {
     }
     const promise = (async () => {
       await deleteProjectOffMainThread({ databasePath: getDatabaseInfo().path, projectId })
-      try { removeCodexBookWorkspace({ baseDirectory: app.getPath('userData'), projectId }) }
+      try { removeCodexBookWorkspace({ baseDirectory: getLibraryDirectory(), projectId }) }
       catch (error) { console.warn(`[Codex] 清理书籍工作区失败：${error.message}`) }
-      return loadWorkspace()
+      return loadWorkspaceCatalog()
     })()
     pendingProjectDelete = { projectId, promise }
     promise.finally(() => { pendingProjectDelete = null }).catch(() => {})
@@ -2364,7 +2427,17 @@ function registerIpc() {
     runtime: codexGateway.inspectRuntime(),
     qoderRuntime: qoderGateway.inspectRuntime(),
     settings: loadCodexSettings(),
+    components: codexComponents.status(),
+    modelCatalog: codexModelCatalog.get(),
   }))
+  ipcMain.handle('codex:components-status', () => codexComponents.status())
+  ipcMain.handle('codex:components-check', () => codexComponents.check())
+  ipcMain.handle('codex:components-update', () => {
+    const runtime = inspectCodexRuntime({ appPath: path.join(__dirname, '..'), resourcesPath: process.resourcesPath })
+    if (!runtime.available) throw new Error('内置 ACP 适配器校验失败，请修复应用后更新组件')
+    return codexComponents.update({ adapterRoot: runtime.paths })
+  })
+  ipcMain.handle('codex:components-rollback', (_event, payload) => codexComponents.rollback(payload?.useBundled === true))
   ipcMain.handle('codex:settings-save', async (_event, payload) => {
     const before = loadCodexSettings()
     const saved = saveCodexSettings(payload)
@@ -2378,22 +2451,35 @@ function registerIpc() {
     return codexGateway.inspectRuntime()
   })
   ipcMain.handle('codex:cancel-auth', async () => codexGateway.restartAdapter({ suppressErrors: true }))
-  const inspectCodexModels = async (payload = {}) => {
+  const inspectCodexModels = async (payload = {}, directoryOnly = false) => {
     const diagnosticDirectory = path.join(app.getPath('userData'), 'codex-diagnostics')
     fs.mkdirSync(diagnosticDirectory, { recursive: true, mode: 0o700 })
     const provider = normalizeAgentProvider(payload.agentProvider)
     const gateway = provider === 'qoder' ? qoderGateway : codexGateway
+    if (provider === 'codex' && payload.automatic && process.env.NOVEL_STUDIO_TEST_USER_DATA) {
+      return { ok: false, skipped: true, message: '隔离界面测试：不调用外部 Codex 模型目录' }
+    }
     if (provider === 'qoder' && qoderGateway.useConfiguredPath(payload.qoderCliPath)) {
       await qoderGateway.restartAdapter({ suppressErrors: true })
     }
-    const status = await gateway.testConnection({ cwd: diagnosticDirectory,
-      model: String(payload.model || ''), reasoningEffort: String(payload.reasoningEffort || ''), fastMode: Boolean(payload.fastMode) })
+    const read = async () => {
+      try {
+        return await gateway.testConnection({ cwd: diagnosticDirectory,
+          model: String(payload.model || ''), reasoningEffort: String(payload.reasoningEffort || ''), fastMode: Boolean(payload.fastMode) })
+      } catch (error) {
+        // A removed/renamed saved model must not block discovery of its replacement.
+        if (provider !== 'codex' || !directoryOnly || error.codexPhase !== 'session_config') throw error
+        return { ...await gateway.testConnection({ cwd: diagnosticDirectory }), configurationWarning: error.message }
+      }
+    }
+    const status = provider === 'codex' ? await codexModelCatalog.refresh(`${String(payload.model || '')}:${payload.reasoningEffort || ''}:${Boolean(payload.fastMode)}`, read) : await read()
     return { ok: true, status, message: provider === 'qoder'
       ? 'Qoder ACP 已建立诊断会话并正常释放；未发送创作请求。'
-      : '模型目录与配置已回读，诊断连接已释放；未发送创作请求。' }
+      : status.configurationWarning ? `模型目录已更新；原选择待重新验证：${status.configurationWarning}。默认模型保持不变。`
+        : '模型目录与配置已回读，诊断连接已释放；未发送创作请求。' }
   }
   ipcMain.handle('codex:test', (_event, payload) => inspectCodexModels(payload))
-  ipcMain.handle('codex:models', (_event, payload) => inspectCodexModels(payload))
+  ipcMain.handle('codex:models', (_event, payload) => inspectCodexModels(payload, true))
   ipcMain.handle('codex:restart-adapter', () => codexGateway.restartAdapter())
   ipcMain.handle('codex:open-project', async (_event, projectId) => {
     const workspace = codexBookWorkspaceForProject(String(projectId || ''))
@@ -2624,10 +2710,35 @@ function registerIpc() {
     return run
   })
   ipcMain.handle('runtime:info', runtimeInfo)
+  const storageStatus = () => ({ ...readStorageConfig(app.getPath('userData')),
+    directory: getLibraryDirectory(), databasePath: getDatabaseInfo().path,
+    bootstrapDirectory: app.getPath('userData'), databaseBytes: fs.statSync(getDatabaseInfo().path).size })
+  const assertStorageIdle = () => {
+    if (agentRuntime?.active?.size || modelGateway.hasActiveTasks() || activeBenchmarkControls.size || creativeMutationQueue.tails.size || pendingProjectDelete || creativeInterface?.inflight?.size) throw new Error('请等待当前创作、审稿或保存删除操作结束，再迁移书库')
+  }
+  ipcMain.handle('storage:status', storageStatus)
+  ipcMain.handle('storage:choose', async () => {
+    assertStorageIdle()
+    const result = await dialogOptions('showOpenDialog', { title: '选择空的数据文件夹', properties: ['openDirectory', 'createDirectory'] })
+    if (result.canceled) return { cancelled: true }
+    queueStorageMigration(app.getPath('userData'), result.filePaths[0])
+    return storageStatus()
+  })
+  ipcMain.handle('storage:cancel', () => { cancelStorageMigration(app.getPath('userData')); return storageStatus() })
+  ipcMain.handle('storage:open', () => shell.openPath(getLibraryDirectory()))
+  ipcMain.handle('storage:restart', () => {
+    assertStorageIdle()
+    if (!readStorageConfig(app.getPath('userData')).pending) throw new Error('请先选择迁移目录')
+    storageRestartRequested = true
+    mainWindow?.close()
+    return { closing: true }
+  })
   ipcMain.on('window:close-response', (event, payload = {}) => {
     if (!mainWindow || event.sender !== mainWindow.webContents) return
-    if (!payload.saved && !payload.discard) return
+    if (!payload.saved && !payload.discard) { storageRestartRequested = false; quitWasRequested = false; return }
     closeResponsePending = true
+    if (storageRestartRequested) { app.relaunch(); app.quit(); return }
+    if (quitWasRequested) { app.quit(); return }
     mainWindow.close()
   })
 }
@@ -2705,9 +2816,28 @@ app.on('second-instance', () => { if (mainWindow) { mainWindow.show(); mainWindo
 app.whenReady().then(async () => {
   if (!app.hasSingleInstanceLock()) return
   Menu.setApplicationMenu(Menu.buildFromTemplate(applicationMenuTemplate()))
+  const config = readStorageConfig(app.getPath('userData'))
+  if (config.pending) {
+    storageMigrationInProgress = true
+    const progressWindow = new BrowserWindow({ width: 650, height: 240, resizable: false, closable: false,
+      backgroundColor: '#f3f8f8', webPreferences: { nodeIntegration: false, contextIsolation: true } })
+    await progressWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent('<html lang="zh-CN"><body style="font:16px system-ui;color:#25464d;padding:24px"><h2>正在迁移书库</h2><p id="progress" role="status">准备核对；原书库保持不变…</p><small>复制 → 核验 → 切换。完成后自动打开应用，请保持磁盘连接。</small></body></html>')}`)
+    try {
+      const result = await runStorageMigration(config.pending, message => {
+        if (!progressWindow.isDestroyed()) void progressWindow.webContents.executeJavaScript(`document.getElementById('progress').textContent=${JSON.stringify(message)}`).catch(() => {})
+      })
+      commitStorageMigration(app.getPath('userData'), config.pending, result)
+    } catch (error) {
+      const failed = { ...config, lastError: error.message }
+      delete failed.pending
+      writeStorageConfig(app.getPath('userData'), failed)
+      dialog.showErrorBox('迁移未完成，继续使用原书库', `${error.message}\n原目录：${config.directory}\n迁移文件保留在：${config.pending.targetDirectory}`)
+    } finally { progressWindow.destroy(); storageMigrationInProgress = false }
+  }
   openDatabase()
+  applicationDatabaseReady = true
   repairMissingCodexBookWorkspaces()
-  initializeCodexIntegration()
+  await initializeCodexIntegration()
   const sweepIdleInlineRuns = async () => {
     if (idleInlineSweepRunning || !agentRuntime) return
     idleInlineSweepRunning = true
@@ -2730,14 +2860,14 @@ app.whenReady().then(async () => {
     if (storageMaintenanceStopped) return
     storageMaintenanceTimer = setTimeout(async () => {
       if (storageMaintenanceStopped) return
-      if (agentRuntime?.active?.size) {
+      if (agentRuntime?.active?.size || modelGateway.hasActiveTasks() || creativeMutationQueue.tails.size || creativeInterface?.inflight?.size || Date.now() - lastForegroundWriteAt < 30_000) {
         scheduleStorageMaintenance(30_000)
         return
       }
       try {
         const result = await runStorageMaintenanceBatch(getDatabaseInfo().path)
         const hasMore = result.receipts.scanned > 0 || result.events.scanned > 0
-        scheduleStorageMaintenance(hasMore ? 2_000 : 5 * 60_000)
+        scheduleStorageMaintenance(hasMore ? 10_000 : 5 * 60_000)
       } catch (error) {
         console.warn('书库后台整理暂缓：', error)
         scheduleStorageMaintenance(60_000)
@@ -2749,21 +2879,36 @@ app.whenReady().then(async () => {
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
+}).catch(error => {
+  dialog.showErrorBox('书库启动未完成', error.message)
+  app.quit()
 })
 
 app.on('window-all-closed', () => {
+  if (storageMigrationInProgress) return
   if (process.platform !== 'darwin') {
     stopGoService()
     app.quit()
   }
 })
 
-app.on('before-quit', () => {
+app.on('before-quit', event => {
+  if (storageMigrationInProgress) { event.preventDefault(); return }
+  // A window close may be cancelled by the save handshake. Do not shut down
+  // services or expire approvals until saving has succeeded and quit resumes.
+  quitWasRequested = true
+})
+
+app.on('will-quit', () => {
   if (idleInlineTimer) clearInterval(idleInlineTimer)
+  if (codexComponentTimer) clearInterval(codexComponentTimer)
   storageMaintenanceStopped = true
   if (storageMaintenanceTimer) clearTimeout(storageMaintenanceTimer)
   void creativeServer?.close()
   stopGoService()
-  expirePendingApprovalRequests()
+  if (applicationDatabaseReady) {
+    try { expirePendingApprovalRequests() }
+    catch (error) { console.warn('退出时审批清理失败：', error.message) }
+  }
   void agentGateway?.shutdown()
 })

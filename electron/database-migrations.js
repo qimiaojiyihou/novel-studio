@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url'
 import { validateCreativePack } from './creative-pack.js'
 import { creativeUpgradeMigrations } from './creative-upgrade-migrations.js'
 
-export const LATEST_SCHEMA_VERSION = 32
+export const LATEST_SCHEMA_VERSION = 33
 
 function bundledOfficialPack(version = '1.2.0') {
   const directory = version === '1.3.0' ? 'dist' : 'historical'
@@ -1518,6 +1518,30 @@ const migrations = [
       // The first compactor deliberately skipped legacy ACP deltas carrying
       // message metadata. Revisit completed runs with the metadata-aware rule.
       database.exec('DELETE FROM agent_event_compaction_state;')
+    },
+  },
+  {
+    version: 33,
+    name: 'chapter-catalog-statistics',
+    up(database) {
+      database.exec(`
+        CREATE TABLE chapter_statistics (
+          chapter_id TEXT PRIMARY KEY REFERENCES chapters(id) ON DELETE CASCADE,
+          project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+          character_count INTEGER NOT NULL
+        );
+        CREATE INDEX chapter_statistics_project ON chapter_statistics(project_id);
+        INSERT INTO chapter_statistics SELECT id, project_id, length(manuscript) FROM chapters;
+        CREATE TRIGGER chapter_statistics_insert AFTER INSERT ON chapters BEGIN
+          INSERT INTO chapter_statistics VALUES (NEW.id, NEW.project_id, length(NEW.manuscript));
+        END;
+        CREATE TRIGGER chapter_statistics_update AFTER UPDATE OF manuscript, project_id ON chapters BEGIN
+          UPDATE chapter_statistics SET project_id=NEW.project_id, character_count=length(NEW.manuscript)
+          WHERE chapter_id=NEW.id;
+        END;
+        CREATE INDEX chapter_finalizations_completed_lookup ON chapter_finalizations(chapter_id, completed_at DESC)
+          WHERE completed_at<>'';
+      `)
     },
   },
 ]

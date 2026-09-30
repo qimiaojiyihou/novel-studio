@@ -340,7 +340,7 @@
 
 <script setup>
 import CreativeCandidateEditor from './CreativeCandidateEditor.vue'
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { appService } from '../services/app-service.js'
 import { appendCodexStream, nextCodexStreamLength, recoverCodexStream, recoverCodexStreamAttempt, visibleCodexStream } from '../utils/codex-stream.js'
 import { chapterCardEditIssues, chapterCardPresentation, composeInlineManuscriptCandidate, draftDigest } from '../utils/inline-creative.js'
@@ -350,7 +350,7 @@ import {
   inlineConversationScope,
   inlineConversationReuseNote as conversationReuseCopy,
 } from '../utils/inline-conversation.js'
-import InlineManuscriptDiff from './InlineManuscriptDiff.vue'
+const InlineManuscriptDiff = defineAsyncComponent(() => import('./InlineManuscriptDiff.vue'))
 
 const props = defineProps({
   visible: { type: Boolean, default: false },

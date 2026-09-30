@@ -7,7 +7,7 @@ let result
 try {
   database = new DatabaseSync(workerData.databasePath)
   database.exec('PRAGMA busy_timeout = 30000; PRAGMA foreign_keys = ON;')
-  createWorkspaceRepository(database).deleteProject(workerData.projectId)
+  createWorkspaceRepository(database).deleteProject(workerData.projectId, { returnWorkspace: false })
   result = { ok: true }
 } catch (error) {
   result = { ok: false, error: error.message }

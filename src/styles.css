@@ -401,6 +401,11 @@ button:disabled { cursor: wait; opacity: .62; }
 .codex-settings-grid .wide { grid-column: 1 / -1; }
 .codex-settings-grid .codex-toggle { display: flex; align-items: center; justify-content: space-between; padding: 0 11px; border: 1px solid #d8cfc1; background: #fbf8f1; }
 .codex-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 16px; }
+.codex-component-box { margin-top: 18px; padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-soft, #edf4f5); }
+.codex-component-box .component-summary { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px; }
+.codex-component-box .component-summary span, .codex-component-box p, .codex-component-box > small { color: var(--text-muted, #637f86); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.codex-component-box p { margin: 9px 0; }
+.codex-component-box .codex-actions { justify-content: flex-start; flex-wrap: wrap; margin: 10px 0; }
 .codex-permission-note { display: block; margin-top: 11px; color: #958778; font-size: 9px; line-height: 1.55; }
 .assistant-center { grid-column: 2 / -1; min-width: 0; min-height: 0; overflow: auto; overscroll-behavior: contain; color: var(--ink); background: var(--paper-soft); }
 .assistant-hero { display: grid; grid-template-columns: minmax(0, 1fr) minmax(430px, .9fr); gap: 40px; padding: 34px 38px; color: #f4efe5; background: #252b2f; border-bottom: 1px solid #41484c; }
@@ -665,3 +670,9 @@ button:disabled { cursor: wait; opacity: .62; }
 @keyframes generation-pulse { 50% { opacity: .42; transform: scale(.82); } }
 @keyframes generation-scan { 0%, 100% { transform: translateX(-70%); opacity: .2; } 50% { transform: translateX(70%); opacity: .9; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }
+.storage-settings .storage-paths { display: grid; grid-template-columns: 8em minmax(0, 1fr); gap: 12px 18px; margin: 20px 0; }
+.storage-settings .storage-paths dt { color: var(--muted, #6f8790); }
+.storage-settings .storage-paths dd { margin: 0; overflow-wrap: anywhere; }
+.storage-settings .storage-paths small { display: block; margin-top: 6px; }
+.storage-migration-plan { padding: 16px; border-left: 3px solid #608f88; background: #e8f2f1; margin: 16px 0; }
+.storage-migration-plan p { overflow-wrap: anywhere; }

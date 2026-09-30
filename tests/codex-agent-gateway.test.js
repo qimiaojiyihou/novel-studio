@@ -59,8 +59,8 @@ function createFakeGateway({ promptBehavior, repository, onGlobalEvent, shouldAu
   }
 }
 
-test('model diagnostics read GPT6 capabilities and release the session without a creative prompt', async () => {
-  const options = [{ id: 'model', type: 'select', currentValue: 'old', options: [{ value: 'old' }, { value: 'gpt-6-astra', name: 'GPT-6 Astra' }] },
+test('model diagnostics read GPT6.1 capabilities and release the session without a creative prompt', async () => {
+  const options = [{ id: 'model', type: 'select', currentValue: 'old', options: [{ value: 'old' }, { value: 'gpt-6.1-sol', name: 'GPT-6.1 Sol' }] },
     { id: 'reasoning_effort', type: 'select', currentValue: 'high', options: [{ value: 'high' }, { value: 'xhigh' }] },
     { id: 'fast-mode', type: 'select', currentValue: 'off', options: [{ value: 'off' }, { value: 'on' }] }]
   const { gateway, connection, getPromptRequests } = createFakeGateway({ sessionOptions: options })
@@ -71,11 +71,11 @@ test('model diagnostics read GPT6 capabilities and release the session without a
     return { configOptions: structuredClone(options) }
   }
   try {
-    const result = await gateway.testConnection({ cwd: os.tmpdir(), model: 'gpt-6-astra', reasoningEffort: 'xhigh', fastMode: false })
-    assert.equal(result.selected.model, 'gpt-6-astra')
+    const result = await gateway.testConnection({ cwd: os.tmpdir(), model: 'gpt-6.1-sol', reasoningEffort: 'xhigh', fastMode: false })
+    assert.equal(result.selected.model, 'gpt-6.1-sol')
     assert.equal(result.selected.reasoningEffort, 'xhigh')
     assert.equal(result.selected.fastMode, false)
-    assert.equal(result.models.find(model => model.value === 'gpt-6-astra').status, 'available')
+    assert.equal(result.models.find(model => model.value === 'gpt-6.1-sol').status, 'available')
     assert.equal(closed, 1)
     assert.equal(getPromptRequests().length, 0)
   } finally { await gateway.shutdown() }

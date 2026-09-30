@@ -5,28 +5,60 @@ const MAX_RECEIPT_BATCH = 10
 const MAX_CHUNK_CHARS = 16000
 
 export function compactRequestReceipts(database, { limit = MAX_RECEIPT_BATCH } = {}) {
+  // New/late-completing receipts are queued by triggers. Legacy rows are visited
+  // once, in bounded rowid pages; compressed multi-megabyte rows are not rescanned.
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS receipt_compaction_queue (request_id TEXT PRIMARY KEY);
+    CREATE TABLE IF NOT EXISTS receipt_compaction_cursor (id INTEGER PRIMARY KEY CHECK(id=1), last_rowid INTEGER NOT NULL);
+    INSERT OR IGNORE INTO receipt_compaction_cursor VALUES (1,0);
+    CREATE TRIGGER IF NOT EXISTS receipt_compaction_insert AFTER INSERT ON creative_requests
+      WHEN NEW.status='completed' AND length(NEW.result_json)>=4096 AND substr(NEW.result_json,1,${RECEIPT_PREFIX.length})<>'${RECEIPT_PREFIX}'
+      BEGIN INSERT OR IGNORE INTO receipt_compaction_queue VALUES (NEW.id); END;
+    CREATE TRIGGER IF NOT EXISTS receipt_compaction_update AFTER UPDATE OF status,result_json ON creative_requests
+      WHEN NEW.status='completed' AND length(NEW.result_json)>=4096 AND substr(NEW.result_json,1,${RECEIPT_PREFIX.length})<>'${RECEIPT_PREFIX}'
+      BEGIN INSERT OR IGNORE INTO receipt_compaction_queue VALUES (NEW.id); END;
+    CREATE TRIGGER IF NOT EXISTS receipt_compaction_delete AFTER DELETE ON creative_requests
+      BEGIN DELETE FROM receipt_compaction_queue WHERE request_id=OLD.id; END;
+  `)
+  const cursor = database.prepare('SELECT last_rowid FROM receipt_compaction_cursor WHERE id=1').get().last_rowid
+  const legacy = database.prepare(`SELECT rowid,id FROM creative_requests WHERE rowid>? ORDER BY rowid LIMIT 100`).all(cursor)
+  database.exec('BEGIN IMMEDIATE')
+  try {
+    if (legacy.length) {
+      database.prepare(`INSERT OR IGNORE INTO receipt_compaction_queue SELECT id FROM creative_requests
+        WHERE rowid>? AND rowid<=? AND status='completed' AND length(result_json)>=4096
+        AND substr(result_json,1,?)<>?`).run(cursor, legacy.at(-1).rowid, RECEIPT_PREFIX.length, RECEIPT_PREFIX)
+      database.prepare('UPDATE receipt_compaction_cursor SET last_rowid=? WHERE id=1').run(legacy.at(-1).rowid)
+    }
+    database.exec('COMMIT')
+  } catch (error) { database.exec('ROLLBACK'); throw error }
   const rows = database.prepare(`
-    SELECT id, result_json FROM creative_requests
-    WHERE status = 'completed' AND length(result_json) >= 4096
-      AND substr(result_json, 1, ?) <> ?
-    ORDER BY created_at, rowid LIMIT ?
-  `).all(RECEIPT_PREFIX.length, RECEIPT_PREFIX, Math.max(1, Math.min(MAX_RECEIPT_BATCH, limit)))
-  if (!rows.length) return { scanned: 0, compressed: 0, bytesBefore: 0, bytesAfter: 0 }
+    SELECT queue.request_id AS id, request.status, request.result_json FROM receipt_compaction_queue queue
+    LEFT JOIN creative_requests request ON request.id=queue.request_id LIMIT ?
+  `).all(Math.max(1, Math.min(MAX_RECEIPT_BATCH, limit)))
+  if (!rows.length) return { scanned: legacy.length, compressed: 0, bytesBefore: 0, bytesAfter: 0 }
   const updates = rows.map(row => ({ id: row.id, before: row.result_json,
-    after: compressStoredReceipt(row.result_json) }))
+    after: row.status === 'completed' && row.result_json ? compressStoredReceipt(row.result_json) : null }))
   database.exec('BEGIN IMMEDIATE')
   try {
     const update = database.prepare("UPDATE creative_requests SET result_json=? WHERE id=? AND status='completed' AND result_json=?")
     let compressed = 0, bytesBefore = 0, bytesAfter = 0
     for (const row of updates) {
+      if (!row.after || row.after === row.before) {
+        database.prepare(`DELETE FROM receipt_compaction_queue WHERE request_id=? AND NOT EXISTS (
+          SELECT 1 FROM creative_requests WHERE id=? AND status='completed' AND length(result_json)>=4096
+            AND substr(result_json,1,?)<>?)`).run(row.id, row.id, RECEIPT_PREFIX.length, RECEIPT_PREFIX)
+        continue
+      }
       const result = update.run(row.after, row.id, row.before)
       if (!result.changes) continue
+      database.prepare('DELETE FROM receipt_compaction_queue WHERE request_id=?').run(row.id)
       compressed += 1
       bytesBefore += Buffer.byteLength(row.before)
       bytesAfter += Buffer.byteLength(row.after)
     }
     database.exec('COMMIT')
-    return { scanned: rows.length, compressed, bytesBefore, bytesAfter }
+    return { scanned: rows.length + legacy.length, compressed, bytesBefore, bytesAfter }
   } catch (error) {
     database.exec('ROLLBACK')
     throw error
@@ -47,9 +79,9 @@ function eventText(row) {
 }
 
 export function compactCompletedEventBatch(database, { limit = MAX_EVENT_BATCH, maxChunkChars = MAX_CHUNK_CHARS, now = () => new Date().toISOString() } = {}) {
-  database.exec('BEGIN IMMEDIATE')
-  try {
-    const run = database.prepare(`
+  // Finding the next stream may examine many completed runs. Do this without
+  // taking the writer lock; recheck its cursor/status inside the short batch.
+  const run = database.prepare(`
       SELECT r.id, COALESCE(state.last_sequence, 0) AS cursor
       FROM agent_runs r LEFT JOIN agent_event_compaction_state state ON state.agent_run_id = r.id
       WHERE r.status = 'completed' AND EXISTS (
@@ -58,14 +90,21 @@ export function compactCompletedEventBatch(database, { limit = MAX_EVENT_BATCH, 
       )
       ORDER BY r.updated_at, r.id LIMIT 1
     `).get()
-    if (!run) {
+  const idle = { runId: '', scanned: 0, removed: 0, lastSequence: 0 }
+  if (!run) return idle
+  database.exec('BEGIN IMMEDIATE')
+  try {
+    const current = database.prepare(`SELECT r.status,COALESCE(state.last_sequence,0) AS cursor FROM agent_runs r
+      LEFT JOIN agent_event_compaction_state state ON state.agent_run_id=r.id WHERE r.id=?`).get(run.id)
+    if (current?.status !== 'completed' || current.cursor !== run.cursor) {
       database.exec('COMMIT')
-      return { runId: '', scanned: 0, removed: 0, lastSequence: 0 }
+      return idle
     }
     const rows = database.prepare(`
       SELECT id, sequence, agent_step_id, event_type, payload_json
       FROM agent_events WHERE agent_run_id = ? AND sequence > ? ORDER BY sequence LIMIT ?
     `).all(run.id, run.cursor, Math.max(1, Math.min(MAX_EVENT_BATCH, limit)))
+    if (!rows.length) { database.exec('COMMIT'); return idle }
     const update = database.prepare(`UPDATE agent_events SET summary=?, payload_json=?, byte_size=? WHERE id=? AND agent_run_id=?`)
     const remove = database.prepare(`DELETE FROM agent_events WHERE agent_run_id=? AND agent_step_id IS ?
       AND event_type='text_delta' AND sequence>=? AND sequence<?`)

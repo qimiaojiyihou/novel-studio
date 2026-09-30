@@ -6,8 +6,14 @@ export const appService = {
   creativePreferences(payload) { return electronApi.creativePreferences(payload) },
   upgradeCreativePack(payload) { return electronApi.upgradeCreativePack(payload) },
   loadWorkspace(projectId) {
-    return electronApi.loadWorkspace(projectId)
+    return electronApi.loadWorkspaceCatalog({ projectId })
   },
+  getWorkspaceChapter(payload) { return electronApi.getWorkspaceChapter(payload) },
+  getStorageStatus() { return electronApi.getStorageStatus() },
+  chooseStorageDirectory() { return electronApi.chooseStorageDirectory() },
+  cancelStorageMigration() { return electronApi.cancelStorageMigration() },
+  openStorageDirectory() { return electronApi.openStorageDirectory() },
+  restartForStorageMigration() { return electronApi.restartForStorageMigration() },
   listProjects() {
     return electronApi.listProjects()
   },
@@ -231,6 +237,10 @@ export const appService = {
     return electronApi.testCodex(payload)
   },
   getCodexModels(payload) { return electronApi.getCodexModels(payload) },
+  getCodexComponentStatus() { return electronApi.getCodexComponentStatus() },
+  checkCodexComponents() { return electronApi.checkCodexComponents() },
+  updateCodexComponents() { return electronApi.updateCodexComponents() },
+  rollbackCodexComponents(payload) { return electronApi.rollbackCodexComponents(payload) },
   listStyleSamples(payload) { return electronApi.listStyleSamples(payload) },
   saveStyleSample(payload) { return electronApi.saveStyleSample(payload) },
   listProtections(payload) { return electronApi.listProtections(payload) },
