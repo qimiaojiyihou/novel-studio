@@ -1,7 +1,11 @@
 <!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#416e67"><meta name="apple-mobile-web-app-capable" content="yes"><title>Novel Studio · 阅读</title><link rel="manifest" href="/manifest.webmanifest"><link rel="icon" href="/icon.svg" type="image/svg+xml"><link rel="stylesheet" href="/reader.css"></head>
 <body>
-  <main id="shelf" class="shelf"><header class="shelf-header"><span class="imprint">NOVEL STUDIO / 阅读</span><h1>把故事带在身边。</h1><p>作者发布的最新稿件，随时继续阅读。</p><button id="logout" hidden>退出登录</button></header><section id="books" aria-label="书架"></section></main>
+  <main id="shelf" class="shelf">
+    <header class="shelf-header"><div class="shelf-brand"><span class="shelf-mark" aria-hidden="true">NS</span><div><span class="imprint">NOVEL STUDIO</span><h1>我的书架</h1></div></div><button id="logout" class="quiet-button" hidden>退出登录</button></header>
+    <div class="shelf-tools"><input id="book-search" type="search" placeholder="搜索书名或题材" aria-label="搜索书籍"><select id="book-sort" aria-label="书架排序"><option value="updated">最近更新</option><option value="title">书名排序</option></select></div>
+    <p id="shelf-summary" class="shelf-summary" role="status"></p><section id="books" aria-label="书架"></section>
+  </main>
   <section id="login" class="login" hidden><form id="login-form"><span class="imprint">NOVEL STUDIO / 阅读</span><h1>进入书架</h1><p>此阅读站需要作者提供的账号。</p><label>账号<input name="username" autocomplete="username" maxlength="64" required></label><label>密码<input name="password" type="password" autocomplete="current-password" maxlength="256" required></label><button type="submit">登录阅读</button><p id="login-error" role="alert"></p></form></section>
   <section id="reader" class="reader" hidden aria-label="小说阅读">
     <header class="reader-heading"><span id="chapter-label"></span><button id="update" hidden>本书有新版 · 更新</button></header>
@@ -9,12 +13,18 @@
     <footer class="reader-footer"><span id="book-label"></span><span id="progress"></span></footer>
     <div id="reading-menu" class="reading-menu" hidden>
       <nav><button id="back">书架</button><button id="directory">目录</button><button id="menu-close">继续阅读</button></nav>
-      <div class="reading-controls"><label>字号<input id="font-size" type="range" min="16" max="30" step="1"></label><label>行距<select id="line-height"><option value="1.6">紧凑</option><option value="1.85">适中</option><option value="2.1">宽松</option></select></label><label>字体<select id="font-family"><option value="serif">宋体</option><option value="sans-serif">黑体</option></select></label><label>主题<select id="theme"><option value="light">浅色</option><option value="paper">护眼</option><option value="dark">夜间</option></select></label></div>
+      <div class="reading-controls"><label>字号<input id="font-size" type="range" min="16" max="30" step="1"></label><label>行距<select id="line-height"><option value="1.6">紧凑</option><option value="1.85">适中</option><option value="2.1">宽松</option></select></label><label>字体<select id="font-family"><option value="serif">宋体</option><option value="sans-serif">黑体</option></select></label><label>主题<select id="theme"><option value="light">浅色</option><option value="paper">护眼</option><option value="dark">夜间</option></select></label><label>翻页效果<select id="page-effect"><option value="slide">平移</option><option value="none">无动画</option></select></label></div>
       <div class="chapter-navigation"><button id="previous">上一章</button><button id="next">下一章</button></div>
       <small>左右滑动或点击两侧翻页 · 点击中央打开菜单<br>阅读位置保存在本机浏览器；不缓存离线书稿。</small>
     </div>
   </section>
-  <dialog id="toc"><header><h2>章节目录</h2><button id="toc-close" aria-label="关闭目录">×</button></header><input id="toc-search" type="search" placeholder="搜索章号或章节名" aria-label="搜索章节"><div id="toc-list"></div><nav><button id="toc-prev">上一页</button><span id="toc-page"></span><button id="toc-next">下一页</button></nav></dialog>
+  <dialog id="toc" class="toc-dialog" aria-labelledby="toc-title">
+    <header><div><span id="toc-book" class="toc-book"></span><h2 id="toc-title">章节目录 <small id="toc-total"></small></h2></div><button id="toc-close" aria-label="关闭目录">×</button></header>
+    <div class="toc-tools"><input id="toc-search" type="search" placeholder="搜索章节名" aria-label="搜索章节"><div class="toc-jump"><input id="toc-number" type="number" min="1" inputmode="numeric" placeholder="章号" aria-label="跳转章号"><button id="toc-go">前往</button></div></div>
+    <div class="toc-navigation"><select id="toc-range" aria-label="选择章节范围"></select><button id="toc-current">当前章</button><button id="toc-order" aria-pressed="false">倒序</button></div>
+    <p id="toc-error" class="toc-error" role="alert" hidden></p>
+    <div id="toc-list" aria-label="章节列表"></div><nav class="toc-pagination"><button id="toc-prev">上一页</button><span id="toc-page" aria-live="polite"></span><button id="toc-next">下一页</button></nav>
+  </dialog>
   <p id="message" class="message" role="status" hidden></p>
   <script type="module" src="/reader.js"></script>
 </body></html>
