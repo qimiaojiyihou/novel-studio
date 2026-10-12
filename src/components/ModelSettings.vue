@@ -12,6 +12,7 @@
 
       <div class="settings-content">
         <StorageSettings />
+        <ReaderSettings />
         <section class="settings-block codex-agent-block">
           <div class="settings-block-heading">
             <div>
@@ -274,6 +275,7 @@
 import { computed, reactive, ref, watch, onUnmounted } from 'vue'
 import { appService } from '../services/app-service.js'
 import StorageSettings from './StorageSettings.vue'
+import ReaderSettings from './ReaderSettings.vue'
 import { modelDirectory } from '../../electron/codex-models.js'
 import {
   normalizeRequestConfig,

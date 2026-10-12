@@ -1,6 +1,14 @@
 const { contextBridge, ipcRenderer } = require('electron')
 
 contextBridge.exposeInMainWorld('novelStudio', {
+  readerStatus: () => ipcRenderer.invoke('reader:status'),
+  readerSave: payload => ipcRenderer.invoke('reader:save', payload),
+  readerRemote: () => ipcRenderer.invoke('reader:remote'),
+  readerBookSave: payload => ipcRenderer.invoke('reader:book-save', payload),
+  readerPublish: projectId => ipcRenderer.invoke('reader:publish', projectId),
+  readerAccess: requireLogin => ipcRenderer.invoke('reader:access', requireLogin),
+  readerAccount: payload => ipcRenderer.invoke('reader:account', payload),
+  readerUnpublish: projectId => ipcRenderer.invoke('reader:unpublish', projectId),
   creativePreferences: (payload) => ipcRenderer.invoke('creative:preferences', payload),
   upgradeCreativePack: (payload) => ipcRenderer.invoke('creative:upgrade', payload),
   listStyleSamples: (payload) => ipcRenderer.invoke('authoring:samples', payload),

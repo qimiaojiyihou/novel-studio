@@ -1,0 +1,7 @@
+{
+  "name": "novel-studio-reader",
+  "private": true,
+  "type": "module",
+  "scripts": { "start": "node server.js" },
+  "engines": { "node": ">=24" }
+}

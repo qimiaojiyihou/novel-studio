@@ -1,4 +1,5 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, shell, safeStorage } from 'electron'
+import { createReaderPublisher } from './reader-publisher.js'
 import { applicationMenuTemplate } from './application-menu.js'
 import { CREATIVE_BUILD_ID } from './build-info.js'
 import { deleteProjectOffMainThread } from './project-deletion.js'
@@ -207,6 +208,19 @@ let creativeInterface = null
 let creativeServer = null
 let workDesignSync = null
 let zhuqueDetectionService = null
+let readerPublisher = null
+let readerSyncTimer = null
+
+function readerPublication() {
+  if (!readerPublisher) readerPublisher = createReaderPublisher(openDatabase(), {
+    encrypt(value) {
+      if (!safeStorage.isEncryptionAvailable()) throw new Error('系统密钥加密暂不可用，请稍后重试')
+      return safeStorage.encryptString(value).toString('base64')
+    },
+    decrypt(value) { return safeStorage.decryptString(Buffer.from(value, 'base64')) },
+  })
+  return readerPublisher
+}
 
 function zhuqueDetection() {
   if (!zhuqueDetectionService) zhuqueDetectionService = createZhuqueDetectionService(openDatabase(), { getApiKey: getZhuqueApiKey })
@@ -2710,11 +2724,41 @@ function registerIpc() {
     return run
   })
   ipcMain.handle('runtime:info', runtimeInfo)
+  ipcMain.handle('reader:status', () => readerPublication().status())
+  ipcMain.handle('reader:save', (_event, payload) => readerPublication().save(payload))
+  ipcMain.handle('reader:remote', () => readerPublication().remote())
+  ipcMain.handle('reader:book-save', (_event, payload) => readerPublication().saveBook(payload))
+  ipcMain.handle('reader:publish', async (_event, projectId) => {
+    const state = readerPublication().status(), book = state.projects.find(p => p.id === projectId)
+    if (!book?.scope) throw new Error('请先保存此书的发布设置')
+    const choice = await dialogOptions('showMessageBox', { type: 'question', title: '发布书籍到阅读站',
+      message: `发布《${book.title}》？`, detail: `目标：${state.origin}\n范围：${book.scope === 'all' ? '全部非空已保存正文，包含草稿' : '仅已定稿的非空正文'}\n手动发布会以此范围替换云端目录，排除的章节将撤下。正文将离开本机；设定、候选、检测和创作记录不上传。阅读权限按云端访问模式执行。`,
+      buttons: ['取消', '确认发布'], defaultId: 0, cancelId: 0 })
+    if (choice.response !== 1) return { cancelled: true }
+    return readerPublication().publish(projectId)
+  })
+  ipcMain.handle('reader:access', async (_event, requireLogin) => {
+    if (requireLogin === false) {
+      const choice = await dialogOptions('showMessageBox', { type: 'warning', title: '公开阅读站', message: '允许任何人免登录阅读已发布的全部书籍？',
+        detail: '链接可被转发；之后开启登录也不会撤回此前已被复制的正文。', buttons: ['取消', '开启免登录'], defaultId: 0, cancelId: 0 })
+      if (choice.response !== 1) return { cancelled: true }
+    }
+    return readerPublication().access(requireLogin)
+  })
+  ipcMain.handle('reader:account', (_event, payload) => readerPublication().account(payload))
+  ipcMain.handle('reader:unpublish', async (_event, projectId) => {
+    const book = readerPublication().status().projects.find(p => p.id === projectId)
+    if (!book) throw new Error('书籍不存在')
+    const choice = await dialogOptions('showMessageBox', { type: 'warning', title: '下架书籍', message: `从阅读站撤下《${book.title}》？`,
+      detail: '同时关闭此书自动同步；本机正文保持不变。', buttons: ['取消', '确认下架'], defaultId: 0, cancelId: 0 })
+    if (choice.response !== 1) return { cancelled: true }
+    return readerPublication().unpublish(projectId)
+  })
   const storageStatus = () => ({ ...readStorageConfig(app.getPath('userData')),
     directory: getLibraryDirectory(), databasePath: getDatabaseInfo().path,
     bootstrapDirectory: app.getPath('userData'), databaseBytes: fs.statSync(getDatabaseInfo().path).size })
   const assertStorageIdle = () => {
-    if (agentRuntime?.active?.size || modelGateway.hasActiveTasks() || activeBenchmarkControls.size || creativeMutationQueue.tails.size || pendingProjectDelete || creativeInterface?.inflight?.size) throw new Error('请等待当前创作、审稿或保存删除操作结束，再迁移书库')
+    if (agentRuntime?.active?.size || modelGateway.hasActiveTasks() || activeBenchmarkControls.size || creativeMutationQueue.tails.size || pendingProjectDelete || creativeInterface?.inflight?.size || readerPublisher?.isBusy()) throw new Error('请等待当前创作、审稿、发布或保存删除操作结束，再迁移书库')
   }
   ipcMain.handle('storage:status', storageStatus)
   ipcMain.handle('storage:choose', async () => {
@@ -2852,6 +2896,10 @@ app.whenReady().then(async () => {
   idleInlineTimer = setInterval(() => { void sweepIdleInlineRuns() }, 5 * 60 * 1000)
   idleInlineTimer.unref?.()
   registerIpc()
+  readerSyncTimer = setInterval(() => { if (readerPublisher) void readerPublisher.tick().catch(() => {}) }, 30_000)
+  readerSyncTimer.unref?.()
+  // Restore explicitly opted-in books on restart, not only after opening settings.
+  readerPublication()
   await initializeCreativeInterface()
   startGoService()
   createWindow()
@@ -2900,6 +2948,8 @@ app.on('before-quit', event => {
 })
 
 app.on('will-quit', () => {
+  if (readerSyncTimer) clearInterval(readerSyncTimer)
+  readerPublisher?.stop()
   if (idleInlineTimer) clearInterval(idleInlineTimer)
   if (codexComponentTimer) clearInterval(codexComponentTimer)
   storageMaintenanceStopped = true

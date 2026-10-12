@@ -3,6 +3,14 @@ import { toIpcPayload } from '../utils/ipc-payload.js'
 const electronApi = window.novelStudio
 
 export const appService = {
+  readerStatus() { return electronApi.readerStatus() },
+  readerSave(payload) { return electronApi.readerSave(toIpcPayload(payload)) },
+  readerRemote() { return electronApi.readerRemote() },
+  readerBookSave(payload) { return electronApi.readerBookSave(toIpcPayload(payload)) },
+  readerPublish(projectId) { return electronApi.readerPublish(projectId) },
+  readerAccess(requireLogin) { return electronApi.readerAccess(requireLogin) },
+  readerAccount(payload) { return electronApi.readerAccount(toIpcPayload(payload)) },
+  readerUnpublish(projectId) { return electronApi.readerUnpublish(projectId) },
   creativePreferences(payload) { return electronApi.creativePreferences(payload) },
   upgradeCreativePack(payload) { return electronApi.upgradeCreativePack(payload) },
   loadWorkspace(projectId) {

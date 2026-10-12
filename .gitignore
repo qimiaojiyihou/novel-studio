@@ -12,3 +12,5 @@ resources/codex-runtime/
 *.sqlite-shm
 *.sqlite-wal
 .DS_Store
+reader-service/data/
+reader-service/.env
