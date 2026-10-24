@@ -25,6 +25,14 @@ export function claudeResultError(message) {
   return new Error(detail)
 }
 
+export function claudeSdkLaunchOptions(executablePath, { execPath = process.execPath, electron = Boolean(process.versions.electron) } = {}) {
+  // Resolve npm/bun symlinks so the SDK recognizes cli.js as JavaScript rather
+  // than invoking the shebang through /usr/bin/env node on a GUI-only PATH.
+  const cliPath = fs.realpathSync(executablePath)
+  return { pathToClaudeCodeExecutable: cliPath, executable: execPath, executableArgs: [],
+    nodeEnvironment: electron && /\.(?:[cm]?js)$/i.test(cliPath) ? { ELECTRON_RUN_AS_NODE: '1' } : {} }
+}
+
 // Keep CLI authentication compatible without loading user hooks, permissions,
 // plugins, shell environment, or project settings into an embedded agent.
 export function claudeQueryEnvironment({ env = process.env, authMethod = 'cli', readFile = fs.readFileSync } = {}) {
@@ -130,9 +138,11 @@ export class ClaudeAgentGateway extends CodexAgentGateway {
     if (authMethod === 'environment' && !runtime.environmentAuthAvailable) throw new Error('未检测到 ANTHROPIC_API_KEY；请配置应用进程环境变量后重试')
     const env = claudeQueryEnvironment({ authMethod })
     const effort = normalizeClaudeEffort(reasoningEffort)
+    const launch = claudeSdkLaunchOptions(runtime.executablePath)
+    Object.assign(env, launch.nodeEnvironment)
     return {
-      pathToClaudeCodeExecutable: runtime.executablePath, cwd, env,
-      executable: 'node', executableArgs: [],
+      pathToClaudeCodeExecutable: launch.pathToClaudeCodeExecutable, cwd, env,
+      executable: launch.executable, executableArgs: launch.executableArgs,
       abortController, model: model || undefined, resume: resume || undefined,
       ...(effort ? { effort } : {}),
       ...(mirrorRoot && cwd !== mirrorRoot ? { additionalDirectories: [mirrorRoot] } : {}),

@@ -7,6 +7,7 @@ Claude Code 与 Codex、Qoder 并列，属于创作 Agent，而非普通 Claude 
 1. 安装官方 Claude Code，终端执行 `claude auth login` 完成登录。
 2. Novel Studio → 模型与任务路由 → Agent 提供方 → Claude Code。
 3. CLI 路径可留空自动检测（支持 PATH、`~/.local/bin`、`~/.bun/bin` 等），或填写实际可执行文件路径。
+   npm/bun 安装产生的脚本符号链接会解析到真实入口，并使用应用自带的 Node 运行时启动，避免启动台启动时依赖终端 PATH。
 4. 选择本机登录，或环境 API Key。后者要求启动应用的进程环境中有 `ANTHROPIC_API_KEY`；不将 Key 写入数据库或传给渲染器。本机登录模式排除继承的 API Key，避免意外切换计费方式。
 5. 点击“测试 Claude Code SDK / 刷新模型”。诊断仅读取本机认证元数据和模型目录，不发送模型请求，目录也不保证账号实际模型权限。
 6. 选择 Claude Code 默认模型与思考强度。模型目录和可用强度优先取 CLI 能力信息；较旧 CLI 未提供能力信息时，列出 SDK 档位供实际调用验证。支持模型默认、low、medium、high、xhigh、max；具体可用性以选中模型和服务返回为准。Claude 的强度单独保存，切换提供方不会覆盖 Codex 的推理设置。

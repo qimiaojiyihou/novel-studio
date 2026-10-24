@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 import { DatabaseSync } from 'node:sqlite'
-import { ClaudeAgentGateway, inspectClaudeRuntime, validateClaudeTool, claudeQueryEnvironment, normalizeClaudeEffort, claudeResultError } from '../electron/claude-agent-gateway.js'
+import { ClaudeAgentGateway, inspectClaudeRuntime, validateClaudeTool, claudeQueryEnvironment, normalizeClaudeEffort, claudeResultError, claudeSdkLaunchOptions } from '../electron/claude-agent-gateway.js'
 import { AgentGatewayRouter, normalizeAgentProvider, agentProviderLabel, agentProviderModel, agentProviderReasoningEffort } from '../electron/agent-gateway-router.js'
 import { createCodexRepository } from '../electron/codex-repository.js'
 import { AgentRuntime } from '../electron/agent-runtime.js'
@@ -46,6 +46,22 @@ test('Claude CLI discovery respects explicit paths and GUI known install directo
     assert.equal(inspectClaudeRuntime({ env: { PATH: f.root, HOME: f.root } }).executablePath, f.executablePath)
     const bin = path.join(f.root, '.bun/bin'); fs.mkdirSync(bin, { recursive: true }); fs.copyFileSync(f.executablePath, path.join(bin, 'claude'))
     assert.equal(inspectClaudeRuntime({ env: { PATH: '', HOME: f.root } }).executablePath, path.join(bin, 'claude'))
+  } finally { f.cleanup() }
+})
+
+test('Claude npm/bun symlinks use the current Node runtime instead of relying on a GUI PATH', () => {
+  const f = fixture()
+  try {
+    const cli = path.join(f.root, 'cli.js')
+    fs.writeFileSync(cli, '// synthetic CLI')
+    const selected = path.join(f.root, 'selected-claude')
+    fs.symlinkSync(cli, selected)
+    const launch = claudeSdkLaunchOptions(selected, { execPath: '/synthetic/Novel Studio', electron: true })
+    assert.equal(launch.pathToClaudeCodeExecutable, fs.realpathSync(cli))
+    assert.equal(launch.executable, '/synthetic/Novel Studio')
+    assert.deepEqual(launch.nodeEnvironment, { ELECTRON_RUN_AS_NODE: '1' })
+    assert.deepEqual(claudeSdkLaunchOptions(f.executablePath, { electron: true }).nodeEnvironment, {})
+    assert.deepEqual(claudeSdkLaunchOptions(selected, { electron: false }).nodeEnvironment, {})
   } finally { f.cleanup() }
 })
 
@@ -259,7 +275,7 @@ test('Claude runtime changes only apply to new runs, never to a resumed active r
     await gateway.prompt(input(f))
     gateway.useConfiguredPath('/missing-new-cli')
     await gateway.prompt(input(f))
-    assert.deepEqual(paths, [f.executablePath, f.executablePath])
+    assert.deepEqual(paths, [fs.realpathSync(f.executablePath), fs.realpathSync(f.executablePath)])
     await assert.rejects(gateway.prompt({ ...input(f), agentRunId: 'new-run' }), /CLI 未找到/)
   } finally { await gateway.shutdown(); f.cleanup() }
 })
