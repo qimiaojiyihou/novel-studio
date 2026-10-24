@@ -266,6 +266,7 @@ export const appService = {
   openCodexProject(projectId) {
     return electronApi.openCodexProject(projectId)
   },
+  openClaudeProject(projectId) { return electronApi.openClaudeProject(projectId) },
   getWorkDesignSync(projectId) { return electronApi.getWorkDesignSync(projectId) },
   bindWorkDesignSync(payload) { return electronApi.bindWorkDesignSync(payload) },
   getWorkDesignPrompt(payload) { return electronApi.getWorkDesignPrompt(payload) },

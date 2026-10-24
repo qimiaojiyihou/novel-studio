@@ -2,12 +2,20 @@ services:
   novel-reader:
     build: .
     restart: unless-stopped
+    init: true
+    read_only: true
+    pids_limit: 256
+    tmpfs:
+      - /tmp:size=256m,mode=1777
     ports:
       - "127.0.0.1:3080:3080"
     environment:
       READER_ORIGIN: https://txt.zhijianku.com
+      READER_ALLOW_EMBEDDING: "true"
       READER_ADMIN_TOKEN: ${READER_ADMIN_TOKEN:?请先设置随机发布凭据}
       READER_DATA_DIR: /app/data
+      XDG_CONFIG_HOME: /tmp/browser-config
+      XDG_CACHE_HOME: /tmp/browser-cache
     volumes:
       - ./data:/app/data
     mem_limit: 512m

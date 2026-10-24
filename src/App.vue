@@ -21,7 +21,7 @@
         </span>
         <span class="save-label" :class="saveState">{{ saveLabel }}</span>
         <button v-if="externalChange" type="button" class="topbar-tool" @click="refreshExternalWorkspace">本书任务有更新</button>
-        <button v-if="inlineRunId" class="topbar-tool inline-run-top-button" :class="inlineRunStatus" title="打开当前 Codex 就地任务" @click="inlinePanelOpen = true"><AppIcon name="codex" :size="15" /><span>Codex</span></button>
+        <button v-if="inlineRunId" class="topbar-tool inline-run-top-button" :class="inlineRunStatus" title="打开当前 Agent 就地任务" @click="inlinePanelOpen = true"><AppIcon name="codex" :size="15" /><span>{{ creativeAgentLabel(inlineRun?.modelRoutes?.agentProvider) }}</span></button>
         <button class="topbar-tool story-change-top-button" :class="storyChangeRunStatus" title="设定联动修改与历史" @click="openStoryChangeHistory"><AppIcon name="change" :size="15" /><span>联动</span></button>
         <button class="topbar-tool quality-top-button" title="创作质量中心" @click="qualityCenterOpen = true"><AppIcon name="quality" :size="15" /><span>质检</span></button>
         <button class="icon-button history-button" aria-label="生成记录" title="生成记录" @click="openGenerationHistory"><AppIcon name="history" :size="18" /></button>
@@ -62,6 +62,7 @@
               <button @click="openEditProject(item)">编辑项目信息</button>
               <button @click="openWorkDesignSync(item)">同步 ChatGPT Work 设计</button>
               <button @click="openBookInCodex(item)">准备并打开 Codex 专属任务</button>
+              <button @click="openBookInClaude(item)">打开 Claude Code 书籍目录</button>
               <button @click="exportBookFile(item)">导出 Word 书籍</button>
               <button @click="openProjectTransfer(item)">导入与导出</button>
               <button @click="askArchiveProject(item)">归档项目</button>
@@ -266,7 +267,7 @@
             @mousedown.stop
           >
             <span class="selection-caption">已选 {{ selectionTools.text.length }} 字</span>
-            <select v-model="selectionExecutionMode" class="selection-execution-mode" title="本次局部重写执行方式"><option value="app_model">任务模型</option><option value="codex">Codex</option></select>
+            <select v-model="selectionExecutionMode" class="selection-execution-mode" title="本次局部重写执行方式"><option value="app_model">任务模型</option><option value="codex">{{ agentLabel }}</option></select>
             <button
               v-for="preset in REWRITE_PRESETS"
               :key="preset.id"
@@ -526,7 +527,7 @@
           <CreativeExecutionControl compact :default-mode="defaultExecutionMode" :app-model-label="modelName('planning_field')" action-label="完善项目文风" @execute="requestProjectDraft('style', '项目文风', $event)" />
           <small>生成结果只填入此对话框，点击“保存修改”后才进入项目。</small>
         </div>
-        <label class="project-execution-choice"><span>默认创作执行方式</span><select v-model="editProjectDraft.default_execution_mode"><option value="app_model">应用模型路由</option><option value="codex">Codex · ACP 优先</option></select><small>所有分裂生成按钮会默认使用这里的选择；下拉菜单仍可只覆盖单次调用。</small></label>
+        <label class="project-execution-choice"><span>默认创作执行方式</span><select v-model="editProjectDraft.default_execution_mode"><option value="app_model">应用模型路由</option><option value="codex">{{ agentLabel }} · 创作 Agent</option></select><small>所有分裂生成按钮会默认使用这里的选择；下拉菜单仍可只覆盖单次调用。Agent 提供方在模型设置中选择。</small></label>
         <div class="project-dialog-actions">
           <button type="button" @click="editProjectOpen = false">取消</button>
           <button type="submit" :disabled="workspaceActionPending">{{ workspaceActionPending ? '正在保存…' : '保存修改' }}</button>
@@ -586,7 +587,7 @@
 </template>
 
 <script setup>
-import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, provide, reactive, ref, watch } from 'vue'
 const DiffReview = defineAsyncComponent(() => import('./components/DiffReview.vue'))
 import AppIcon from './components/AppIcon.vue'
 import ApprovalDrawer from './components/ApprovalDrawer.vue'
@@ -606,6 +607,7 @@ import ProjectBriefFields from './components/ProjectBriefFields.vue'
 import QualityCenter from './components/QualityCenter.vue'
 import { composeGenerationCandidate } from './utils/generation-intents.js'
 import { creativeRoutePresentation, draftDigest, projectExecutionMode } from './utils/inline-creative.js'
+import { creativeAgentLabel } from './utils/agent-provider.js'
 import { formatManuscript, MANUSCRIPT_FORMAT_OPTIONS } from './utils/manuscript-formatting.js'
 import ScenePlanEditor from './components/ScenePlanEditor.vue'
 import CreativeCandidateEditor from './components/CreativeCandidateEditor.vue'
@@ -821,6 +823,8 @@ const selectionPreview = reactive({
 const candidate = reactive({ visible: false, original: '', content: '', title: '', subtitle: '', hint: '', language: 'markdown', task: '', candidateId: '', targetTab: 'manuscript' })
 const streamPreview = reactive({ visible: false, task: '', status: '', content: '', gateway: 'embedded' })
 const runtime = reactive({ goServiceStatus: 'embedded-fallback', mode: 'embedded' })
+provide('creative-agent-provider', computed(() => runtime.agentProvider || 'codex'))
+const agentLabel = computed(() => creativeAgentLabel(runtime.agentProvider))
 const project = reactive({ title: '', genre: '', idea: '', style: '', default_execution_mode: 'app_model' })
 const modelSettings = reactive({ profiles: [], routes: {} })
 const modelProfileSaveState = reactive({ state: 'idle', message: '' })
@@ -907,6 +911,7 @@ function modelDetail(task) {
 function executionRoute(task) {
   return creativeRoutePresentation({
     project,
+    agentProvider: runtime.agentProvider || 'codex',
     taskModelName: modelName(task),
     taskModelDetail: modelDetail(task),
   })
@@ -1187,6 +1192,15 @@ async function openBookInCodex(item = project) {
   } catch (error) {
     showToast(`打开 Codex 项目失败：${error.message}`)
   }
+}
+
+async function openBookInClaude(item = project) {
+  projectActionId.value = ''
+  projectMenuOpen.value = false
+  try {
+    await appService.openClaudeProject(item.id)
+    showToast(`已打开《${item.title}》的 Claude Code 独立项目目录；应用内创作会话按本书归类`)
+  } catch (error) { showToast(`打开 Claude Code 书籍目录失败：${error.message}`) }
 }
 
 async function openWorkDesignSync(item = project) {
@@ -1819,7 +1833,7 @@ async function startInlineCodex(action = {}) {
     })
   }
   inlinePanelOpen.value = true
-  const executionLabel = run.executionMode === 'codex' ? (run.modelRoutes?.agentProvider === 'qoder' ? 'Qoder' : 'Codex') : '任务模型'
+  const executionLabel = run.executionMode === 'codex' ? creativeAgentLabel(run.modelRoutes?.agentProvider) : '任务模型'
   const targetKind = run.steps?.[0]?.input?.target?.kind || request.target?.kind || ''
   const scopeLabel = targetKind === 'planning_document_bundle' ? '这一页' : targetKind === 'planning_entity_bundle' ? '这张卡' : targetKind === 'planning_chapter_bundle' ? '这一章规划' : '当前目标'
   const batchLabel = targetKind === 'planning_document_bundle' ? '整页' : targetKind === 'planning_entity_bundle' ? '整卡' : targetKind === 'planning_chapter_bundle' ? '整章规划' : '就地'

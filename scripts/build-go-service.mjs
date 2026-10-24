@@ -14,7 +14,12 @@ const targets = [
   { platform: 'linux', arch: 'x64', goos: 'linux', goarch: 'amd64', extension: '' },
 ]
 
-for (const target of targets) {
+const selectedTargets = process.env.NOVEL_STUDIO_TARGET
+  ? targets.filter(target => `${target.platform}-${target.arch}` === process.env.NOVEL_STUDIO_TARGET)
+  : targets
+if (!selectedTargets.length) throw new Error(`Unsupported Go service target: ${process.env.NOVEL_STUDIO_TARGET}`)
+
+for (const target of selectedTargets) {
   const outputDirectory = path.join(outputRoot, `${target.platform}-${target.arch}`)
   fs.mkdirSync(outputDirectory, { recursive: true })
   const outputFile = path.join(outputDirectory, `novel-studio-service${target.extension}`)

@@ -18,6 +18,7 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - run: npm ci --prefix reader-service --ignore-scripts
       - run: npm run build:creative-packs
       - run: npm run build:codex
       - run: npm run verify:codex

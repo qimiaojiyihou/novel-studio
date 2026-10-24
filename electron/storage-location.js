@@ -3,7 +3,7 @@ import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 
 export const LIBRARY_DATABASE = 'novel-studio.sqlite'
-export const LIBRARY_ASSETS = ['codex-projects', 'codex-workspaces', 'backups', 'service-data']
+export const LIBRARY_ASSETS = ['codex-projects', 'codex-workspaces', 'claude-projects', 'claude-workspaces', 'backups', 'service-data']
 const CONFIG_NAME = 'library-location.json'
 const JOB_ID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i
 

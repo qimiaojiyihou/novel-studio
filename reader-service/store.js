@@ -84,6 +84,9 @@ export function openReaderStore(file, { now = () => Date.now() } = {}) {
   function authenticated(token) {
     return Boolean(token && one('SELECT s.token_hash FROM sessions s JOIN accounts a ON a.username=s.username WHERE s.token_hash=? AND s.expires>? AND a.disabled=0', digest(token), now()))
   }
+  function readerAccount(token) {
+    return token ? one('SELECT s.username FROM sessions s JOIN accounts a ON a.username=s.username WHERE s.token_hash=? AND s.expires>? AND a.disabled=0', digest(token), now())?.username || null : null
+  }
   function book(bookId) {
     const row = one('SELECT * FROM books WHERE id=?', id(bookId))
     if (!row) fail(404, '书籍已下架或尚未发布')
@@ -149,7 +152,7 @@ export function openReaderStore(file, { now = () => Date.now() } = {}) {
     })
   }
   return {
-    db, close: () => db.close(), access, saveAccount, login, authenticated, stage, upload, commit,
+    db, close: () => db.close(), access, saveAccount, login, authenticated, readerAccount, stage, upload, commit,
     logout: token => run('DELETE FROM sessions WHERE token_hash=?', digest(token || '')),
     setAccess(requireLogin) {
       if (typeof requireLogin !== 'boolean') fail(400, '访问模式无效')

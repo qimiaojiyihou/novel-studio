@@ -1,0 +1,68 @@
+{
+  "date": "2026-10-15",
+  "scope": "服务器网络出口；112 个捆绑默认书源；独立临时数据库，不读取或修改用户账号书源",
+  "query": "斗破苍穹",
+  "sourcePackVersion": "exportBookSource-compat-c32c5acfeb4773ea-health-20261015",
+  "auditArchiveSha256": "e69e8de12db880710ae0de3730eacfe7c7c5ba01d5980656778642f5ef8663b2",
+  "serverLog": "/opt/novel-reader/audits/diagnostics-20261015/results.jsonl",
+  "resultCount": 112,
+  "summary": {
+    "healthy": 0,
+    "review": 34,
+    "unreachable": 51,
+    "suspect": 14,
+    "empty": 10,
+    "restricted": 3
+  },
+  "details": {
+    "ORIGIN_BLOCKED": 31,
+    "HTTP_410": 1,
+    "HTTP_404": 13,
+    "CONNECTION_FAILED": 5,
+    "DNS_NOT_FOUND": 2,
+    "CONNECT_TIMEOUT": 28,
+    "HEADERS_TIMEOUT": 1,
+    "TLS_FAILED": 10,
+    "DNS_TIMEOUT": 2,
+    "HTTP_503": 1,
+    "HTTP_429": 1,
+    "TLS_TIMEOUT": 2,
+    "HTTP_403": 2,
+    "noCode": 13
+  },
+  "redirectChecks": [
+    {
+      "origin": "http://www.1biqug.com",
+      "target": "https://www.1biqug.com",
+      "result": "首页和搜索均返回 403；未添加默认允许域名"
+    },
+    {
+      "origin": "http://www.txt101.com",
+      "target": "https://www.txtxs101.com",
+      "homepageTitle": "TXT全本完结言情小说网-101言情小说",
+      "result": "首页通过新版解压支持读取；页面表单为 POST /book/search.aspx，key 字段；旧 GET 和实际表单 POST 搜索均返回 404；未标记修复，未更新默认地址"
+    },
+    {
+      "origin": "https://www.tysk.cc",
+      "target": "https://ty.wunpu.com",
+      "homepageTitle": "天涯在线书库_世界经典文学著作在线阅读",
+      "result": "首页可读，搜索 403；未添加默认允许域名"
+    }
+  ],
+  "ruleChecks": [
+    {
+      "name": "一七小说",
+      "result": "搜索匹配 20 项；目录地址返回 HTTP 200 的站点错误页，无章节链接，不据此盲改选择器"
+    },
+    {
+      "name": "种田小说",
+      "result": "首轮搜索匹配 10 项、目录 1519 项，但正文为空；后续只读复核请求返回 404，尚未证明修复"
+    },
+    {
+      "name": "基友书屋1",
+      "result": "搜索匹配 2 项、目录 100 项；章节请求带 webView:true 选项，当前服务端抓取流程尚未兼容，未静默移除该选项"
+    }
+  ],
+  "deletions": [],
+  "limitations": "单关键词、首个搜索结果及首章的抽样；失败不等于永久失效。没有关闭证书验证、绕过人机验证、轮换出口或扩大默认跨域范围。完整原始分类日志保存在服务器，不保存正文。"
+}

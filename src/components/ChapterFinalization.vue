@@ -12,7 +12,7 @@
         <ChapterAmendment :project-id="projectId" :chapter-id="chapterId" :disabled="busy" @busy="amendmentBusy = $event" @completed="amendmentCompleted" />
         <p>此方式会审稿并生成交接，确认后供后续章节使用；若要跳过，请在上方选择“人工直接定稿”。</p>
         <p class="finalize-tip">建议先集中完成正文修改，再做一次独立审稿。下方“本地检查”不调用模型；正文变化后，旧报告保留作参考，新稿另行检查。</p>
-        <label>独立审稿方式<select v-model="reviewerChoice" :disabled="busy" @change="reviewerTouched = true"><option value="route">使用质量评审路由</option><option value="codex">Codex · 新会话</option><option v-for="profile in settings.profiles.filter(p => p.enabled)" :key="profile.id" :value="profile.id">{{ profile.name }} · {{ profile.model }}</option></select></label>
+        <label>独立审稿方式<select v-model="reviewerChoice" :disabled="busy" @change="reviewerTouched = true"><option value="route">使用质量评审路由</option><option value="codex">{{ agentLabel }} · 新会话</option><option v-for="profile in settings.profiles.filter(p => p.enabled)" :key="profile.id" :value="profile.id">{{ profile.name }} · {{ profile.model }}</option></select></label>
         <p v-if="record" class="reviewer-lock"><span>当前任务</span><strong>{{ record.reviewer?.label }}</strong><em v-if="selectionDiffers">切换后会取消当前任务，并用所选审稿器重新检查</em></p>
         <button class="primary-button" :disabled="busy" @click="start">{{ startLabel }}</button>
         <button v-if="record?.status === 'ready_for_review' && !selectionDiffers" class="primary-button review-ready" :disabled="busy" @click="confirm('start-review')">集中修改已完成，开始独立审稿</button>
@@ -36,7 +36,7 @@
           </section>
           <details v-if="!record.checks?.manualFinalization" class="finalize-result" :open="!handoffActive"><summary><span><strong>本地检查</strong><small>不调用模型</small></span><em>✓ 已完成</em></summary><div class="result-body"><p>{{ record.checks?.hanCount }} 中文字</p><p v-if="!record.checks?.findings?.length">未发现本地可检测的格式异常；这不代表文学质量已通过。</p><article v-for="(finding, index) in record.checks?.findings" :key="index"><strong>{{ finding.reason }}</strong><blockquote v-if="finding.evidence">{{ finding.evidence }}</blockquote></article></div></details>
           <details v-if="record.review?.scores" class="finalize-result" :open="!handoffActive"><summary><span><strong>独立审稿</strong><small>{{ record.review.issues?.length || 0 }} 项建议</small></span><em>✓ 已完成</em></summary><div class="result-body"><p>{{ record.review.summary }}</p><article v-for="(issue, index) in record.review.issues" :key="index"><strong>{{ issue.severity }} · {{ issue.category || issue.reason }}</strong><blockquote>{{ issue.evidence }}</blockquote><p>{{ issue.criterion || issue.reason }}</p><p>{{ issue.repairInstruction || issue.suggestion }}</p></article><p v-if="!record.review.issues?.length">审稿未列出问题；请仍按自己的阅读感受决定。</p></div></details>
-          <section v-for="approval in approvals" :key="approval.id"><strong>{{ approval.permission || 'Codex 本次调用审批' }}</strong><p>{{ approval.actionType }} · {{ approval.severity }}</p><button @click="resolveApproval(approval, false)">拒绝</button><button @click="resolveApproval(approval, true)">仅批准本次</button></section>
+          <section v-for="approval in approvals" :key="approval.id"><strong>{{ approval.permission || `${agentLabel} 本次调用审批` }}</strong><p>{{ approval.actionType }} · {{ approval.severity }}</p><button @click="resolveApproval(approval, false)">拒绝</button><button @click="resolveApproval(approval, true)">仅批准本次</button></section>
           <template v-if="['waiting_review_confirmation','failed','paused'].includes(record.status)">
             <label>继续定稿的原因（高严重度问题必填）<textarea v-model="reason" rows="3" placeholder="也可以先关闭面板，回到正文修订后重新检查。" /></label>
             <button :disabled="busy" @click="confirm('accept-review')">{{ record.review?.issues ? '接受审稿判断，提取章后交接' : '恢复独立任务' }}</button>
@@ -86,6 +86,8 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { appService } from '../services/app-service.js'
+import { useCreativeAgent } from '../composables/useCreativeAgent.js'
+const { agentLabel } = useCreativeAgent()
 import ChapterAmendment from './ChapterAmendment.vue'
 import ChapterManualFinalization from './ChapterManualFinalization.vue'
 import { useDialogFocus } from '../composables/useDialogFocus.js'
@@ -120,7 +122,7 @@ const lockedReviewerKey = computed(() => record.value?.reviewer?.executionMode =
   : `app_model:${record.value?.reviewer?.profileId || ''}`)
 const selectionDiffers = computed(() => Boolean(record.value) && selectedReviewerKey.value !== lockedReviewerKey.value)
 const selectedReviewerLabel = computed(() => {
-  if (reviewerChoice.value === 'codex') return 'Codex'
+  if (reviewerChoice.value === 'codex') return agentLabel.value
   const profileId = reviewerChoice.value === 'route' ? props.settings.routes?.quality_review || '' : reviewerChoice.value
   return props.settings.profiles.find(item => item.id === profileId)?.name || '所选模型'
 })

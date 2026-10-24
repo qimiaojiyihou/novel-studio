@@ -34,7 +34,7 @@
         <div><span>模型</span><strong>{{ modelLabel }}</strong></div>
         <div><span>后端</span><strong>{{ backendLabel }}</strong></div>
         <div><span>状态</span><strong :class="`state-${run.status}`">{{ statusLabel(run.status) }}</strong></div>
-        <div><span>推理</span><strong>{{ run.modelRoutes?.codexReasoningEffort || 'high' }}</strong></div>
+        <div><span>推理</span><strong>{{ run.modelRoutes?.codexReasoningEffort || (run.modelRoutes?.agentProvider === 'claude' ? '模型默认' : 'high') }}</strong></div>
       </section>
 
       <div v-if="run.actualBackend === 'codex_exec'" class="inline-panel-notice">ACP 在首个输出前中断，本次使用只读 exec 兼容模式。</div>
@@ -209,7 +209,7 @@
           </div>
           <div v-else-if="candidateIsChapterCard" class="chapter-card-invalid" role="status">
             <strong>这份章节卡没有形成可读的结构</strong>
-            <p>可以在下方要求 Codex 重新整理；原始内容仍保留，方便排查。</p>
+            <p>可以在下方要求 {{ agentLabel }} 重新整理；原始内容仍保留，方便排查。</p>
             <pre>{{ JSON.stringify(pendingCandidate.payload || {}, null, 2) }}</pre>
           </div>
           <InlineManuscriptDiff v-else-if="candidateIsManuscript && manuscriptView === 'diff'" :original="sourceManuscript" :candidate="composedManuscript" />
@@ -221,7 +221,7 @@
         <p v-if="authorDraftDirty" class="draft-note">手动修改尚未确认{{ authorEditing ? '，确认时将保存你的编辑。' : '；上方是原候选，确认时将保存你的编辑。' }}<button type="button" class="discard-author-draft" @click="resetAuthorDraft">撤销手动修改</button></p>
         <p v-if="selectedCandidate.artifactType === 'renderer_draft'" class="draft-note">接受后只填入当前编辑器，仍需点击原表单的保存按钮。</p>
         <p v-if="candidateIsStale" class="draft-note">{{ selectedCandidate.overrideReason || '这份候选已被更新版本替代，只可查看或继续修改。' }}</p>
-        <p v-else-if="selectedCandidate.status === 'accepted'" class="draft-note accepted">{{ chapterCardDirty ? '当前手动修改还没有写入项目。' : '这一版已经写入项目；可以手动编辑，也可以在下方继续要求 Codex 修改。' }}</p>
+        <p v-else-if="selectedCandidate.status === 'accepted'" class="draft-note accepted">{{ chapterCardDirty ? '当前手动修改还没有写入项目。' : `这一版已经写入项目；可以手动编辑，也可以在下方继续要求 ${agentLabel} 修改。` }}</p>
         <label v-if="candidateCanResolve" class="candidate-note"><span>备注（可选）</span><input v-model.trim="reason" placeholder="记录接受或放弃的原因" /></label>
         <div v-if="candidateCanResolve" class="inline-candidate-actions">
           <button type="button" :disabled="busy" @click="rejectCandidate">放弃</button>
@@ -265,7 +265,7 @@
             <span class="conversation-avatar" aria-hidden="true">{{ message.role === 'author' ? '你' : 'CX' }}</span>
             <div class="conversation-bubble">
               <header>
-                <strong>{{ message.role === 'author' ? '你' : 'Codex' }}</strong>
+                <strong>{{ message.role === 'author' ? '你' : agentLabel }}</strong>
                 <small v-if="message.role === 'author' && message.parentVersion">基于第 {{ message.parentVersion }} 版</small>
                 <small v-else>{{ message.title }}</small>
               </header>
@@ -279,7 +279,7 @@
             </div>
           </article>
           <article v-for="message in discussionMessages" :key="message.id" class="conversation-bubble discussion-message">
-            <strong>{{ message.role === 'user' ? '你 · 讨论' : 'Codex · 方案' }}</strong><p>{{ message.content }}</p>
+            <strong>{{ message.role === 'user' ? '你 · 讨论' : `${agentLabel} · 方案` }}</strong><p>{{ message.content }}</p>
             <button v-if="message.role === 'assistant'" type="button" @click="conversationMode = 'modify'; followupInstruction = '按此方案修改：\n' + message.content">按此方案修改</button>
           </article>
           <details v-if="candidateIsManuscript" class="protection-editor" @toggle="loadProtections">
@@ -306,7 +306,7 @@
             >{{ item.label }}</button>
           </div>
           <label class="conversation-input">
-            <span class="sr-only">告诉 Codex 希望怎样修改当前候选</span>
+            <span class="sr-only">告诉 {{ agentLabel }} 希望怎样修改当前候选</span>
             <textarea
               v-model.trim="followupInstruction"
               rows="3"
@@ -317,7 +317,7 @@
             ></textarea>
             <small>{{ conversationMode === 'discuss' ? '只讨论，保留当前候选' : modificationScope === 'whole' && candidateIsManuscript ? '范围：整章重构，确认后才写入' : '仅修改相关内容，保留完整预览' }} · 第 {{ selectedCandidateVersion }} 版 · ⌘/Ctrl + Enter</small>
             <button type="button" class="accent" :disabled="conversationBusy || !followupInstruction" @click="submitRevision">
-              {{ conversationBusy ? 'Codex 正在处理…' : conversationMode === 'discuss' ? '发送讨论' : '发送修改要求' }}
+              {{ conversationBusy ? `${agentLabel} 正在处理…` : conversationMode === 'discuss' ? '发送讨论' : '发送修改要求' }}
             </button>
           </label>
         </div>
@@ -343,6 +343,7 @@ import CreativeCandidateEditor from './CreativeCandidateEditor.vue'
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { appService } from '../services/app-service.js'
 import { appendCodexStream, nextCodexStreamLength, recoverCodexStream, recoverCodexStreamAttempt, visibleCodexStream } from '../utils/codex-stream.js'
+import { creativeAgentLabel, creativeBackendLabel } from '../utils/agent-provider.js'
 import { chapterCardEditIssues, chapterCardPresentation, composeInlineManuscriptCandidate, draftDigest } from '../utils/inline-creative.js'
 import {
   buildInlineConversation,
@@ -442,14 +443,15 @@ const panelKicker = computed(() => {
   const targetKind = step.value?.input?.target?.kind
   const bundleLabel = targetKind === 'planning_document_bundle' ? 'PAGE' : targetKind === 'planning_entity_bundle' ? 'CARD' : targetKind === 'planning_chapter_bundle' ? 'CHAPTER' : ''
   if (run.value?.executionMode === 'app_model') return bundleLabel ? `AI · ${bundleLabel} BATCH` : 'AI · INLINE'
-  const agent = run.value?.modelRoutes?.agentProvider === 'qoder' ? 'QODER' : 'CODEX'
+  const agent = creativeAgentLabel(run.value?.modelRoutes?.agentProvider).toUpperCase()
   return bundleLabel ? `${agent} · ${bundleLabel} SESSION` : `${agent} · INLINE`
 })
+const agentLabel = computed(() => creativeAgentLabel(run.value?.modelRoutes?.agentProvider))
 const modelLabel = computed(() => run.value?.executionMode === 'app_model'
   ? run.value?.modelRoutes?.appModelName || run.value?.modelRoutes?.planning_field || run.value?.modelRoutes?.modelProfileId || '规划任务模型'
-  : run.value?.modelRoutes?.agentProvider === 'qoder' ? run.value?.modelRoutes?.codexModel || 'Qoder Auto' : run.value?.modelRoutes?.codexModel || 'Codex 默认模型')
-const backendLabel = computed(() => ({ codex_acp: 'Codex ACP', codex_exec: 'Codex exec', qoder_acp: 'Qoder ACP', app_model: '任务模型' }[run.value?.actualBackend]
-  || (run.value?.executionMode === 'app_model' ? '等待任务模型' : '等待 ACP')))
+  : run.value?.modelRoutes?.codexModel || `${agentLabel.value} 默认模型`)
+const backendLabel = computed(() => creativeBackendLabel(run.value?.actualBackend)
+  || (run.value?.executionMode === 'app_model' ? '等待任务模型' : '等待 Agent 连接'))
 const trace = computed(() => (run.value?.events || []).filter((item) => ['status', 'plan', 'tool_call', 'tool_result', 'usage', 'failed', 'completed'].includes(item.type)).slice(-24))
 const tokenUsage = computed(() => {
   const usage = [...(run.value?.events || [])].reverse().find((item) => item.type === 'usage')?.payload || {}
@@ -559,7 +561,7 @@ const conversationPlaceholder = computed(() => candidateIsManuscript.value
   ? '例如：技能应该有等级之分；把主角收到技能时的反应写出来，但不要过度惊讶。'
   : candidateIsChapterTitle.value
     ? '例如：保留借灶这件事，但突出过气明星与夜市摊主的身份反差。'
-    : '告诉 Codex 哪些内容要保留、删除、补充或调整。')
+    : `告诉 ${agentLabel.value} 哪些内容要保留、删除、补充或调整。`)
 
 watch(streamingText, async () => {
   if (!streamAutoFollow) return
@@ -962,7 +964,7 @@ function eventText(event) {
     if (Array.isArray(payload.availableCommands)) return `ACP 会话能力已加载（${payload.availableCommands.length} 项）`
     const threadStatus = payload?._meta?.codex?.threadStatus?.type
     if (threadStatus) return ({ active: 'ACP 会话正在工作', idle: 'ACP 会话已空闲' }[threadStatus] || `ACP 会话：${threadStatus}`)
-    if (String(event.summary || '').startsWith('system:')) return 'Codex 已接收受控创作任务'
+    if (String(event.summary || '').startsWith('system:')) return `${agentLabel.value} 已接收受控创作任务`
     return String(payload.status || payload.message || payload.sessionUpdate || event.summary || '状态已更新').slice(0, 180)
   }
   return String(event.summary || payload.text || payload.delta || payload.status || payload.message || JSON.stringify(payload)).slice(0, 500)

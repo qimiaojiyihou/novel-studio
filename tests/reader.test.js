@@ -113,11 +113,37 @@ test('HTTP protects all private content and management, rejects origin/CSRF, lim
     const admin = await request('/manage/status', { headers:{ Authorization:`Bearer ${token}` } }); assert.equal(admin.status, 200)
     assert.equal((await request('/store.js')).status, 404); assert.equal((await request('/reader.sqlite')).status, 404)
     assert.equal((await request('/manage/status?token=redacted')).status, 400)
-    const html = await request('/'); assert.match(html.headers.get('content-security-policy'), /script-src 'self'/); assert.equal(html.headers.get('cache-control'), 'no-store')
+    const html = await request('/'); assert.match(html.headers.get('content-security-policy'), /script-src 'self'/); assert.match(html.headers.get('content-security-policy'), /frame-ancestors 'none'/); assert.equal(html.headers.get('cache-control'), 'no-store')
     service.store.setAccess(false); assert.equal((await request('/api/books')).status, 200)
     service.store.setAccess(true); assert.equal((await request('/api/books', { headers:{ Cookie:cookie } })).status, 401)
     for (let i=0;i<10;i++) await login({ username:'attacker', password:'invalid-password' })
     assert.equal((await login({ username:'attacker', password:'invalid-password' })).status, 429)
+  } finally { await service.close(); f.cleanup() }
+})
+
+test('embedding opt-in allows all frame origins without opening private APIs or management', async () => {
+  const f = fixture()
+  const service = await startReaderServer({ databasePath:f.file, adminToken:randomBytes(32).toString('hex'), origin:'http://127.0.0.1:0', allowHttp:true, allowEmbedding:true })
+  try {
+    const html = await fetch(service.origin)
+    assert.equal(html.status, 200)
+    assert.match(html.headers.get('content-security-policy'), /frame-ancestors \*;/)
+    assert.match(html.headers.get('content-security-policy'), /script-src 'self';/)
+    assert.equal(html.headers.get('x-frame-options'), null)
+    for (const route of ['/api/books', '/manage/status']) assert.equal((await fetch(service.origin + route)).status, 401)
+    assert.equal((await fetch(service.origin + '/api/login', { method:'POST', headers:{ Origin:'https://parent.example', 'Content-Type':'application/json' }, body:'{}' })).status, 403)
+    await service.store.saveAccount({ username:'embed-reader', password:'fixture-password' })
+    const response = await fetch(service.origin + '/api/login', { method:'POST', headers:{ Origin:service.origin, 'Content-Type':'application/json' }, body:JSON.stringify({ username:'embed-reader', password:'fixture-password' }) })
+    assert.equal(response.status, 200)
+    const header = response.headers.get('set-cookie'), session = header.split(';')[0]
+    assert.match(header, /^__Host-reader_embed_session=/)
+    for (const attribute of ['HttpOnly', 'Secure', 'SameSite=None', 'Partitioned', 'Path=/']) assert.ok(header.includes(attribute))
+    assert.equal(header.includes('Domain='), false)
+    assert.equal((await (await fetch(service.origin + '/api/session', { headers:{ Cookie:session } })).json()).authenticated, true)
+    assert.equal((await fetch(service.origin + '/manage/status', { headers:{ Cookie:session } })).status, 401)
+    const logout = await fetch(service.origin + '/api/logout', { method:'POST', headers:{ Origin:service.origin, Cookie:session, 'Content-Type':'application/json' }, body:'{}' })
+    assert.match(logout.headers.get('set-cookie'), /Partitioned; Max-Age=0/)
+    assert.equal((await (await fetch(service.origin + '/api/session', { headers:{ Cookie:session } })).json()).authenticated, false)
   } finally { await service.close(); f.cleanup() }
 })
 

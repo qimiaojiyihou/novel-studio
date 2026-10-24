@@ -1,0 +1,35 @@
+{
+  "bookSourceName": "笔趣阁 TW · 通用书源",
+  "bookSourceGroup": "Novel Studio · 通用书源",
+  "bookSourceComment": "按书名或作者关键词搜索 biquge.tw 已收录的书籍，支持搜索分页、详情、完整章节目录和正文分页。无内置账号、Cookie、密钥或单书编号；仅提取正文区域，不加载广告。原站收录、缺字或缺段情况以原站为准。",
+  "bookSourceUrl": "https://www.biquge.tw",
+  "bookSourceType": 0,
+  "enabled": true,
+  "enabledExplore": false,
+  "searchUrl": "/search/?searchkey={{key}}&page={{page}}",
+  "ruleSearch": {
+    "bookList": ".result-card",
+    "name": ".book-title@text",
+    "author": ".author@text",
+    "bookUrl": ".book-title@href",
+    "intro": ".book-intro@text",
+    "kind": ".badge@text"
+  },
+  "ruleBookInfo": {
+    "name": "meta[property=\"og:novel:book_name\"]@content||h1 a@text",
+    "author": "meta[property=\"og:novel:author\"]@content||h2 a[href^=\"/author/\"]@text",
+    "intro": ".intro p@text",
+    "kind": "meta[property=\"og:novel:category\"]@content",
+    "tocUrl": "a:contains(查看全部章节列表)@href||a:contains(查看全部章節列表)@href"
+  },
+  "ruleToc": {
+    "chapterList": ".booklist ul li a[href]",
+    "chapterName": "text",
+    "chapterUrl": "href",
+    "nextTocUrl": "a:contains(下一页).0@href||a:contains(下一頁).0@href"
+  },
+  "ruleContent": {
+    "content": "#chaptercontent@html",
+    "nextContentUrl": "a:contains(下一页).0@href||a:contains(下一頁).0@href"
+  }
+}

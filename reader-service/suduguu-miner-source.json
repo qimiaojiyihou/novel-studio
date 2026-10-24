@@ -1,0 +1,28 @@
+{
+  "bookSourceName": "速读谷 · 挖矿成神专用",
+  "bookSourceUrl": "https://www.suduguu.com",
+  "bookSourceType": 0,
+  "enabled": true,
+  "novelStudioDirectBookResult": true,
+  "searchUrl": "/5947/",
+  "ruleSearch": {
+    "bookList": ".bookbox",
+    "name": "a.0@text",
+    "author": ".author@text##作者：",
+    "bookUrl": "a.0@href"
+  },
+  "ruleBookInfo": {
+    "name": "h1 a@text",
+    "author": "a:contains(作者：)@text##作者：",
+    "intro": ".des@text"
+  },
+  "ruleToc": {
+    "chapterList": "#list a[href$=\".html\"]",
+    "chapterName": "text",
+    "chapterUrl": "href"
+  },
+  "ruleContent": {
+    "content": ".con@html",
+    "nextContentUrl": "//a[text()=\"下一页\"]/@href"
+  }
+}

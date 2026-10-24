@@ -10,7 +10,7 @@
         <span class="planning-save-state" :class="saveState"><i></i>{{ saveStateLabel }}</span>
         <span>{{ completionCount.completed }}/{{ completionCount.total }} 项已填写</span>
         <button type="button" @click="showCandidates">查看候选 · {{ center.candidates.length }}</button>
-        <button @click="$emit('open-settings')">{{ defaultExecutionMode === 'codex' ? '创作方式 · Codex' : `规划模型 · ${planningModelName}` }}</button>
+        <button @click="$emit('open-settings')">{{ defaultExecutionMode === 'codex' ? `创作方式 · ${agentLabel}` : `规划模型 · ${planningModelName}` }}</button>
       </div>
     </header>
 
@@ -510,6 +510,8 @@ import EmptyPlanning from './planning/EmptyPlanning.vue'
 import ExtraDataEditor from './planning/ExtraDataEditor.vue'
 import CreativeExecutionControl from './CreativeExecutionControl.vue'
 import { draftDigest } from '../utils/inline-creative.js'
+import { useCreativeAgent } from '../composables/useCreativeAgent.js'
+const { agentLabel } = useCreativeAgent()
 
 const props = defineProps({
   project: { type: Object, required: true },

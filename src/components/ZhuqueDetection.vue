@@ -43,7 +43,7 @@
             <div class="zhuque-repair">
               <div><strong>根据检测结果改稿</strong><p>模型会读取本章结果和正文，生成完整候选；你核对差异后决定是否写入。</p></div>
               <div class="zhuque-repair-actions">
-                <button type="button" :disabled="busy || repairBusy || result.stale" @click="$emit('repair', { mode: 'codex', digest: result.manuscriptDigest })">使用 Codex 生成候选<span v-if="defaultMode === 'codex'"> · 默认</span></button>
+                <button type="button" :disabled="busy || repairBusy || result.stale" @click="$emit('repair', { mode: 'codex', digest: result.manuscriptDigest })">使用 {{ agentLabel }} 生成候选<span v-if="defaultMode === 'codex'"> · 默认</span></button>
                 <button type="button" :disabled="busy || repairBusy || result.stale" @click="$emit('repair', { mode: 'app_model', digest: result.manuscriptDigest })">使用 {{ appModelLabel }} 生成候选<span v-if="defaultMode !== 'codex'"> · 默认</span></button>
               </div>
             </div>
@@ -66,6 +66,8 @@
 <script setup>
 import { onMounted, onUnmounted, ref } from 'vue'
 import { appService } from '../services/app-service.js'
+import { useCreativeAgent } from '../composables/useCreativeAgent.js'
+const { agentLabel } = useCreativeAgent()
 
 const props = defineProps({
   projectId: { type: String, required: true }, chapterId: { type: String, required: true },

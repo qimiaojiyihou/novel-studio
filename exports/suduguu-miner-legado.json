@@ -1,0 +1,33 @@
+[
+  {
+    "bookSourceName": "速读谷 · 挖矿成神专用",
+    "bookSourceGroup": "Novel Studio · 单书入口",
+    "bookSourceComment": "《这个游戏不对劲，我挖矿成神！》／道不易的固定书籍入口。选择本书源搜索时会直接返回这本书，不用于全站搜书。目录与正文从原站实时读取，支持章节内下一页合并。不含账号、Cookie 或密钥。",
+    "bookSourceUrl": "https://www.suduguu.com",
+    "bookSourceType": 0,
+    "enabled": true,
+    "enabledExplore": false,
+    "searchUrl": "/5947/",
+    "ruleSearch": {
+      "bookList": "body",
+      "name": "h1 a@text",
+      "author": "a:contains(作者：)@text##作者：",
+      "bookUrl": "h1 a@href",
+      "intro": ".des@text"
+    },
+    "ruleBookInfo": {
+      "name": "h1 a@text",
+      "author": "a:contains(作者：)@text##作者：",
+      "intro": ".des@text"
+    },
+    "ruleToc": {
+      "chapterList": "#list a[href$=\".html\"]",
+      "chapterName": "text",
+      "chapterUrl": "href"
+    },
+    "ruleContent": {
+      "content": ".con@html",
+      "nextContentUrl": "//a[text()=\"下一页\"]/@href"
+    }
+  }
+]

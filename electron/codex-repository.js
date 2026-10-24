@@ -188,9 +188,13 @@ export function createCodexRepository(database, {
       fastMode: Boolean(row.fast_mode),
       adapterVersion: row.adapter_version,
       authMethod: row.auth_method,
-      agentProvider: row.agent_provider === 'qoder' ? 'qoder' : 'codex',
+      agentProvider: ['qoder', 'claude'].includes(row.agent_provider) ? row.agent_provider : 'codex',
       qoderCliPath: row.qoder_cli_path || '',
       qoderModel: row.qoder_model || 'auto',
+      claudeCliPath: row.claude_cli_path || '',
+      claudeModel: row.claude_model || '',
+      claudeAuthMethod: row.claude_auth_method || 'cli',
+      claudeReasoningEffort: row.claude_reasoning_effort || '',
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     } : null
@@ -199,11 +203,12 @@ export function createCodexRepository(database, {
   function updateProviderSettings(input = {}) {
     const current = getProviderSettings()
     if (!current) throw new Error('Codex Agent 设置不存在')
+    if (input.claudeReasoningEffort && !['low', 'medium', 'high', 'xhigh', 'max'].includes(input.claudeReasoningEffort)) throw new Error('Claude Code 思考强度无效')
     const updatedAt = now()
     database.prepare(`
       UPDATE agent_provider_settings SET enabled = ?, preferred_backend = ?, model = ?,
         reasoning_effort = ?, fast_mode = ?, auth_method = ?, agent_provider = ?, qoder_cli_path = ?, qoder_model = ?,
-        updated_at = ? WHERE id = 'codex'
+        claude_cli_path = ?, claude_model = ?, claude_auth_method = ?, claude_reasoning_effort = ?, updated_at = ? WHERE id = 'codex'
     `).run(
       input.enabled === undefined ? Number(current.enabled) : Number(Boolean(input.enabled)),
       input.preferredBackend || current.preferredBackend,
@@ -211,9 +216,13 @@ export function createCodexRepository(database, {
       input.reasoningEffort ?? current.reasoningEffort,
       input.fastMode === undefined ? Number(current.fastMode) : Number(Boolean(input.fastMode)),
       input.authMethod || current.authMethod,
-      input.agentProvider === undefined ? current.agentProvider : (input.agentProvider === 'qoder' ? 'qoder' : 'codex'),
+      input.agentProvider === undefined ? current.agentProvider : (['qoder', 'claude'].includes(input.agentProvider) ? input.agentProvider : 'codex'),
       input.qoderCliPath === undefined ? current.qoderCliPath : String(input.qoderCliPath || '').trim().slice(0, 4096),
       input.qoderModel === undefined ? current.qoderModel : String(input.qoderModel || 'auto').trim().slice(0, 256),
+      input.claudeCliPath === undefined ? current.claudeCliPath : String(input.claudeCliPath || '').trim().slice(0, 4096),
+      input.claudeModel === undefined ? current.claudeModel : String(input.claudeModel || '').trim().slice(0, 256),
+      input.claudeAuthMethod === undefined ? current.claudeAuthMethod : (input.claudeAuthMethod === 'environment' ? 'environment' : 'cli'),
+      input.claudeReasoningEffort === undefined ? current.claudeReasoningEffort : String(input.claudeReasoningEffort || ''),
       updatedAt,
     )
     return getProviderSettings()

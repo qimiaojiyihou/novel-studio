@@ -2,6 +2,23 @@
   "name": "novel-studio-reader",
   "private": true,
   "type": "module",
-  "scripts": { "start": "node server.js" },
-  "engines": { "node": ">=24" }
+  "dependencies": {
+    "@xmldom/xmldom": "0.9.12",
+    "acorn": "8.15.0",
+    "cheerio": "1.2.0",
+    "iconv-lite": "0.7.3",
+    "ipaddr.js": "2.5.0",
+    "json5": "2.2.3",
+    "playwright-core": "1.56.1",
+    "quickjs-emscripten": "0.32.0",
+    "re2js": "2.8.6",
+    "tough-cookie": "6.0.2",
+    "xpath": "0.0.35"
+  },
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=24"
+  }
 }

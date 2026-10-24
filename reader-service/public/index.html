@@ -3,28 +3,89 @@
 <body>
   <main id="shelf" class="shelf">
     <header class="shelf-header"><div class="shelf-brand"><span class="shelf-mark" aria-hidden="true">NS</span><div><span class="imprint">NOVEL STUDIO</span><h1>我的书架</h1></div></div><button id="logout" class="quiet-button" hidden>退出登录</button></header>
+    <nav class="library-tabs" aria-label="书架来源"><button id="author-library" aria-pressed="true">作者书架</button><button id="network-library" aria-pressed="false">网络书架</button></nav>
+    <nav id="network-entry" class="network-entry" aria-label="网络书架入口" hidden><button id="find-books">搜索找书 <span aria-hidden="true">→</span></button><button id="manage-sources">书源管理</button></nav>
     <div class="shelf-tools"><input id="book-search" type="search" placeholder="搜索书名或题材" aria-label="搜索书籍"><select id="book-sort" aria-label="书架排序"><option value="updated">最近更新</option><option value="title">书名排序</option></select></div>
     <p id="shelf-summary" class="shelf-summary" role="status"></p><section id="books" aria-label="书架"></section>
   </main>
-  <section id="login" class="login" hidden><form id="login-form"><span class="imprint">NOVEL STUDIO / 阅读</span><h1>进入书架</h1><p>此阅读站需要作者提供的账号。</p><label>账号<input name="username" autocomplete="username" maxlength="64" required></label><label>密码<input name="password" type="password" autocomplete="current-password" maxlength="256" required></label><button type="submit">登录阅读</button><p id="login-error" role="alert"></p></form></section>
+  <main id="discovery" class="shelf discovery" hidden aria-labelledby="discovery-title">
+    <header class="shelf-header"><div><span class="imprint">NOVEL STUDIO / 网络阅读</span><h1 id="discovery-title">找书与书源</h1></div><button id="discovery-back" class="quiet-button">返回书架</button></header>
+    <nav class="library-tabs" aria-label="找书与书源"><button id="discovery-search" aria-pressed="true">搜索书籍</button><button id="discovery-sources" aria-pressed="false">书源管理</button></nav>
+    <section id="network-tools" hidden aria-label="网络书架工具">
+      <p class="network-note">你的书源与收藏仅自己可见。正文来自原网站，阅读设置沿用当前设备。</p>
+      <p id="network-status" role="status"></p>
+      <details id="source-manager"><summary>管理书源 · 导入 Legado JSON</summary>
+        <p class="network-note">文件、粘贴和 URL 导入上限 10 MiB，每次最多 1000 个，自动分批处理。新书源默认启用，重新导入保留你已设置的启用状态。支持静态 CSS、基础 JSONPath、GBK POST；其他规则会逐项提示兼容情况。</p>
+        <details id="source-defaults" hidden><summary id="source-defaults-summary"></summary><p class="network-note">默认包仅初始化一次，之后可自由启用、停用或删除。规则校验通过不代表原网站始终可用。</p><div id="source-defaults-errors"></div></details>
+        <button id="source-defaults-update" hidden>补充新版默认书源</button>
+        <label>选择 JSON 文件<input id="source-file" type="file" accept=".json,application/json"></label>
+        <label>或粘贴 JSON<textarea id="source-json" rows="4" placeholder="粘贴一个书源对象或书源数组（最多 10 MiB）"></textarea></label>
+        <button id="source-import">导入 JSON</button>
+        <div class="network-search-row"><input id="source-url" type="url" placeholder="或输入书源 JSON 的网络地址" aria-label="书源导入地址"><button id="source-import-url">从 URL 导入</button></div>
+        <p id="source-import-status" role="status"></p>
+        <section class="source-tools" aria-label="书源检测与批量管理">
+          <div class="source-filter-row"><input id="source-filter" type="search" aria-label="筛选书源名称或域名" placeholder="筛选名称或域名"><select id="source-health-filter" aria-label="筛选书源状态"><option value="all">全部状态</option><option value="review">待核查 / 异常</option><option value="healthy">抽样通过</option><option value="unknown">未检测 / 已过期</option><option value="disabled">已停用</option></select></div>
+          <label for="source-check-key">检测关键词<input id="source-check-key" maxlength="100" value="小说" placeholder="常见书名或作者"></label>
+          <p class="network-note">检测搜索、目录与首章正文，每次并行 2 个。空结果或限流不等于失效；只保留最后一次结果，不自动删除。</p>
+          <div class="source-bulk-actions"><button id="source-select-all">全选筛选结果</button><button id="source-select-none">清空选择</button><button id="source-check-selected">检测已选</button><button id="source-check-stop" hidden>停止检测</button><button id="source-delete-selected" class="source-danger">删除已选</button></div>
+          <p id="source-selection" class="network-note"></p><p id="source-check-status" role="status" aria-live="polite"></p>
+        </section>
+        <div id="source-list" aria-label="我的书源"></div>
+      </details>
+      <section id="network-search-page" aria-label="搜索书籍"><form id="network-search-form"><div class="network-search-row"><input id="network-key" type="search" maxlength="100" placeholder="输入书名或作者，搜索书源" aria-label="网络书名或作者" required><button id="network-search-submit" type="submit">搜索</button></div>
+        <details id="network-source-picker" class="search-source-picker">
+          <summary id="network-source-summary">全部已启用书源</summary>
+          <div class="search-source-panel">
+            <input id="network-source-filter" type="search" maxlength="100" placeholder="筛选书源名称或域名，如：速读谷、biqu" aria-label="筛选搜索书源">
+            <div class="search-source-actions"><button id="network-source-all" type="button">使用全部启用书源</button><button id="network-source-select-filtered" type="button">全选筛选结果</button><button id="network-source-clear" type="button">清空选择</button></div>
+            <p id="network-source-count" role="status"></p>
+            <div id="network-source-list" role="group" aria-label="搜索书源多选"></div>
+            <div class="search-source-footer"><small>筛选不改变已选项；更改范围后重新搜索生效。</small><button id="network-source-done" type="button">完成选择</button></div>
+          </div>
+        </details>
+      </form>
+      <button id="network-search-stop" hidden>停止搜索</button><details id="network-search-errors" hidden><summary>搜索异常明细</summary><div id="network-search-error-list"></div></details><button id="network-results-close" class="quiet-button" hidden>收起搜索结果</button><section id="network-results" aria-label="网络搜索结果"></section><button id="network-results-more" hidden>显示更多结果</button><button id="network-more" hidden>搜索下一页</button></section>
+    </section>
+  </main>
+  <section id="login" class="login" hidden><form id="login-form"><span class="imprint">NOVEL STUDIO / 阅读</span><h1>进入书架</h1><p>网络书架按账号独立保存，请使用作者提供的阅读账号。</p><label>账号<input name="username" autocomplete="username" maxlength="64" required></label><label>密码<input name="password" type="password" autocomplete="current-password" maxlength="256" required></label><button type="submit">登录阅读</button><button id="login-author" type="button" hidden>返回公开作者书架</button><p id="login-error" role="alert"></p></form></section>
   <section id="reader" class="reader" hidden aria-label="小说阅读">
     <header class="reader-heading"><span id="chapter-label"></span><button id="update" hidden>本书有新版 · 更新</button></header>
     <div id="viewport" class="page-viewport" tabindex="0" aria-label="点击左侧上一页，右侧下一页，中间打开菜单"><article id="pages" class="pages"></article></div>
     <footer class="reader-footer"><span id="book-label"></span><span id="progress"></span></footer>
-    <div id="reading-menu" class="reading-menu" hidden>
-      <nav><button id="back">书架</button><button id="directory">目录</button><button id="menu-close">继续阅读</button></nav>
-      <div class="reading-controls"><label>字号<input id="font-size" type="range" min="16" max="30" step="1"></label><label>行距<select id="line-height"><option value="1.6">紧凑</option><option value="1.85">适中</option><option value="2.1">宽松</option></select></label><label>字体<select id="font-family"><option value="serif">宋体</option><option value="sans-serif">黑体</option></select></label><label>主题<select id="theme"><option value="light">浅色</option><option value="paper">护眼</option><option value="dark">夜间</option></select></label><label>翻页效果<select id="page-effect"><option value="slide">平移</option><option value="none">无动画</option></select></label></div>
-      <div class="chapter-navigation"><button id="previous">上一章</button><button id="next">下一章</button></div>
-      <small>左右滑动或点击两侧翻页 · 点击中央打开菜单<br>阅读位置保存在本机浏览器；不缓存离线书稿。</small>
-    </div>
+    <dialog id="reading-menu" class="reading-menu" aria-labelledby="settings-title">
+      <header class="settings-header"><h2 id="settings-title">阅读设置</h2><button id="settings-reset" class="quiet-button">恢复默认</button><button id="menu-close" aria-label="继续阅读" autofocus>×</button></header>
+      <div class="font-control"><label for="font-size">字号</label><button id="font-smaller" aria-label="减小字号">A−</button><input id="font-size" aria-label="字号" type="range" min="16" max="30" step="1"><output id="font-value" for="font-size">20</output><button id="font-larger" aria-label="增大字号">A+</button></div>
+      <div class="reading-controls"><label>行距<select id="line-height"><option value="1.6">紧凑</option><option value="1.85">适中</option><option value="2.1">宽松</option></select></label><label>字体<select id="font-family"><option value="serif">宋体</option><option value="sans-serif">黑体</option></select></label><label>主题<select id="theme"><option value="light">浅色</option><option value="white">纯白</option><option value="paper">护眼</option><option value="dark">夜间</option></select></label><label>翻页<select id="page-effect"><option value="slide">平移</option><option value="none">无动画</option></select></label></div>
+      <div class="chapter-progress"><label for="chapter-progress">本章</label><input id="chapter-progress" type="range" min="0" max="0" value="0" step="1"><output id="chapter-progress-value" for="chapter-progress"></output></div>
+      <nav class="chapter-navigation" aria-label="章节导航"><button id="previous">上一章</button><button id="directory">目录</button><button id="next">下一章</button></nav>
+      <footer class="settings-footer"><button id="back" class="quiet-button">返回书架</button><small>设置自动保存 · 点空白处收起</small></footer>
+    </dialog>
   </section>
   <dialog id="toc" class="toc-dialog" aria-labelledby="toc-title">
     <header><div><span id="toc-book" class="toc-book"></span><h2 id="toc-title">章节目录 <small id="toc-total"></small></h2></div><button id="toc-close" aria-label="关闭目录">×</button></header>
     <div class="toc-tools"><input id="toc-search" type="search" placeholder="搜索章节名" aria-label="搜索章节"><div class="toc-jump"><input id="toc-number" type="number" min="1" inputmode="numeric" placeholder="章号" aria-label="跳转章号"><button id="toc-go">前往</button></div></div>
     <div class="toc-navigation"><select id="toc-range" aria-label="选择章节范围"></select><button id="toc-current">当前章</button><button id="toc-order" aria-pressed="false">倒序</button></div>
     <p id="toc-error" class="toc-error" role="alert" hidden></p>
+    <div id="toc-completion" class="toc-completion" hidden><button id="toc-load-more" type="button" hidden>一键补全目录</button><button id="toc-load-pause" type="button" hidden>暂停补全</button><p id="toc-load-status" role="status" aria-live="polite" hidden></p><details id="toc-load-hint" class="toc-help" hidden><summary>补全说明</summary><p>页面打开时后台分批加载；刷新或关闭后保留目录，下次可续接。仅补目录，不缓存全本正文。</p></details></div>
     <div id="toc-list" aria-label="章节列表"></div><nav class="toc-pagination"><button id="toc-prev">上一页</button><span id="toc-page" aria-live="polite"></span><button id="toc-next">下一页</button></nav>
   </dialog>
   <p id="message" class="message" role="status" hidden></p>
+  <dialog id="source-auth" class="source-auth" aria-labelledby="source-auth-title" aria-describedby="source-auth-note">
+    <header><h2 id="source-auth-title">书源登录配置</h2><button id="source-auth-close" aria-label="关闭登录配置" autofocus>×</button></header>
+    <p id="source-auth-note" class="network-note">只保存到当前阅读账号、当前书源，加密存储。登录和人机验证需在原站完成。不要填写阅读站账号密码。</p>
+    <p id="source-auth-state" class="auth-state" role="status" aria-live="polite"></p><p id="source-auth-mode" class="network-note"></p>
+    <div id="source-auth-automatic" hidden><button id="source-auth-begin" type="button">准备自动授权</button><button id="source-auth-cancel" type="button" hidden>取消等待</button><p class="network-note">准备后复制下方专属地址，在原站登录；支持回传的服务会自动保存授权。地址有效期 10 分钟，请勿转发。</p><details><summary>回到原页面后未自动完成？</summary><label>授权回执<textarea id="source-auth-receipt" rows="2" maxlength="65536" autocomplete="off" placeholder="仅粘贴授权成功页面提供的回执"></textarea></label><button id="source-auth-receive" type="button">接收授权回执</button></details></div>
+    <label>原站地址<input id="source-auth-address" readonly aria-label="原站地址"></label><button id="source-auth-link" type="button">复制原站地址</button><p class="network-note">阅读站不会自动打开外站。复制后在浏览器中手动访问，按原站提示完成操作。</p>
+    <details id="source-auth-manual"><summary>高级手动配置 / 替换授权</summary><p class="network-note" id="source-auth-cookie-help">只按此书源文档填写明确要求的参数。原站提供密钥时填写对应字段即可，Cookie 可留空。不要复制其他网站或整个浏览器的 Cookie；不清楚时先不填写。保存不等于验证通过。</p><form id="source-auth-form"><div id="source-auth-fields"></div><label>此书源 Cookie（可选，留空保留已存值）<textarea id="source-auth-cookie" rows="3" maxlength="16384" autocomplete="off" aria-describedby="source-auth-cookie-help" placeholder="仅在此书源明确要求时填写"></textarea></label><label class="source-auth-clear"><input id="source-auth-clear" type="checkbox">清除已存 Cookie</label><button id="source-auth-save" type="submit">保存登录配置</button></form></details>
+    <button id="source-auth-verify" type="button" hidden>验证已保存授权</button>
+    <div id="source-auth-actions"></div><p id="source-auth-status" role="status" aria-live="polite"></p>
+  </dialog>
+  <dialog id="chapter-access" class="source-auth" aria-labelledby="chapter-access-title" aria-describedby="chapter-access-note">
+    <header><h2 id="chapter-access-title">原站仅提供预览</h2><button id="chapter-access-close" aria-label="关闭章节提示" autofocus>×</button></header>
+    <p id="chapter-access-note" class="network-note">番茄官网只返回本章预览，未提供完整网页正文。这不是脚本超时。请按原站提示在官方客户端阅读，或查看其网页阅读权益；普通登录或填写 Cookie 不保证解锁。</p>
+    <p class="network-note">阅读位置已保留，不会将预览当成完整章节。</p>
+    <label id="chapter-access-link">本章原站地址<input id="chapter-access-address" readonly aria-label="本章原站地址"></label>
+    <button id="chapter-access-copy" type="button">复制本章原站地址</button><p id="chapter-access-status" role="status" aria-live="polite"></p>
+  </dialog>
   <script type="module" src="/reader.js"></script>
 </body></html>

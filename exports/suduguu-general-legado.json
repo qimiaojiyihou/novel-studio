@@ -1,0 +1,35 @@
+[
+  {
+    "bookSourceName": "速读谷 · 通用书源",
+    "bookSourceGroup": "Novel Studio · 通用书源",
+    "bookSourceComment": "支持速读谷站内书名、作者关键词搜索，搜索结果分页、长篇目录分页和章节正文分页。仅查询原站已收录内容，不含账号、Cookie 或密钥。",
+    "bookSourceUrl": "https://www.suduguu.com",
+    "bookSourceType": 0,
+    "enabled": true,
+    "enabledExplore": false,
+    "searchUrl": "/i/sor.aspx?key={{key}}&p={{page}}",
+    "ruleSearch": {
+      "bookList": ".container .item",
+      "name": "h3 a@text",
+      "author": "a:contains(作者：)@text##作者：",
+      "bookUrl": "h3 a@href",
+      "coverUrl": "img@src"
+    },
+    "ruleBookInfo": {
+      "name": "h1 a@text",
+      "author": "a:contains(作者：)@text##作者：",
+      "intro": ".des@text",
+      "coverUrl": ".item img@src"
+    },
+    "ruleToc": {
+      "chapterList": "#list a[href$=\".html\"]",
+      "chapterName": "text",
+      "chapterUrl": "href",
+      "nextTocUrl": "#pages a.gr@href"
+    },
+    "ruleContent": {
+      "content": ".con@html",
+      "nextContentUrl": "//a[text()=\"下一页\"]/@href"
+    }
+  }
+]

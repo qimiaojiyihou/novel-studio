@@ -1,19 +1,33 @@
 export function normalizeAgentProvider(value) {
-  return value === 'qoder' ? 'qoder' : 'codex'
+  return ['qoder', 'claude'].includes(value) ? value : 'codex'
 }
 
 export function agentProviderLabel(value) {
-  return normalizeAgentProvider(value) === 'qoder' ? 'Qoder' : 'Codex'
+  return { codex: 'Codex', qoder: 'Qoder', claude: 'Claude Code' }[normalizeAgentProvider(value)]
+}
+
+export function agentProviderModel(settings = {}, provider = settings.agentProvider) {
+  return provider === 'claude' ? settings.claudeModel || '' : provider === 'qoder' ? settings.qoderModel || 'auto' : settings.model || ''
+}
+
+export function agentProviderReasoningEffort(settings = {}, provider = settings.agentProvider) {
+  return provider === 'claude' ? settings.claudeReasoningEffort || '' : settings.reasoningEffort ?? 'high'
+}
+
+export function agentProviderBackend(provider) {
+  return normalizeAgentProvider(provider) === 'claude' ? 'claude_sdk' : `${normalizeAgentProvider(provider)}_acp`
 }
 
 export class AgentGatewayRouter {
-  constructor({ repository, codex, qoder }) {
+  constructor({ repository, codex, qoder, claude }) {
     this.repository = repository
-    this.gateways = { codex, qoder }
+    this.gateways = { codex, qoder, claude }
   }
 
   gateway(provider) {
-    return this.gateways[normalizeAgentProvider(provider)]
+    const selected = this.gateways[normalizeAgentProvider(provider)]
+    if (!selected) throw new Error(`${agentProviderLabel(provider)} 执行器未初始化`)
+    return selected
   }
 
   providerForRun(agentRunId) {

@@ -47,14 +47,14 @@
         </label>
         <label v-if="useExplicitValue">
           <span>明确的新设定</span>
-          <textarea v-model="proposedValue" rows="5" placeholder="这里的文字将作为根设定的新内容；Codex 只负责分析和同步其他受影响内容。"></textarea>
+          <textarea v-model="proposedValue" rows="5" :placeholder="`这里的文字将作为根设定的新内容；${agentLabel} 只负责分析和同步其他受影响内容。`"></textarea>
         </label>
         <label class="manuscript-toggle">
           <input v-model="includeManuscript" type="checkbox" />
           <span><strong>同时检查已写正文</strong><small>正文只进入“人工复核”，默认不勾选。</small></span>
         </label>
         <div class="change-primary-actions">
-          <button type="button" :disabled="busy || !canStart" @click="beginAnalysis">{{ busy ? '正在建立分析…' : '扫描全书并让 Codex 分析' }}</button>
+          <button type="button" :disabled="busy || !canStart" @click="beginAnalysis">{{ busy ? '正在建立分析…' : `扫描全书并让 ${agentLabel} 分析` }}</button>
         </div>
       </section>
 
@@ -81,7 +81,7 @@
 
         <section v-if="isAnalyzing" class="change-analyzing">
           <i></i>
-          <div><strong>{{ runStatusLabel }}</strong><p>先使用确定性引用扫描，再由 Codex 判断隐含因果、人物知情边界和正文承接。</p></div>
+          <div><strong>{{ runStatusLabel }}</strong><p>先使用确定性引用扫描，再由 {{ agentLabel }} 判断隐含因果、人物知情边界和正文承接。</p></div>
         </section>
 
         <section v-if="currentSet.summary" class="change-summary-copy">
@@ -147,6 +147,9 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { appService } from '../services/app-service.js'
+import { useCreativeAgent } from '../composables/useCreativeAgent.js'
+import { creativeAgentLabel, creativeBackendLabel } from '../utils/agent-provider.js'
+const { agentLabel } = useCreativeAgent()
 
 const props = defineProps({
   visible: { type: Boolean, default: false },
@@ -176,7 +179,7 @@ const pendingCandidate = computed(() => [...(run.value?.candidates || [])].rever
 const pendingApproval = computed(() => run.value?.approvals?.find((item) => item.status === 'pending') || null)
 const retryableStep = computed(() => [...(run.value?.steps || [])].reverse().find((item) => ['failed', 'interrupted'].includes(item.status) && item.attemptCount < 3) || null)
 const isAnalyzing = computed(() => Boolean(currentSet.value && ['draft', 'analyzing'].includes(currentSet.value.status) && run.value && !['completed', 'cancelled', 'failed'].includes(run.value.status)))
-const backendLabel = computed(() => ({ codex_acp: 'Codex ACP', codex_exec: 'Codex exec', qoder_acp: 'Qoder ACP' }[run.value?.actualBackend] || (run.value ? `等待 ${run.value.modelRoutes?.agentProvider === 'qoder' ? 'Qoder' : 'Codex'}` : '本地扫描')))
+const backendLabel = computed(() => creativeBackendLabel(run.value?.actualBackend) || (run.value ? `等待 ${creativeAgentLabel(run.value.modelRoutes?.agentProvider)}` : '本地扫描'))
 const runStatusLabel = computed(() => ({ pending: '准备项目镜像', waiting_approval: '等待批准模型调用', running: '正在分析整书影响', paused: '分析已暂停', failed: '分析失败' }[run.value?.status] || '正在整理候选'))
 const groups = computed(() => [
   { level: 'required', eyebrow: 'REQUIRED', label: '必须同步', items: currentSet.value?.items?.filter((item) => item.impactLevel === 'required') || [] },

@@ -89,6 +89,27 @@ test('Codex book workspace is stable across title changes and contains no creati
   }
 })
 
+test('Claude books have stable separate projects even with identical titles and fresh run mirrors', () => {
+  const baseDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'novel-studio-claude-book-'))
+  try {
+    const project = { id: 'claude-a', title: '同名书', genre: '悬疑' }
+    const make = (id, book = project) => createCodexProjectMirror({ baseDirectory, agentRun: { id, modelRoutes: { agentProvider: 'claude' } }, workspace: { project: book, chapters: [] } })
+    const a1 = make('run-a1'), a2 = make('run-a2'), b = make('run-b', { ...project, id: 'claude-b' })
+    assert.equal(a1.workspaceRoot, a2.workspaceRoot)
+    assert.notEqual(a1.root, a2.root)
+    assert.notEqual(a1.workspaceRoot, b.workspaceRoot)
+    assert.equal(path.dirname(a1.workspaceRoot), path.join(baseDirectory, 'claude-projects'))
+    assert.equal(path.dirname(a1.root), path.join(baseDirectory, 'claude-workspaces'))
+    assert.equal(findCodexBookWorkspace({ baseDirectory, projectId: project.id, provider: 'claude' }).root, a1.workspaceRoot)
+    assert.equal(make('run-a3', { ...project, title: '改名后' }).workspaceRoot, a1.workspaceRoot)
+    assert.ok(fs.existsSync(path.join(a1.workspaceRoot, 'CLAUDE.md')))
+    const codex = createCodexBookWorkspace({ baseDirectory, project })
+    assert.notEqual(a1.workspaceRoot, codex.root)
+    assert.equal(removeCodexBookWorkspace({ baseDirectory, projectId: project.id, provider: 'claude' }), true)
+    assert.ok(fs.existsSync(codex.root))
+  } finally { fs.rmSync(baseDirectory, { recursive: true, force: true }) }
+})
+
 test('Codex mirror blocks traversal, SQLite, and symlink escape', () => {
   const { baseDirectory, mirror } = fixture()
   const outside = path.join(baseDirectory, 'outside.txt')

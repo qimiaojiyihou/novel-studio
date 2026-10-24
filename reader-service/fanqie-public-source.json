@@ -1,0 +1,29 @@
+{
+  "bookSourceName": "番茄小说 · 官网公开章节",
+  "bookSourceUrl": "https://fanqienovel.com#novel-studio-public",
+  "bookSourceType": 0,
+  "enabled": true,
+  "bookSourceComment": "Node.js 原生规则：仅读取官网公开章节，不使用第三方正文服务。付费、锁定、验证页及未知字体映射会明确报错。",
+  "searchUrl": "https://novel.snssdk.com/api/novel/channel/homepage/search/search/v1/?device_platform=android&parent_enterfrom=novel_channel_search.tab.&aid=1967&offset={{(page-1)*10}}&q={{key}}",
+  "ruleSearch": {
+    "bookList": "$.data.ret_data[*]",
+    "name": "$.title",
+    "author": "$.author",
+    "bookUrl": "https://fanqienovel.com/page/{{$.book_id}}",
+    "intro": "$.abstract"
+  },
+  "ruleBookInfo": {
+    "name": "meta[property='og:novel:book_name']@content",
+    "author": "meta[property='og:novel:author']@content",
+    "tocUrl": "<js>var id=baseUrl.match(/\\/page\\/(\\d+)(?:[/?#]|$)/); if(!id)throw new Error('番茄书籍标识缺失'); 'https://fanqienovel.com/api/reader/directory/detail?bookId='+id[1]</js>"
+  },
+  "ruleToc": {
+    "chapterList": "$.data.chapterListWithVolume[*][*]",
+    "chapterName": "$.title",
+    "chapterUrl": "https://fanqienovel.com/reader/{{$.itemId}}"
+  },
+  "jsLib": "function fqState(raw){var marker=/window\\.__INITIAL_STATE__\\s*=\\s*\\{/.exec(raw);if(!marker)throw new Error('番茄页面缺少章节状态，可能需要验证或网页结构已变化');var start=marker.index+marker[0].length-1,depth=0,quoted=false,escaped=false;for(var i=start;i<raw.length;i++){var ch=raw[i];if(quoted){if(escaped)escaped=false;else if(ch==='\\\\')escaped=true;else if(ch==='\"')quoted=false;continue;}if(ch==='\"')quoted=true;else if(ch==='{')depth++;else if(ch==='}'&&--depth===0)return JSON.parse(raw.slice(start,i+1));}throw new Error('番茄章节状态不完整');}\nfunction fqFlag(value){return value===true||value===1||value==='1'||value==='true';}\nfunction fqDecode(value){var chars='D在主特家军然表场4要只v和?6别还g现儿岁??此象月3出战工相o男直失世F都平文什VO将真T那当?会立些u是十张学气大爱两命全后东性通被1它乐接而感车山公了常以何可话先pi叫轻M士w着变尔快l个说少色里安花远7难师放t报认面道S?克地度I好机U民写把万同水新没书电吃像斯5为y白几日教看但第加候作上拉住有法r事应位利你声身国问马女他Y比父xAHNsX边美对所金活回意到z从j知又内因点Q三定8Rb正或夫向德听更?得告并本q过记L让打f人就者去原满体做经K走如孩cG给使物?最笑部?员等受k行一条果动光门头见往自解成处天能于名其发总母的死手入路进心来h时力多开已许d至由很界n小与Z想代么分生口再妈望次西风种带J?实情才这?E我神格长觉间年眼无不亲关结0友信下却重己老2音字m呢明之前高PB目太e9起稜她也W用方子英每理便四数期中C外样a海们任';return value.replace(/[\\uE000-\\uF8FF]/g,function(ch){var decoded=chars[ch.charCodeAt(0)-58344];if(!decoded||decoded==='?')throw new Error('番茄字体映射已变化，已停止展示乱码正文');return decoded;});}",
+  "ruleContent": {
+    "content": "<js>var state=fqState(result),data=state.reader&&state.reader.chapterData;var id=baseUrl.match(/\\/reader\\/(\\d+)(?:[/?#]|$)/);if(!data||!id||String(data.itemId)!==id[1])throw new Error('番茄章节身份不匹配或正文缺失');if(fqFlag(data.isChapterLock)||fqFlag(data.is_chapter_lock)||fqFlag(data.needPay)||fqFlag(data.need_pay))throw new Error('本章为付费或锁定章节，请在番茄官方客户端阅读');if(typeof data.content!=='string'||!data.content.trim())throw new Error('番茄正文为空，可能需要登录、验证或已下架');java.setContent(data.content);var body=java.getString('body@html').replace(/\\n{2,}/g,'\\n');if(!body.trim())throw new Error('番茄正文解析为空');fqDecode(body)</js>"
+  }
+}

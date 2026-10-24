@@ -4,15 +4,18 @@ import path from 'node:path'
 import { tmpdir } from 'node:os'
 import { createRequire } from 'node:module'
 import { assertIsolatedRuntime } from './smoke-isolation.mjs'
+import { CREATIVE_BUILD_ID } from '../electron/build-info.js'
 const require = createRequire(import.meta.url), { _electron } = await import(process.env.NOVEL_STUDIO_PLAYWRIGHT || 'playwright')
 const directory = await fs.realpath(await fs.mkdtemp(path.join(tmpdir(),'novel-reader-settings-'))), root = path.resolve(import.meta.dirname,'..')
 const env = { ...process.env,NOVEL_STUDIO_TEST_USER_DATA:directory,NOVEL_STUDIO_NO_GO:'1' }; delete env.ELECTRON_RUN_AS_NODE; delete env.VITE_DEV_SERVER_URL
 let app
 const errors = []
 try {
-  app = await _electron.launch({ executablePath:require('electron'),args:['.'],cwd:root,env,timeout:60000 })
+  app = await _electron.launch({ executablePath:process.env.NOVEL_STUDIO_TEST_APP||require('electron'),args:process.env.NOVEL_STUDIO_TEST_APP?[]:['.'],cwd:root,env,timeout:60000 })
   const page = await app.firstWindow(); page.on('pageerror',e=>errors.push(e.message)); await page.waitForFunction(()=>Boolean(window.novelStudio))
-  assertIsolatedRuntime(await page.evaluate(()=>window.novelStudio.getRuntimeInfo()),directory)
+  const runtime=await page.evaluate(()=>window.novelStudio.getRuntimeInfo())
+  assertIsolatedRuntime(runtime,directory)
+  assert.equal(runtime.buildId,CREATIVE_BUILD_ID)
   // Only now perform fixture writes. Cloud settings are a mock, never production requests.
   const a = await page.evaluate(()=>window.novelStudio.createProject({title:'阅读设置模拟甲书'})), b = await page.evaluate(()=>window.novelStudio.createProject({title:'阅读设置模拟乙书'}))
   await app.evaluate(({ipcMain},input)=>{

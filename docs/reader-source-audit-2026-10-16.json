@@ -1,0 +1,465 @@
+{
+  "date": "2026-10-16",
+  "deployedCatalogVersion": "global-all-sources-3b3f4ab6d7f7ed01",
+  "scope": "44条全部搜索；有搜索结果则在独立临时数据库执行入架、重复提交、目录续载及首章读取。真实账号未加入测试收藏。",
+  "baseAudit": {
+    "finishedAt": "2026-10-16T02:20:37.862Z",
+    "catalogVersion": "global-all-sources-df6a9af818d7f316",
+    "serverDirectory": "/opt/novel-reader/repair8-release-20261016/audit-output/"
+  },
+  "finalFocusedAudit": {
+    "serverDirectory": "/opt/novel-reader/repair8-final3-20261016/audit-output/",
+    "sourceNames": [
+      "速读谷",
+      "艾途小说"
+    ],
+    "note": "最终目录占位选择器修复后复测；速读谷通过，艾途仍返回401。"
+  },
+  "configuration": {
+    "total": 44,
+    "unsupported": 0,
+    "requiresAccountParameters": [
+      "🔖七猫免费小说"
+    ]
+  },
+  "summary": {
+    "samplePassed": 5,
+    "upstreamOrAccountBlocked": 37,
+    "noResults": 2
+  },
+  "caveat": "抽样通过不代表全站所有书籍和章节均可用。超时、限流及上游状态会变化；此报告不覆盖账号自定义源。",
+  "results": [
+    {
+      "id": "a379803784aa31a1f773e1d3c318e3b5",
+      "name": "起点中文",
+      "url": "https://www.qidian.com",
+      "searchTested": true,
+      "status": "upstream_or_account_blocked",
+      "code": "HTTP_202",
+      "joinAndReadPassed": false
+    },
+    {
+      "id": "0f6db589461ed9280f407f3cd1ec1365",
+      "name": "番茄小说2",
+      "url": "https://fqapi.komr.cn",
+      "searchTested": true,
+      "status": "upstream_or_account_blocked",
+      "code": "SOURCE_API_ERROR",
+      "joinAndReadPassed": false
+    },
+    {
+      "id": "5cb36db0b5ed6ee7cbd3752e17f1d21b",
+      "name": "酷我小说",
+      "url": "http://appi.kuwo.cn",
+      "searchTested": true,
+      "status": "sample_passed",
+      "code": "healthy",
+      "joinAndReadPassed": true,
+      "sample": {
+        "title": "系统之重生这件小事",
+        "chapters": 966,
+        "firstChapterCharacters": 2271,
+        "idempotentAdd": true,
+        "completeDirectory": true
+      }
+    },
+    {
+      "id": "6d9f04cd94ef3d7c32b017f7a6bb4f9c",
+      "name": "69书吧.com",
+      "url": "https://www.69shuba.com",
+      "searchTested": true,
+      "status": "upstream_or_account_blocked",
+      "code": "HTTP_403",
+      "joinAndReadPassed": false
+    },
+    {
+      "id": "486d181d74b73b4aca4b4c39fdb417c3",
+      "name": "69书吧",
+      "url": "https://69shuba.cx",
+      "searchTested": true,
+      "status": "upstream_or_account_blocked",
+      "code": "ORIGIN_BLOCKED",
+      "joinAndReadPassed": false
+    },
+    {
+      "id": "788af98ce46a7fdfbcb61e47e07b305f",
+      "name": "速读谷",
+      "url": "https://www.sudugu.co",
+      "searchTested": true,
+      "status": "sample_passed",
+      "code": "healthy",
+      "joinAndReadPassed": true,
+      "sample": {
+        "title": "凡人修仙传",
+        "chapters": 2503,
+        "firstChapterCharacters": 2573,
+        "idempotentAdd": true,
+        "completeDirectory": true
+      }
+    },
+    {
+      "id": "55e5bfd5cbf5b10cad5dc31db9d04002",
+      "name": "得奇小说网",
+      "url": "https://www.deqixs.com",
+      "searchTested": true,
+      "status": "upstream_or_account_blocked",
+      "code": "CONNECT_TIMEOUT",
+      "joinAndReadPassed": false
+    },
+    {
+      "id": "1f3192f1d1eed316329cc100ac983f7e",
+      "name": "快书网",
+      "url": "https://www.kuaishu5.com",
+      "searchTested": true,
+      "status": "upstream_or_account_blocked",
+      "code": "TLS_FAILED",
+      "joinAndReadPassed": false
+    },
+    {
+      "id": "0af5c627eb0b44a40bc3b7eb4a1e3836",
+      "name": "天天看小说",
+      "url": "https://cn.ttkan.co",
+      "searchTested": true,
+      "status": "upstream_or_account_blocked",
+      "code": "HTTP_403",
+      "joinAndReadPassed": false
+    },
+    {
+      "id": "062cdc7d80291c35bda39dd2ba7f72f1",
+      "name": "独步小说网",
+      "url": "https://www.dbxsd.com",
+      "searchTested": true,
+      "status": "no_results",
+      "code": "SEARCH_EMPTY",
+      "joinAndReadPassed": false
+    },
+    {
+      "id": "8992ef30eefdcd511519a0780f9d8bcd",
+      "name": "手机小说",
+      "url": "https://www.shoujix.com",
+      "searchTested": true,
+      "status": "sample_passed",
+      "code": "healthy",
+      "joinAndReadPassed": true,
+      "sample": {
+        "title": "灵鼎奇缘，凡人修仙传",
+        "chapters": 80,
+        "firstChapterCharacters": 2412,
+        "idempotentAdd": true,
+        "completeDirectory": true
+      }
+    },
+    {
+      "id": "b2df21a5ee09a821043db05beb45cb8c",
+      "name": "铅笔小说",
+      "url": "https://www.23qb.com",
+      "searchTested": true,
+      "status": "upstream_or_account_blocked",
+      "code": "HTTP_403",
+      "joinAndReadPassed": false
+    },
+    {
+      "id": "55c94d7eeef8b61623a22fd38265981d",
+      "name": "来看文学",
+      "url": "https://m.laikan9.com",
+      "searchTested": true,
+      "status": "upstream_or_account_blocked",
+      "code": "HTTP_404",
+      "joinAndReadPassed": false
+    },
+    {
+      "id": "ed558f6d881e9fe003e8a57816de9ca6",
+      "name": "大文学无错小说网",
+      "url": "https://www.wcxsw.org",
+      "searchTested": true,
+      "status": "upstream_or_account_blocked",
+      "code": "HTTP_403",
+      "joinAndReadPassed": false
+    },
+    {
+      "id": "58113a20ce831173f946383887927661",
+      "name": "和图书",
+      "url": "https://hetushu.com",
+      "searchTested": true,
+      "status": "sample_passed",
+      "code": "healthy",
+      "joinAndReadPassed": true,
+      "sample": {
+        "title": "斗破苍穹",
+        "chapters": 1646,
+        "firstChapterCharacters": 2772,
+        "idempotentAdd": true,
+        "completeDirectory": true
+      }
+    },
+    {
+      "id": "a6551b2a13a5bda5796dc4648f9843c0",
+      "name": "思路客",
+      "url": "https://www.siluke.com",
+      "searchTested": true,
+      "status": "upstream_or_account_blocked",
+      "code": "CONNECT_TIMEOUT",
+      "joinAndReadPassed": false
+    },
+    {
+      "id": "8bf34458a9b6426bba0f2b9f3053b770",
+      "name": "顶点小说 ddxs",
+      "url": "https://www.ddxs.com",
+      "searchTested": true,
+      "status": "upstream_or_account_blocked",
+      "code": "HTTP_403",
+      "joinAndReadPassed": false
+    },
+    {
+      "id": "d3c468c84174398f965a04a9fc9515eb",
+      "name": "艾途小说",
+      "url": "https://m.aitbooks.com",
+      "searchTested": true,
+      "status": "upstream_or_account_blocked",
+      "code": "SOURCE_LOGIN_REQUIRED",
+      "joinAndReadPassed": false,
+      "note": "此前实测可入架并加载1200章；后续目录和正文返回HTTP401，最终复测搜索仍要求登录，不计为可读通过。"
+    },
+    {
+      "id": "4019d1439b0b870ffaf8c60613dc4b4d",
+      "name": "阅友小说",
+      "url": "http://m.suixkan.com",
+      "searchTested": true,
+      "status": "sample_passed",
+      "code": "healthy",
+      "joinAndReadPassed": true,
+      "sample": {
+        "title": "灵破苍穹",
+        "chapters": 1649,
+        "firstChapterCharacters": 3111,
+        "idempotentAdd": true,
+        "completeDirectory": true
+      }
+    },
+    {
+      "id": "aa833bbebd566c885f7bd21d9de282c9",
+      "name": "就爱文学",
+      "url": "http://www.92xs.info",
+      "searchTested": true,
+      "status": "upstream_or_account_blocked",
+      "code": "CONNECT_TIMEOUT",
+      "joinAndReadPassed": false
+    },
+    {
+      "id": "e06e48969a1f8199ee99a33477a97141",
+      "name": "八一中文",
+      "url": "https://www.81zw2.com",
+      "searchTested": true,
+      "status": "upstream_or_account_blocked",
+      "code": "HTTP_403",
+      "joinAndReadPassed": false
+    },
+    {
+      "id": "908fa656880ec42083996f0148c51e46",
+      "name": "武林中文网",
+      "url": "https://www.50zw.so",
+      "searchTested": true,
+      "status": "upstream_or_account_blocked",
+      "code": "DNS_NOT_FOUND",
+      "joinAndReadPassed": false
+    },
+    {
+      "id": "4081bfe666a5c0b4d74dc3a16096b339",
+      "name": "🎉新笔趣阁~a",
+      "url": "https://www.xbiquge.so",
+      "searchTested": true,
+      "status": "upstream_or_account_blocked",
+      "code": "HTTPS_DOWNGRADE",
+      "joinAndReadPassed": false
+    },
+    {
+      "id": "88313ff9eca57eb34442fc562b6fa149",
+      "name": "笔趣阁A16",
+      "url": "http://www.xbiquke.com/1",
+      "searchTested": true,
+      "status": "upstream_or_account_blocked",
+      "code": "ORIGIN_BLOCKED",
+      "joinAndReadPassed": false
+    },
+    {
+      "id": "554d3e59fca54db8c85a5fa3b6d60a20",
+      "name": "笔趣阁A17",
+      "url": "https://www.biqusa.com",
+      "searchTested": true,
+      "status": "upstream_or_account_blocked",
+      "code": "CONNECT_TIMEOUT",
+      "joinAndReadPassed": false
+    },
+    {
+      "id": "28af3f7317f3f3e49e46674caf25d287",
+      "name": "夸克①",
+      "url": "https://quark.sm.cn",
+      "searchTested": true,
+      "status": "no_results",
+      "code": "SEARCH_EMPTY",
+      "joinAndReadPassed": false
+    },
+    {
+      "id": "1cc575b4b2bae659e41d4aee18552e7b",
+      "name": "笔趣阁A20",
+      "url": "https://www.bequgew.com",
+      "searchTested": true,
+      "status": "upstream_or_account_blocked",
+      "code": "CONNECT_TIMEOUT",
+      "joinAndReadPassed": false
+    },
+    {
+      "id": "cf135113bf8aabd25f9ed49d6d4fd4c6",
+      "name": "笔趣阁A22",
+      "url": "https://www.biqugeapp.com",
+      "searchTested": true,
+      "status": "upstream_or_account_blocked",
+      "code": "HTTP_429",
+      "joinAndReadPassed": false
+    },
+    {
+      "id": "7d6ed7ac43c7f6a9ad571bc559c916ed",
+      "name": "笔趣阁A23",
+      "url": "http://www.bequ6.com",
+      "searchTested": true,
+      "status": "upstream_or_account_blocked",
+      "code": "CONNECT_TIMEOUT",
+      "joinAndReadPassed": false
+    },
+    {
+      "id": "96d743e494575613eae710e0f4de27cd",
+      "name": "笔趣阁A24",
+      "url": "https://kuaiapi.jiaston.com",
+      "searchTested": true,
+      "status": "upstream_or_account_blocked",
+      "code": "HTTP_429",
+      "joinAndReadPassed": false
+    },
+    {
+      "id": "ff874f17fc0b9e166a3b1534784d0531",
+      "name": "笔趣阁A26",
+      "url": "https://www.biqugeapp.com",
+      "searchTested": true,
+      "status": "upstream_or_account_blocked",
+      "code": "RATE_COOLDOWN",
+      "joinAndReadPassed": false
+    },
+    {
+      "id": "b2cbe125fe0c27ffa78e3a60b59e3dcb",
+      "name": "思路客~b",
+      "url": "http://www.siluke.cc",
+      "searchTested": true,
+      "status": "upstream_or_account_blocked",
+      "code": "ORIGIN_BLOCKED",
+      "joinAndReadPassed": false
+    },
+    {
+      "id": "9f69714b2191f10a024bf066c3f93fe3",
+      "name": "八一中文 a",
+      "url": "https://m.zwduxs.com",
+      "searchTested": true,
+      "status": "upstream_or_account_blocked",
+      "code": "ORIGIN_BLOCKED",
+      "joinAndReadPassed": false
+    },
+    {
+      "id": "8dc7fd534aeb9ba75d2586ab5106881d",
+      "name": "笔趣阁A27",
+      "url": "https://sou.jiaston.com",
+      "searchTested": true,
+      "status": "upstream_or_account_blocked",
+      "code": "HTTP_429",
+      "joinAndReadPassed": false
+    },
+    {
+      "id": "7d7d599fe7ec45e3b32ea3055986fb7f",
+      "name": "笔趣阁API-2",
+      "url": "https://sou.jiaston.com",
+      "searchTested": true,
+      "status": "upstream_or_account_blocked",
+      "code": "RATE_COOLDOWN",
+      "joinAndReadPassed": false
+    },
+    {
+      "id": "00935e0482956f8f67d342ae892158ae",
+      "name": "七七读书1",
+      "url": "http://www.77dushu.com",
+      "searchTested": true,
+      "status": "upstream_or_account_blocked",
+      "code": "CONNECT_TIMEOUT",
+      "joinAndReadPassed": false
+    },
+    {
+      "id": "60c3c9a7e5c4e986d27ce41c979bad01",
+      "name": "笔趣阁b03",
+      "url": "https://www.xbiquge.la",
+      "searchTested": true,
+      "status": "upstream_or_account_blocked",
+      "code": "TLS_FAILED",
+      "joinAndReadPassed": false
+    },
+    {
+      "id": "8a5ca9ff35e6004f9c670871f6524312",
+      "name": "笔下文学[分页]",
+      "url": "http://www.bixia99.co",
+      "searchTested": true,
+      "status": "upstream_or_account_blocked",
+      "code": "DNS_NOT_FOUND",
+      "joinAndReadPassed": false
+    },
+    {
+      "id": "5a88ce91cd3399fdc8f0c2dd1ca85781",
+      "name": "🔖笔趣阁b16",
+      "url": "https://www.xswang.com",
+      "searchTested": true,
+      "status": "upstream_or_account_blocked",
+      "code": "HTTP_404",
+      "joinAndReadPassed": false
+    },
+    {
+      "id": "02662fe5e0e5f7f967b8361a2e9bf2dc",
+      "name": "🔖顶点小说b4",
+      "url": "https://www.230book.net",
+      "searchTested": true,
+      "status": "upstream_or_account_blocked",
+      "code": "HTTPS_DOWNGRADE",
+      "joinAndReadPassed": false
+    },
+    {
+      "id": "aea439f66f9e4445c41493900cbcd0cc",
+      "name": "🔖全本小说③",
+      "url": "https://www.qb5.tw",
+      "searchTested": true,
+      "status": "upstream_or_account_blocked",
+      "code": "HTTPS_DOWNGRADE",
+      "joinAndReadPassed": false
+    },
+    {
+      "id": "5e31cf4ba1a9dfba3e41fc8129c6563d",
+      "name": "🔖天域小说网①",
+      "url": "https://www.zmccx.com",
+      "searchTested": true,
+      "status": "upstream_or_account_blocked",
+      "code": "TLS_FAILED",
+      "joinAndReadPassed": false
+    },
+    {
+      "id": "2de828368ac81e19f57d0bd6fa7e7cbc",
+      "name": "🔖若雨中文",
+      "url": "http://www.3yt.com",
+      "searchTested": true,
+      "status": "upstream_or_account_blocked",
+      "code": "CONNECT_TIMEOUT",
+      "joinAndReadPassed": false
+    },
+    {
+      "id": "51c98043d70b25c4cb428178e0e0be99",
+      "name": "🔖七猫免费小说",
+      "url": "https://api-bc.wtzw.com",
+      "searchTested": true,
+      "status": "upstream_or_account_blocked",
+      "code": "SOURCE_LOGIN_REQUIRED",
+      "joinAndReadPassed": false
+    }
+  ]
+}

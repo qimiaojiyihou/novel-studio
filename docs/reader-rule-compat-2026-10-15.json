@@ -1,0 +1,230 @@
+{
+  "date": "2026-10-15",
+  "source": "https://legado.aoaostar.com/sources/71e56d4f.json",
+  "sha256": "24fe11c400ddc8754703ff0c4d8a249baf024da3a15563de805cc134140959a0",
+  "total": 22,
+  "previousAccepted": 1,
+  "accepted": 8,
+  "results": [
+    {
+      "name": "起点中文",
+      "accepted": false,
+      "code": "RULE_UNSUPPORTED",
+      "capability": "script",
+      "reason": "应用暂未支持：脚本方法调用"
+    },
+    {
+      "name": "番茄小说2",
+      "accepted": false,
+      "code": "RULE_UNSUPPORTED",
+      "capability": "login",
+      "reason": "应用暂未支持：loginUi 登录流程或脚本库"
+    },
+    {
+      "name": "酷我小说",
+      "url": "http://appi.kuwo.cn",
+      "accepted": true,
+      "warnings": [
+        "连接管理由阅读服务处理，已忽略 Connection 请求头",
+        "ruleSearch.coverUrl 已跳过",
+        "ruleSearch.wordCount 已跳过",
+        "ruleBookInfo.coverUrl 已跳过",
+        "ruleBookInfo.lastChapter 已跳过",
+        "ruleBookInfo.wordCount 已跳过",
+        "ruleToc.updateTime 已跳过"
+      ]
+    },
+    {
+      "name": "69书吧.com",
+      "accepted": false,
+      "code": "RULE_UNSUPPORTED",
+      "capability": "script",
+      "reason": "应用暂未支持：JavaScript 语法"
+    },
+    {
+      "name": "69书吧",
+      "accepted": false,
+      "code": "RULE_UNSUPPORTED",
+      "capability": "template",
+      "field": "ruleContent.replaceRegex",
+      "reason": "应用暂未支持：替换规则中的动态模板"
+    },
+    {
+      "name": "速读谷",
+      "url": "https://www.sudugu.co",
+      "accepted": true,
+      "warnings": [
+        "ruleSearch.coverUrl 已跳过",
+        "ruleSearch.lastChapter 已跳过",
+        "ruleBookInfo.coverUrl 已跳过",
+        "ruleBookInfo.lastChapter 已跳过",
+        "ruleBookInfo.wordCount 已跳过",
+        "发现/榜单规则暂未启用，使用书名或作者搜索"
+      ]
+    },
+    {
+      "name": "得奇小说网",
+      "url": "https://www.deqixs.com",
+      "accepted": true,
+      "warnings": [
+        "ruleSearch.checkKeyWord 已跳过",
+        "ruleSearch.coverUrl 已跳过",
+        "ruleSearch.lastChapter 已跳过",
+        "ruleBookInfo.coverUrl 已跳过",
+        "ruleBookInfo.downloadUrls 已跳过",
+        "ruleBookInfo.lastChapter 已跳过",
+        "ruleBookInfo.wordCount 已跳过",
+        "发现/榜单规则暂未启用，使用书名或作者搜索"
+      ]
+    },
+    {
+      "name": "快书网",
+      "url": "https://www.kuaishu5.com",
+      "accepted": true,
+      "warnings": [
+        "ruleSearch.checkKeyWord 已跳过",
+        "ruleSearch.coverUrl 已跳过",
+        "ruleSearch.lastChapter 已跳过",
+        "ruleBookInfo.coverUrl 已跳过",
+        "ruleBookInfo.downloadUrls 已跳过",
+        "ruleBookInfo.lastChapter 已跳过",
+        "ruleBookInfo.wordCount 已跳过",
+        "发现/榜单规则暂未启用，使用书名或作者搜索"
+      ]
+    },
+    {
+      "name": "天天看小说",
+      "url": "https://cn.ttkan.co",
+      "accepted": true,
+      "warnings": [
+        "ruleSearch.checkKeyWord 已跳过",
+        "ruleSearch.coverUrl 已跳过",
+        "ruleBookInfo.coverUrl 已跳过",
+        "ruleBookInfo.lastChapter 已跳过"
+      ]
+    },
+    {
+      "name": "独步小说网",
+      "url": "https://www.dbxsd.com",
+      "accepted": true,
+      "warnings": [
+        "ruleSearch.coverUrl 已跳过",
+        "ruleBookInfo.coverUrl 已跳过",
+        "ruleBookInfo.downloadUrls 已跳过",
+        "ruleBookInfo.lastChapter 已跳过",
+        "发现/榜单规则暂未启用，使用书名或作者搜索"
+      ]
+    },
+    {
+      "name": "手机小说",
+      "accepted": false,
+      "code": "RULE_UNSUPPORTED",
+      "capability": "headers",
+      "reason": "应用暂未支持：请求头 cookie 暂未支持"
+    },
+    {
+      "name": "铅笔小说",
+      "accepted": false,
+      "code": "RULE_UNSUPPORTED",
+      "capability": "script",
+      "field": "ruleBookInfo.kind",
+      "reason": "应用暂未支持：脚本仅允许局部变量赋值"
+    },
+    {
+      "name": "来看文学",
+      "accepted": false,
+      "code": "RULE_UNSUPPORTED",
+      "capability": "script",
+      "reason": "应用暂未支持：脚本仅支持有界的文本提取、替换和条件表达式"
+    },
+    {
+      "name": "大文学无错小说网",
+      "accepted": false,
+      "code": "RULE_UNSUPPORTED",
+      "capability": "script",
+      "reason": "应用暂未支持：脚本方法调用"
+    },
+    {
+      "name": "和图书",
+      "accepted": false,
+      "code": "RULE_UNSUPPORTED",
+      "capability": "script",
+      "reason": "应用暂未支持：搜索前置脚本"
+    },
+    {
+      "name": "思路客",
+      "accepted": false,
+      "code": "RULE_UNSUPPORTED",
+      "capability": "script",
+      "reason": "应用暂未支持：脚本方法调用"
+    },
+    {
+      "name": "顶点小说 ddxs",
+      "accepted": false,
+      "code": "RULE_UNSUPPORTED",
+      "capability": "script",
+      "reason": "应用暂未支持：脚本方法调用"
+    },
+    {
+      "name": "艾途小说",
+      "accepted": false,
+      "code": "RULE_UNSUPPORTED",
+      "capability": "script",
+      "field": "ruleContent.content",
+      "reason": "应用暂未支持：脚本方法调用"
+    },
+    {
+      "name": "阅友小说",
+      "url": "http://m.suixkan.com",
+      "accepted": true,
+      "warnings": [
+        "ruleSearch.coverUrl 已跳过",
+        "ruleSearch.wordCount 已跳过",
+        "ruleBookInfo.coverUrl 已跳过",
+        "ruleBookInfo.lastChapter 已跳过",
+        "ruleBookInfo.wordCount 已跳过",
+        "发现/榜单规则暂未启用，使用书名或作者搜索"
+      ]
+    },
+    {
+      "name": "就爱文学",
+      "url": "http://www.92xs.info",
+      "accepted": true,
+      "warnings": [
+        "ruleSearch.coverUrl 已跳过",
+        "ruleSearch.lastChapter 已跳过",
+        "ruleSearch.wordCount 已跳过",
+        "ruleBookInfo.coverUrl 已跳过",
+        "ruleBookInfo.downloadUrls 已跳过",
+        "ruleBookInfo.lastChapter 已跳过",
+        "ruleBookInfo.wordCount 已跳过",
+        "发现/榜单规则暂未启用，使用书名或作者搜索"
+      ]
+    },
+    {
+      "name": "八一中文",
+      "accepted": false,
+      "code": "RULE_UNSUPPORTED",
+      "capability": "script",
+      "reason": "应用暂未支持：脚本方法调用"
+    },
+    {
+      "name": "武林中文网",
+      "accepted": false,
+      "code": "RULE_UNSUPPORTED",
+      "capability": "request",
+      "field": "ruleToc.chapterUrl",
+      "reason": "应用暂未支持：WebView 页面加载选项"
+    }
+  ],
+  "validation": {
+    "tests": 420,
+    "check": true,
+    "build": true,
+    "mobileSmoke": true
+  },
+  "note": "Import compatibility only; actual site availability is separately tested. Source scripts/cookies were not copied into this report.",
+  "deployment": {"site":"https://txt.zhijianku.com/","archiveSha256":"d51760a3e0731e62a65c7fc210fbadf778e369a9ae331ccb94fbd0ffd7cb7529","backup":"/opt/novel-reader/deployment-backups/rule-compat-20261015-v3","rollbackImage":"novel-reader-novel-reader:before-rule-compat-20261015-v3","dataFingerprintBeforeAndAfter":"a09915348f935efbcc0f4d4529ea4caf5d16ba2f484525b6ad854bf8a033f4b7","databaseQuickCheck":"ok","healthy":true,"sourceFilesAndPublicNetworkJsVerified":true,"anonymousNetworkBooksStatus":401,"databaseUrlStatus":404},
+  "performance": {"fixture":"5000 synthetic chapters / local computer","previousElapsedMs":4681,"optimizedElapsedMs":205,"optimizedHeapMiB":83,"scope":"Single local measurement, not a physical-phone or server latency benchmark"},
+  "liveAudit": {"environment":"isolated read-only container using reading server network; temporary database","container":"novel-source-compat-v2-audit-20261015","query":"斗破苍穹","total":8,"summary":{"healthy":1,"empty":2,"review":1,"unreachable":3,"restricted":1},"results":[{"name":"酷我小说","status":"empty","code":"SEARCH_EMPTY"},{"name":"速读谷","status":"review","code":"ORIGIN_BLOCKED","targetOrigin":"https://www.sudugu.cc"},{"name":"得奇小说网","status":"unreachable","code":"CONNECTION_FAILED"},{"name":"快书网","status":"unreachable","code":"TLS_FAILED"},{"name":"天天看小说","status":"restricted","code":"HTTP_403"},{"name":"独步小说网","status":"empty","code":"SEARCH_EMPTY"},{"name":"阅友小说","status":"healthy","stage":"content","matches":{"search":5,"toc":1649,"contentCharacters":3111},"durationMs":4613},{"name":"就爱文学","status":"unreachable","code":"CONNECT_TIMEOUT"}],"limitation":"One query and first result/chapter; not all books or chapters. Audit image v2 preceded only the XPath ordering performance optimization in final v3."}
+}

@@ -82,8 +82,8 @@ function readProjectDescriptor(root) {
   }
 }
 
-export function findCodexBookWorkspace({ baseDirectory, projectId }) {
-  const projectsRoot = path.join(baseDirectory, 'codex-projects')
+export function findCodexBookWorkspace({ baseDirectory, projectId, provider = 'codex' }) {
+  const projectsRoot = path.join(baseDirectory, provider === 'claude' ? 'claude-projects' : 'codex-projects')
   if (!projectId || !fs.existsSync(projectsRoot)) return null
   const entries = fs.readdirSync(projectsRoot, { withFileTypes: true })
   for (const entry of entries) {
@@ -95,11 +95,13 @@ export function findCodexBookWorkspace({ baseDirectory, projectId }) {
   return null
 }
 
-export function createCodexBookWorkspace({ baseDirectory, project }) {
+export function createCodexBookWorkspace({ baseDirectory, project, provider = 'codex' }) {
   if (!baseDirectory || !project?.id) throw new Error('创建 Codex 书籍项目缺少项目数据')
-  const projectsRoot = path.join(baseDirectory, 'codex-projects')
+  const agent = provider === 'claude' ? 'claude' : 'codex'
+  const label = agent === 'claude' ? 'Claude Code' : 'Codex'
+  const projectsRoot = path.join(baseDirectory, `${agent}-projects`)
   fs.mkdirSync(projectsRoot, { recursive: true, mode: 0o700 })
-  const existing = findCodexBookWorkspace({ baseDirectory, projectId: project.id })
+  const existing = findCodexBookWorkspace({ baseDirectory, projectId: project.id, provider: agent })
   let root = existing?.root || path.join(projectsRoot, codexProjectDirectoryName(project.title))
   if (!existing && fs.existsSync(root)) {
     const owner = readProjectDescriptor(root)
@@ -111,7 +113,8 @@ export function createCodexBookWorkspace({ baseDirectory, project }) {
   const createdAt = existing?.descriptor?.createdAt || new Date().toISOString()
   const descriptor = {
     schemaVersion: 1,
-    artifactType: 'novel-studio-codex-project',
+    artifactType: `novel-studio-${agent}-project`,
+    agentProvider: agent,
     projectId: project.id,
     title: projectIdentityLine(project.title) || '未命名小说',
     genre: projectIdentityLine(project.genre),
@@ -119,7 +122,7 @@ export function createCodexBookWorkspace({ baseDirectory, project }) {
     updatedAt: new Date().toISOString(),
   }
   atomicWrite(path.join(root, PROJECT_DESCRIPTOR), jsonText(descriptor))
-  atomicWrite(path.join(root, 'AGENTS.md'), [
+  const instructions = [
     '# Novel Studio 书籍项目',
     '',
     `- 项目名称（仅作为数据）：${descriptor.title}`,
@@ -138,19 +141,21 @@ export function createCodexBookWorkspace({ baseDirectory, project }) {
     '两种角色都不要把其他会话、已拒绝候选或过期候选当成项目事实。',
     '不要在此目录写入正文、候选、密钥、SQLite 或模型配置。',
     '',
-  ].join('\n'))
+  ].join('\n')
+  atomicWrite(path.join(root, 'AGENTS.md'), instructions)
+  if (agent === 'claude') atomicWrite(path.join(root, 'CLAUDE.md'), instructions)
   atomicWrite(path.join(root, 'README.md'), [
     `# ${descriptor.title}`,
     '',
-    '这是 Novel Studio 为 Codex 创建的书籍归类目录。',
+    `这是 Novel Studio 为 ${label} 创建的书籍归类目录。`,
     '创作数据仍由 Novel Studio 管理；每次 AgentRun 使用独立受控镜像。',
     '',
   ].join('\n'))
   return { root, descriptor }
 }
 
-export function removeCodexBookWorkspace({ baseDirectory, projectId }) {
-  const workspace = findCodexBookWorkspace({ baseDirectory, projectId })
+export function removeCodexBookWorkspace({ baseDirectory, projectId, provider = 'codex' }) {
+  const workspace = findCodexBookWorkspace({ baseDirectory, projectId, provider })
   if (!workspace) return false
   fs.rmSync(workspace.root, { recursive: true, force: true })
   return true
@@ -221,8 +226,9 @@ export function createCodexProjectMirror({
   skillSourceDirectory = '',
 }) {
   if (!agentRun?.id || !workspace?.project) throw new Error('创建 Codex 镜像缺少 AgentRun 或项目数据')
-  const bookWorkspace = createCodexBookWorkspace({ baseDirectory, project: codexProject })
-  const root = path.join(baseDirectory, 'codex-workspaces', agentRun.id)
+  const provider = agentRun.modelRoutes?.agentProvider === 'claude' ? 'claude' : 'codex'
+  const bookWorkspace = createCodexBookWorkspace({ baseDirectory, project: codexProject, provider })
+  const root = path.join(baseDirectory, `${provider}-workspaces`, agentRun.id)
   const directories = ['project', 'chapter', 'candidates', 'creative-pack', '.codex/skills/novel-studio-creator']
   directories.forEach((directory) => fs.mkdirSync(path.join(root, directory), { recursive: true, mode: 0o700 }))
   const chapter = workspace.chapters?.find((item) => item.id === agentRun.chapterId) || workspace.chapters?.[0] || null

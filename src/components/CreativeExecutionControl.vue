@@ -3,18 +3,18 @@
     <button class="creative-execution-main" type="button" :disabled="disabled || busy" :aria-busy="busy" @click="execute(defaultMode)">
       <span v-if="busy" class="creative-execution-spinner"></span>
       <span>{{ busy ? busyLabel : actionLabel }}</span>
-      <small>{{ defaultMode === 'codex' ? 'Codex' : appModelLabel }}</small>
+      <small>{{ defaultMode === 'codex' ? agentLabel : appModelLabel }}</small>
     </button>
     <button ref="trigger" class="creative-execution-menu" type="button" :disabled="disabled || busy" aria-label="选择本次执行方式" aria-haspopup="menu" :aria-controls="menuId" :aria-expanded="open" @click="toggle" @keydown.down.prevent="showMenu" @keydown.up.prevent="showMenu(true)"><span class="creative-execution-chevron" :class="{ open }"></span></button>
     <Teleport to="body">
     <div v-if="open" :id="menuId" ref="menu" class="creative-execution-popover" role="menu" aria-label="本次创作执行方式" :style="menuStyle" @keydown="navigateMenu">
       <button type="button" role="menuitem" @click="execute(alternateMode)">
-        <strong>仅本次使用{{ alternateMode === 'codex' ? ' Codex' : '任务模型' }}</strong>
+        <strong>仅本次使用{{ alternateMode === 'codex' ? ` ${agentLabel}` : '任务模型' }}</strong>
         <small>不修改项目默认方式</small>
       </button>
       <button type="button" role="menuitem" @click="close(true); emit('edit-default')">
         <strong>修改项目默认方式</strong>
-        <small>当前：{{ defaultMode === 'codex' ? 'Codex' : '应用模型路由' }}</small>
+        <small>当前：{{ defaultMode === 'codex' ? agentLabel : '应用模型路由' }}</small>
       </button>
     </div>
     </Teleport>
@@ -24,6 +24,8 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
 import { placePopover } from '../utils/ui-layout.js'
+import { useCreativeAgent } from '../composables/useCreativeAgent.js'
+const { agentLabel } = useCreativeAgent()
 
 const props = defineProps({
   defaultMode: { type: String, default: 'app_model' },

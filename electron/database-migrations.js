@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url'
 import { validateCreativePack } from './creative-pack.js'
 import { creativeUpgradeMigrations } from './creative-upgrade-migrations.js'
 
-export const LATEST_SCHEMA_VERSION = 33
+export const LATEST_SCHEMA_VERSION = 35
 
 function bundledOfficialPack(version = '1.2.0') {
   const directory = version === '1.3.0' ? 'dist' : 'historical'
@@ -1545,6 +1545,48 @@ const migrations = [
     },
   },
 ]
+
+// Provider settings and sessions contain CHECK constraints; rebuild both in one
+// migration rather than changing sqlite_master or losing existing selections.
+migrations.push({ version: 34, name: 'claude-code-agent-provider', up(db) {
+  db.exec(`
+    CREATE TABLE agent_provider_settings_v34 (
+      id TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
+      preferred_backend TEXT NOT NULL DEFAULT 'codex_acp' CHECK(preferred_backend IN ('codex_acp','codex_exec')),
+      model TEXT NOT NULL DEFAULT '', reasoning_effort TEXT NOT NULL DEFAULT 'high',
+      fast_mode INTEGER NOT NULL DEFAULT 0 CHECK(fast_mode IN (0,1)),
+      adapter_version TEXT NOT NULL DEFAULT '1.6.2',
+      auth_method TEXT NOT NULL DEFAULT 'chatgpt' CHECK(auth_method IN ('chatgpt','environment')),
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+      agent_provider TEXT NOT NULL DEFAULT 'codex' CHECK(agent_provider IN ('codex','qoder','claude')),
+      qoder_cli_path TEXT NOT NULL DEFAULT '', qoder_model TEXT NOT NULL DEFAULT 'auto',
+      claude_cli_path TEXT NOT NULL DEFAULT '', claude_model TEXT NOT NULL DEFAULT '',
+      claude_auth_method TEXT NOT NULL DEFAULT 'cli' CHECK(claude_auth_method IN ('cli','environment'))
+    );
+    INSERT INTO agent_provider_settings_v34
+      (id,enabled,preferred_backend,model,reasoning_effort,fast_mode,adapter_version,auth_method,created_at,updated_at,agent_provider,qoder_cli_path,qoder_model)
+      SELECT id,enabled,preferred_backend,model,reasoning_effort,fast_mode,adapter_version,auth_method,created_at,updated_at,agent_provider,qoder_cli_path,qoder_model FROM agent_provider_settings;
+    DROP TABLE agent_provider_settings;
+    ALTER TABLE agent_provider_settings_v34 RENAME TO agent_provider_settings;
+    CREATE TABLE agent_sessions_v34 (
+      id TEXT PRIMARY KEY, agent_run_id TEXT NOT NULL UNIQUE REFERENCES agent_runs(id) ON DELETE CASCADE,
+      backend TEXT NOT NULL CHECK(backend IN ('codex_acp','codex_exec','qoder_acp','claude_sdk')),
+      session_id TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'initializing' CHECK(status IN ('initializing','active','interrupted','closed','failed','recreated')),
+      protocol_version TEXT NOT NULL DEFAULT '', adapter_version TEXT NOT NULL DEFAULT '',
+      capabilities_json TEXT NOT NULL DEFAULT '{}', auth_method TEXT NOT NULL DEFAULT '',
+      recovery_strategy TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL, closed_at TEXT NOT NULL DEFAULT ''
+    );
+    INSERT INTO agent_sessions_v34 SELECT * FROM agent_sessions;
+    DROP TABLE agent_sessions;
+    ALTER TABLE agent_sessions_v34 RENAME TO agent_sessions;
+    CREATE INDEX agent_sessions_status_idx ON agent_sessions(status, updated_at DESC);
+  `)
+} })
+
+migrations.push({ version: 35, name: 'claude_reasoning_effort', up(database) {
+  database.exec("ALTER TABLE agent_provider_settings ADD COLUMN claude_reasoning_effort TEXT NOT NULL DEFAULT ''")
+} })
 
 function readForeignKeyCheck(database) {
   return database.prepare('PRAGMA foreign_key_check').all()

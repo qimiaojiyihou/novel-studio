@@ -1,1 +1,1 @@
-export const CREATIVE_BUILD_ID = 'creative-upgrade-2026.10.12-mobile-reading.1'
+export const CREATIVE_BUILD_ID = 'creative-upgrade-2026.10.24-claude-code.1'

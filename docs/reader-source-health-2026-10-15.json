@@ -1,0 +1,1447 @@
+{
+  "date": "2026-10-15",
+  "scope": "当前内置默认书源，非生产账号副本；原始导入文件未修改",
+  "oldVersion": "exportBookSource-compat-c32c5acfeb4773ea",
+  "newVersion": "exportBookSource-compat-c32c5acfeb4773ea-health-20261015",
+  "tested": 115,
+  "remaining": 112,
+  "removedCount": 3,
+  "query": "斗破苍穹",
+  "startedAt": "2026-10-15T08:40:40.832Z",
+  "finishedAt": "2026-10-15T08:43:44.398Z",
+  "environment": "本机系统 DNS 有 79 个非公网 fake-IP 拦截；以下结果采用 Cloudflare 公共 DNS + 原应用公网验证/固定地址请求。未修改应用安全策略。",
+  "limits": "最多并发 4 书源；每源抽样搜索、目录、首章，整体约 12 秒上限；无验证码绕过或凭据发送。",
+  "summary": {
+    "restricted": 13,
+    "review": 39,
+    "suspect": 5,
+    "unreachable": 51,
+    "empty": 7
+  },
+  "fullPipelinePassed": 0,
+  "warning": "本轮未有搜索→目录→正文完整通过的书源。保留不等于已验证可用；403、429、超时、无搜索结果、跨域跳转、规则异常均未按失效删除。",
+  "removed": [
+    {
+      "id": "88e81711cf4768b802312f8aefb3aae5",
+      "name": "红叶书斋",
+      "url": "https://m.007zw.com",
+      "checks": [
+        {
+          "provider": "google",
+          "checkedAt": "2026-10-15T08:42:34.249Z",
+          "status": 3,
+          "answers": []
+        },
+        {
+          "provider": "cloudflare",
+          "checkedAt": "2026-10-15T08:42:34.196Z",
+          "status": 3,
+          "answers": []
+        }
+      ],
+      "recheck": {
+        "provider": "cloudflare",
+        "checkedAt": "2026-10-15T08:43:13.884Z",
+        "status": 3,
+        "answers": []
+      },
+      "confirmedMissing": true
+    },
+    {
+      "id": "9aa315f37ca5ad4181e221f0946c9ede",
+      "name": "灯笔小说 a",
+      "url": "https://wap.jzxtyun.net",
+      "checks": [
+        {
+          "provider": "google",
+          "checkedAt": "2026-10-15T08:42:34.647Z",
+          "status": 3,
+          "answers": []
+        },
+        {
+          "provider": "cloudflare",
+          "checkedAt": "2026-10-15T08:42:34.651Z",
+          "status": 3,
+          "answers": []
+        }
+      ],
+      "recheck": {
+        "provider": "cloudflare",
+        "checkedAt": "2026-10-15T08:43:14.086Z",
+        "status": 3,
+        "answers": []
+      },
+      "confirmedMissing": true
+    },
+    {
+      "id": "ddf293152e6b981f80b5873ee825c9b7",
+      "name": "燃文书库",
+      "url": "https://wap.778buy.com",
+      "checks": [
+        {
+          "provider": "google",
+          "checkedAt": "2026-10-15T08:42:36.976Z",
+          "status": 3,
+          "answers": []
+        },
+        {
+          "provider": "cloudflare",
+          "checkedAt": "2026-10-15T08:42:37.064Z",
+          "status": 3,
+          "answers": []
+        }
+      ],
+      "recheck": {
+        "provider": "cloudflare",
+        "checkedAt": "2026-10-15T08:43:14.363Z",
+        "status": 3,
+        "answers": []
+      },
+      "confirmedMissing": true
+    }
+  ],
+  "removedSourceConfigurations": [
+    {
+      "name": "红叶书斋",
+      "url": "https://m.007zw.com",
+      "enabled": true,
+      "search": {
+        "address": "https://m.007zw.com/s.php",
+        "method": "POST",
+        "charset": "gbk",
+        "body": "type=articlename&s={{key}}&submit="
+      },
+      "rules": {
+        "ruleSearch": {
+          "bookList": ".line",
+          "name": "a.1@text",
+          "author": "textNodes##/",
+          "bookUrl": ".line@a.1@href",
+          "kind": "a.0@text"
+        },
+        "ruleBookInfo": {
+          "name": "[property=og:title]@content",
+          "author": "[property=og:novel:author]@content",
+          "intro": ".intro_info@text",
+          "kind": "class.block_txt2@p.3@text##分类：",
+          "tocUrl": "text.查看目录@href"
+        },
+        "ruleToc": {
+          "chapterList": ".tomcat",
+          "chapterName": "a@text",
+          "chapterUrl": "a@href",
+          "nextTocUrl": "text.下一页@href"
+        },
+        "ruleContent": {
+          "content": "id.nr1@html",
+          "nextContentUrl": "text.下一页@href",
+          "replaceRegex": "##>|br/>|<"
+        }
+      },
+      "warnings": [
+        "ruleBookInfo.coverUrl 已跳过",
+        "ruleBookInfo.lastChapter 已跳过",
+        "ruleBookInfo.wordCount 已跳过",
+        "发现/榜单规则暂未启用，使用书名或作者搜索"
+      ],
+      "id": "88e81711cf4768b802312f8aefb3aae5",
+      "version": "3b0515087d66435f67acd7733aa995cda7e97c24f85e18de569bc1eb5c8be6d3"
+    },
+    {
+      "name": "灯笔小说 a",
+      "url": "https://wap.jzxtyun.net",
+      "enabled": true,
+      "search": {
+        "address": "https://wap.jzxtyun.net/search.php?keyword={{key}}",
+        "method": "GET",
+        "charset": "utf-8",
+        "body": ""
+      },
+      "rules": {
+        "ruleSearch": {
+          "bookList": "class.block@tag.ul@tag.li",
+          "name": "tag.li.0@tag.span.1@tag.a@text",
+          "author": "tag.li.0@tag.span.-1@text",
+          "bookUrl": "tag.li.0@tag.span.1@tag.a@href",
+          "kind": "tag.li.0@tag.span.0@text##\\[|\\]"
+        },
+        "ruleBookInfo": {
+          "name": "class.name@text",
+          "author": "class.dd_box.0@tag.span.0@text##作者\\W",
+          "intro": "class.book_about@tag.dl@tag.dd@textNodes##最新章节推荐地址.*",
+          "kind": "class.dd_box@tag.span.1@text##分类\\W"
+        },
+        "ruleToc": {
+          "chapterList": "class.book_last.1@tag.dl@tag.dd",
+          "chapterName": "tag.dd.0@tag.a@text",
+          "chapterUrl": "tag.dd.0@tag.a@href",
+          "nextTocUrl": "text.下一页@href"
+        },
+        "ruleContent": {
+          "content": "id.chaptercontent@textNodes##灯笔小说.*\n.*|第.*页|第.*章.*|www.jzxtyun.net",
+          "nextContentUrl": "text.下一页@href"
+        }
+      },
+      "warnings": [
+        "ruleBookInfo.coverUrl 已跳过",
+        "ruleBookInfo.lastChapter 已跳过",
+        "ruleBookInfo.wordCount 已跳过",
+        "发现/榜单规则暂未启用，使用书名或作者搜索"
+      ],
+      "id": "9aa315f37ca5ad4181e221f0946c9ede",
+      "version": "ea926ce91e6fcbd2da9fffe40e44101390f9f1fd635c1be57689131b10238475"
+    },
+    {
+      "name": "燃文书库",
+      "url": "https://wap.778buy.com",
+      "enabled": true,
+      "search": {
+        "address": "/s.php",
+        "method": "POST",
+        "charset": "gbk",
+        "body": "type=articlename&s={{key}}&submit="
+      },
+      "rules": {
+        "ruleSearch": {
+          "bookList": ".cover p",
+          "name": "a.1@text##章节.*|免费.*",
+          "author": "a.2@text",
+          "bookUrl": "a.1@href",
+          "kind": "a.0@text##\\[|\\]"
+        },
+        "ruleBookInfo": {
+          "name": ".block_txt2 a.1@text##章节.*|免费.*",
+          "author": ".block_txt2 a.2@text",
+          "intro": ".intro_info@html##(^|[。！？]+[”」）】]?)##$1<br>",
+          "kind": ".block_txt2 a.3@text&&.block_txt2 p.4:5@text##.*：|\\s.*",
+          "tocUrl": "text.查看目录@href"
+        },
+        "ruleToc": {
+          "chapterList": ".chapter li a",
+          "chapterName": "text##正文卷.|正文.|VIP卷.|默认卷.|卷_|VIP章节.|免费章节.|章节目录.|最新章节.|[\\(（【].*?[求更票谢乐发订合补加Kk].*?[】）\\)]",
+          "chapterUrl": "href##$##,{'webView': true}",
+          "nextTocUrl": "text.下一页@href"
+        },
+        "ruleContent": {
+          "content": "#nr1@html",
+          "nextContentUrl": "text.下一页@href##$##,{'webView': true}",
+          "replaceRegex": "##.*章节未完.*|阅读.*最新章节.*|\\-->"
+        }
+      },
+      "warnings": [
+        "ruleSearch.coverUrl 已跳过",
+        "ruleBookInfo.coverUrl 已跳过",
+        "ruleBookInfo.lastChapter 已跳过",
+        "发现/榜单规则暂未启用，使用书名或作者搜索"
+      ],
+      "id": "ddf293152e6b981f80b5873ee825c9b7",
+      "version": "0fa793267f58c09a2cee76df78dfa283c4240ca13eac6e71d168c375ed64ab6a"
+    }
+  ],
+  "results": [
+    {
+      "id": "4081bfe666a5c0b4d74dc3a16096b339",
+      "status": "restricted",
+      "message": "书源返回 HTTP 403",
+      "httpStatus": 403,
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:40:43.486Z",
+      "durationMs": 2593,
+      "name": "🎉新笔趣阁~a",
+      "url": "https://www.xbiquge.so"
+    },
+    {
+      "id": "fbffcbfad23f440cfde0c620e58da0b3",
+      "status": "review",
+      "message": "书籍链接或重定向超出书源域名",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:40:43.360Z",
+      "durationMs": 2462,
+      "name": "元宝小说~d",
+      "url": "https://www.ybwzx9.com"
+    },
+    {
+      "id": "d82e451a2f7f2e0298663a1d9df44fef",
+      "status": "suspect",
+      "message": "书源返回 HTTP 410",
+      "httpStatus": 410,
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:40:44.204Z",
+      "durationMs": 714,
+      "name": "🎉小说部落",
+      "url": "http://www.xiaoshuobuluo.com",
+      "homepageChecks": [
+        {
+          "httpStatus": 200,
+          "characters": 13034
+        }
+      ],
+      "confirmedUnavailable": false
+    },
+    {
+      "id": "2c2aa94f88c9fd5ca3c18a972f99b86f",
+      "status": "unreachable",
+      "message": "书源连接失败，请检查地址或稍后重试",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:40:44.461Z",
+      "durationMs": 970,
+      "name": "🎉精华书阁～a",
+      "url": "https://www.jhssd.com"
+    },
+    {
+      "id": "93ab4fe62bdda4ad8da23adf7d3d1b28",
+      "status": "review",
+      "message": "书籍链接或重定向超出书源域名",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:40:42.471Z",
+      "durationMs": 1600,
+      "name": "🎉️小说中文网1",
+      "url": "https://www.xszww8.net"
+    },
+    {
+      "id": "755effed24ab691d277a1e31814afc8b",
+      "status": "empty",
+      "message": "搜索未解析出结果：可换书名重测，也可能是验证页或规则变化",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:40:46.856Z",
+      "durationMs": 5964,
+      "name": "🎉️无错小说网1",
+      "url": "https://www.xread8.com"
+    },
+    {
+      "id": "795c0609b3dd24a5e66c1e5742d6fee7",
+      "status": "unreachable",
+      "message": "书源域名解析失败",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:40:45.701Z",
+      "durationMs": 109,
+      "name": "🎉三六小说",
+      "url": "http://www.36xs.net"
+    },
+    {
+      "id": "a91141812598c5c5a2867cda01a5875d",
+      "status": "restricted",
+      "message": "书源返回 HTTP 403",
+      "httpStatus": 403,
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:40:47.467Z",
+      "durationMs": 1874,
+      "name": "🎉一五中文",
+      "url": "http://www.15zw.com"
+    },
+    {
+      "id": "9aa315f37ca5ad4181e221f0946c9ede",
+      "status": "unreachable",
+      "message": "书源域名解析失败",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:40:47.970Z",
+      "durationMs": 278,
+      "name": "灯笔小说 a",
+      "url": "https://wap.jzxtyun.net"
+    },
+    {
+      "id": "b50ea762761cd2b81eec5c01ed866da2",
+      "status": "unreachable",
+      "message": "书源连接失败，请检查地址或稍后重试",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:40:52.918Z",
+      "durationMs": 5225,
+      "name": "笔趣阁A16",
+      "url": "http://www.xbiquke.com"
+    },
+    {
+      "id": "01f4b9865c614eaf569b9a8870a5d2eb",
+      "status": "review",
+      "message": "书籍链接或重定向超出书源域名",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:40:54.359Z",
+      "durationMs": 1437,
+      "name": "⚡新百强小说",
+      "url": "http://www.xinbqg.com"
+    },
+    {
+      "id": "1cc575b4b2bae659e41d4aee18552e7b",
+      "status": "unreachable",
+      "message": "书源连接失败，请检查地址或稍后重试",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:40:58.239Z",
+      "durationMs": 5314,
+      "name": "笔趣阁A20",
+      "url": "https://www.bequgew.com"
+    },
+    {
+      "id": "65923c96f49cd1aa60cb6a27a5ab9a2c",
+      "status": "unreachable",
+      "message": "书源请求超时，请稍后重试",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:40:58.864Z",
+      "durationMs": 12004,
+      "name": "看书宅屋",
+      "url": "https://wap.kbookzw.com"
+    },
+    {
+      "id": "88e81711cf4768b802312f8aefb3aae5",
+      "status": "unreachable",
+      "message": "书源域名解析失败",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:40:46.960Z",
+      "durationMs": 99,
+      "name": "红叶书斋",
+      "url": "https://m.007zw.com"
+    },
+    {
+      "id": "7d6ed7ac43c7f6a9ad571bc559c916ed",
+      "status": "review",
+      "message": "书籍链接或重定向超出书源域名",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:40:59.034Z",
+      "durationMs": 790,
+      "name": "笔趣阁A23",
+      "url": "http://www.bequ6.com"
+    },
+    {
+      "id": "b2cbe125fe0c27ffa78e3a60b59e3dcb",
+      "status": "review",
+      "message": "书籍链接或重定向超出书源域名",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:40:59.696Z",
+      "durationMs": 1449,
+      "name": "⚡思路客2",
+      "url": "http://www.siluke.cc"
+    },
+    {
+      "id": "087c4828555df23e9e3c1dd3bd086848",
+      "status": "review",
+      "message": "已找到书籍，但未解析出目录；请核对目录规则或网站状态",
+      "stage": "toc",
+      "checkedAt": "2026-10-15T08:41:01.278Z",
+      "durationMs": 2410,
+      "name": "一七小说",
+      "url": "https://www.1qxs.com"
+    },
+    {
+      "id": "3c0e901338364f8d0aeb8616b3741414",
+      "status": "review",
+      "message": "书籍链接或重定向超出书源域名",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:40:59.505Z",
+      "durationMs": 636,
+      "name": "猪猪书网",
+      "url": "http://www.zzs5.com"
+    },
+    {
+      "id": "ddf293152e6b981f80b5873ee825c9b7",
+      "status": "unreachable",
+      "message": "书源域名解析失败",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:41:00.612Z",
+      "durationMs": 266,
+      "name": "燃文书库",
+      "url": "https://wap.778buy.com"
+    },
+    {
+      "id": "d1ad5575c82d79b7ac9007d57bd5764c",
+      "status": "review",
+      "message": "书籍链接或重定向超出书源域名",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:41:01.719Z",
+      "durationMs": 1372,
+      "name": "七七读书1",
+      "url": "http://www.77dushu.com"
+    },
+    {
+      "id": "572d52a99813a592e20013069070b58f",
+      "status": "review",
+      "message": "书籍链接或重定向超出书源域名",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:41:02.198Z",
+      "durationMs": 916,
+      "name": "小说旗3",
+      "url": "https://www.xs7.com"
+    },
+    {
+      "id": "5f39eec8f5fe1985aaf77446cb26a792",
+      "status": "review",
+      "message": "书籍链接或重定向超出书源域名",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:41:02.351Z",
+      "durationMs": 1069,
+      "name": "爱下书小说网",
+      "url": "https://www.aixiaxsw.com"
+    },
+    {
+      "id": "d5c505a63e013961ef92dc3390696c4a",
+      "status": "review",
+      "message": "书籍链接或重定向超出书源域名",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:41:03.813Z",
+      "durationMs": 1367,
+      "name": "笔趣阁b02",
+      "url": "https://www.liquge.com"
+    },
+    {
+      "id": "16e4fbb5e5eb683b043e9ae9f2a14e6f",
+      "status": "review",
+      "message": "书籍链接或重定向超出书源域名",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:41:03.129Z",
+      "durationMs": 683,
+      "name": "起点笔下文学qdbxwx[自写]",
+      "url": "http://www.qdbxwx.com"
+    },
+    {
+      "id": "78af0b62bbf6a931c11d051c56cc1f8b",
+      "status": "review",
+      "message": "书籍链接或重定向超出书源域名",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:41:04.779Z",
+      "durationMs": 1395,
+      "name": "🔖格格党2",
+      "url": "https://www.ggdownxs.co"
+    },
+    {
+      "id": "aca41a9ce3d9bc5f810c164e5ef90d82",
+      "status": "review",
+      "message": "书籍链接或重定向超出书源域名",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:41:04.936Z",
+      "durationMs": 1550,
+      "name": "🔖采墨阁3",
+      "url": "https://www.caimoge.net"
+    },
+    {
+      "id": "28da254873763f2d8baafaaad7f3cb10",
+      "status": "unreachable",
+      "message": "书源连接失败，请检查地址或稍后重试",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:41:11.209Z",
+      "durationMs": 5725,
+      "name": "🔖零零小说",
+      "url": "https://www.00shu.com"
+    },
+    {
+      "id": "5a88ce91cd3399fdc8f0c2dd1ca85781",
+      "status": "unreachable",
+      "message": "书源连接失败，请检查地址或稍后重试",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:41:05.881Z",
+      "durationMs": 396,
+      "name": "⚡笔趣阁c39",
+      "url": "https://www.xswang.com"
+    },
+    {
+      "id": "02662fe5e0e5f7f967b8361a2e9bf2dc",
+      "status": "review",
+      "message": "书籍链接或重定向超出书源域名",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:41:13.548Z",
+      "durationMs": 2335,
+      "name": "🔖顶点小说b4",
+      "url": "https://www.230book.net"
+    },
+    {
+      "id": "9515fb88f83f43de0417f76d48b37add",
+      "status": "review",
+      "message": "书籍链接或重定向超出书源域名",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:41:12.051Z",
+      "durationMs": 836,
+      "name": "🔖帝书阁①",
+      "url": "http://m.dishuge.com"
+    },
+    {
+      "id": "fa9f5b6092ab613b9523cc5c9b8bebd3",
+      "status": "review",
+      "message": "书籍链接或重定向超出书源域名",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:41:05.419Z",
+      "durationMs": 873,
+      "name": "🔖八一中文④",
+      "url": "http://www.zwduxs.com"
+    },
+    {
+      "id": "362c1f753695a5f037135ed1f2049351",
+      "status": "unreachable",
+      "message": "书源请求超时，请稍后重试",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:41:16.549Z",
+      "durationMs": 12001,
+      "name": "🔖乐文小说①",
+      "url": "http://www.lewenge.org"
+    },
+    {
+      "id": "b431ec1a5a0ee4e1b8ad83afc530e7f9",
+      "status": "unreachable",
+      "message": "书源请求超时，请稍后重试",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:41:25.554Z",
+      "durationMs": 12002,
+      "name": "🔖可乐小说",
+      "url": "http://www.klxsw.org"
+    },
+    {
+      "id": "aea439f66f9e4445c41493900cbcd0cc",
+      "status": "review",
+      "message": "书籍链接或重定向超出书源域名",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:41:14.277Z",
+      "durationMs": 723,
+      "name": "⚡全本小说2",
+      "url": "https://www.qb5.tw"
+    },
+    {
+      "id": "a5ad6a23490fe137a7e881d90efbcddf",
+      "status": "unreachable",
+      "message": "书源请求超时，请稍后重试",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:41:28.553Z",
+      "durationMs": 12001,
+      "name": "🔖搜猫小说",
+      "url": "https://www.soumal.com"
+    },
+    {
+      "id": "6ba65b07855562dbf1c42133ed3b8fee",
+      "status": "unreachable",
+      "message": "书源域名解析失败",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:41:16.814Z",
+      "durationMs": 261,
+      "name": "🔖精华书阁1",
+      "url": "https://m.xbyuan.com"
+    },
+    {
+      "id": "19b6ede2d510c379cb141e90c378912c",
+      "status": "review",
+      "message": "已解析目录，但首章正文为空；请核对正文规则或网站状态",
+      "stage": "content",
+      "checkedAt": "2026-10-15T08:41:30.614Z",
+      "durationMs": 5056,
+      "name": "🔖种田小说",
+      "url": "https://m.zhongtianwen.cn"
+    },
+    {
+      "id": "f44d94cd81ed13fec8ced6529b30bb88",
+      "status": "unreachable",
+      "message": "书源请求超时，请稍后重试",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:41:37.564Z",
+      "durationMs": 12001,
+      "name": "🔖望书阁",
+      "url": "http://wap.wangshuge.la"
+    },
+    {
+      "id": "1634251085c8742cebc7bf19c929c8b8",
+      "status": "unreachable",
+      "message": "书源请求超时，请稍后重试",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:41:40.557Z",
+      "durationMs": 12001,
+      "name": "🔖望书阁3",
+      "url": "https://m.wangshuge.com"
+    },
+    {
+      "id": "208a788566e9ef74a9a35abcaf94fba0",
+      "status": "empty",
+      "message": "搜索未解析出结果：可换书名重测，也可能是验证页或规则变化",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:41:29.590Z",
+      "durationMs": 1033,
+      "name": "精华书阁4",
+      "url": "https://m.jhssd.com"
+    },
+    {
+      "id": "aa726bfafcca2f1b26a750efa7d6511a",
+      "status": "empty",
+      "message": "搜索未解析出结果：可换书名重测，也可能是验证页或规则变化",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:41:41.278Z",
+      "durationMs": 716,
+      "name": "🔖爪机书屋1",
+      "url": "https://www.zjsw.org"
+    },
+    {
+      "id": "e6b429050e0b8c8acdcb839393e36eae",
+      "status": "unreachable",
+      "message": "书源域名解析失败",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:41:46.726Z",
+      "durationMs": 6162,
+      "name": "🔖天籁小说~1",
+      "url": "https://m.23sk.com"
+    },
+    {
+      "id": "6f1ddfd222fb47fef8161058ea4193d4",
+      "status": "unreachable",
+      "message": "书源连接失败，请检查地址或稍后重试",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:41:39.233Z",
+      "durationMs": 1666,
+      "name": "🔖五五读书",
+      "url": "https://www.changduzw.com"
+    },
+    {
+      "id": "c762d8284d49b4ecb063b7c05033d3e2",
+      "status": "unreachable",
+      "message": "书源请求超时，请稍后重试",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:41:49.570Z",
+      "durationMs": 12001,
+      "name": "🔖56书库",
+      "url": "https://www.56shuku.la"
+    },
+    {
+      "id": "69db41990c555c56bbd31b6c86cbcd68",
+      "status": "review",
+      "message": "书籍链接或重定向超出书源域名",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:41:50.233Z",
+      "durationMs": 3504,
+      "name": "🔖全本小说⑤",
+      "url": "http://www.xs5200.com"
+    },
+    {
+      "id": "0b027fd52bcf7670c1480a20322071f8",
+      "status": "unreachable",
+      "message": "书源连接失败，请检查地址或稍后重试",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:41:47.894Z",
+      "durationMs": 1163,
+      "name": "🔖恋上你看书网",
+      "url": "https://www.630shu.net"
+    },
+    {
+      "id": "e670ad8044b8a0736a796428d771612f",
+      "status": "review",
+      "message": "书籍链接或重定向超出书源域名",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:41:50.735Z",
+      "durationMs": 1162,
+      "name": "⚡亿软网1",
+      "url": "https://www.yruan.com"
+    },
+    {
+      "id": "5e31cf4ba1a9dfba3e41fc8129c6563d",
+      "status": "unreachable",
+      "message": "书源连接失败，请检查地址或稍后重试",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:41:50.428Z",
+      "durationMs": 854,
+      "name": "⚡天域小说网2",
+      "url": "https://www.zmccx.com"
+    },
+    {
+      "id": "2de828368ac81e19f57d0bd6fa7e7cbc",
+      "status": "review",
+      "message": "书籍链接或重定向超出书源域名",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:41:51.761Z",
+      "durationMs": 1525,
+      "name": "🔖若雨中文",
+      "url": "http://www.3yt.com"
+    },
+    {
+      "id": "87d0744795f0b0cbe24493696fc4767b",
+      "status": "review",
+      "message": "书籍链接或重定向超出书源域名",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:41:50.862Z",
+      "durationMs": 625,
+      "name": "🔖玄幻阁1",
+      "url": "http://www.xuankuge.com"
+    },
+    {
+      "id": "e109f92f1217f7ac63688957c74f9a1b",
+      "status": "suspect",
+      "message": "书源返回 HTTP 404",
+      "httpStatus": 404,
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:41:56.880Z",
+      "durationMs": 5205,
+      "name": "🔖笔趣阁b50",
+      "url": "http://www.biqugewu.net",
+      "homepageChecks": [
+        {
+          "httpStatus": 200,
+          "characters": 807
+        }
+      ],
+      "confirmedUnavailable": false
+    },
+    {
+      "id": "773d8fea257e8bf198a2dc14972731c4",
+      "status": "restricted",
+      "message": "书源返回 HTTP 403",
+      "httpStatus": 403,
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:41:53.697Z",
+      "durationMs": 2021,
+      "name": "🔖笔趣阁b51",
+      "url": "https://www.1biquge.net"
+    },
+    {
+      "id": "64b8cde6c82b628f0777069b2db0e031",
+      "status": "unreachable",
+      "message": "书源请求超时，请稍后重试",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:42:04.338Z",
+      "durationMs": 12001,
+      "name": "🔖乐文小说⑧",
+      "url": "https://www.365xs.la"
+    },
+    {
+      "id": "f6414b8dadb670e7c92cc1bc56a341c1",
+      "status": "review",
+      "message": "书籍链接或重定向超出书源域名",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:41:53.351Z",
+      "durationMs": 1009,
+      "name": "🔖溜达小说2",
+      "url": "http://www.txtshuku.org"
+    },
+    {
+      "id": "3aacc4c759ee6733390d7820bcdae1db",
+      "status": "review",
+      "message": "书籍链接或重定向超出书源域名",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:42:05.479Z",
+      "durationMs": 1135,
+      "name": "⚡笔尖中文1",
+      "url": "https://www.xbiquwx.la"
+    },
+    {
+      "id": "c3ca5984f6f66b013e1528179e0f6d50",
+      "status": "review",
+      "message": "书籍链接或重定向超出书源域名",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:42:05.795Z",
+      "durationMs": 1450,
+      "name": "☘️海棠1☘️",
+      "url": "https://www.haitang123.co"
+    },
+    {
+      "id": "35f36124a8517ccd00c5eba462e3db86",
+      "status": "unreachable",
+      "message": "书源连接失败，请检查地址或稍后重试",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:42:07.670Z",
+      "durationMs": 1224,
+      "name": "🔞 海棠书房1",
+      "url": "https://www.haitangkan.com"
+    },
+    {
+      "id": "0b1b18d6fab33e4646ce804de101f283",
+      "status": "restricted",
+      "message": "书源返回 HTTP 429",
+      "httpStatus": 429,
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:42:07.623Z",
+      "durationMs": 1177,
+      "name": "什么看书",
+      "url": "https://www.smkan.top"
+    },
+    {
+      "id": "1df9216c4104118b610db01ed57bc318",
+      "status": "unreachable",
+      "message": "书源请求超时，请稍后重试",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:42:08.885Z",
+      "durationMs": 12001,
+      "name": "⚡蚂蚁文学",
+      "url": "https://www.mayiwxw.com"
+    },
+    {
+      "id": "db37fdd753ff29a291087781d3067f14",
+      "status": "unreachable",
+      "message": "书源返回 HTTP 503",
+      "httpStatus": 503,
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:41:57.759Z",
+      "durationMs": 873,
+      "name": "笔趣阁b23",
+      "url": "http://www.bqgwu.com"
+    },
+    {
+      "id": "1e446954aaf483a15cbdb2c4f5aa5923",
+      "status": "unreachable",
+      "message": "书源连接失败，请检查地址或稍后重试",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:42:08.983Z",
+      "durationMs": 437,
+      "name": "52小说2",
+      "url": "https://www.52xiaoshuo.com"
+    },
+    {
+      "id": "328a21e4ddcbee6381c1b42f9be0cb89",
+      "status": "unreachable",
+      "message": "书源连接失败，请检查地址或稍后重试",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:42:09.532Z",
+      "durationMs": 985,
+      "name": "sis小说",
+      "url": "https://www.sistxt.net"
+    },
+    {
+      "id": "4dc6c5c69fd231fee214f0e89698d05a",
+      "status": "restricted",
+      "message": "书源返回 HTTP 403",
+      "httpStatus": 403,
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:42:10.497Z",
+      "durationMs": 1606,
+      "name": "⚡69中文网1",
+      "url": "https://www.zw69.com"
+    },
+    {
+      "id": "975eba786c6755a1695658c782abf2a4",
+      "status": "suspect",
+      "message": "书源返回 HTTP 404",
+      "httpStatus": 404,
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:42:10.051Z",
+      "durationMs": 1159,
+      "name": "⚡69中文网2",
+      "url": "https://www.69zww.com",
+      "homepageChecks": [
+        {
+          "httpStatus": null,
+          "message": "书源请求超时，请稍后重试"
+        }
+      ],
+      "confirmedUnavailable": false
+    },
+    {
+      "id": "e1ce0b264f382522940d112e30be432f",
+      "status": "empty",
+      "message": "搜索未解析出结果：可换书名重测，也可能是验证页或规则变化",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:42:12.412Z",
+      "durationMs": 1419,
+      "name": "⚡笔趣阁c18",
+      "url": "https://www.1biquge.com"
+    },
+    {
+      "id": "e5af4f2d54758b48835421d8a0a3c769",
+      "status": "unreachable",
+      "message": "书源连接失败，请检查地址或稍后重试",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:42:11.648Z",
+      "durationMs": 654,
+      "name": "⚡笔趣阁c20",
+      "url": "http://www.xibiquge.com"
+    },
+    {
+      "id": "f57646bd67f5b8c6b0f537513fc461b5",
+      "status": "review",
+      "message": "书籍链接或重定向超出书源域名",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:42:11.747Z",
+      "durationMs": 1101,
+      "name": "⚡顶点中文",
+      "url": "http://wap.dingdiansk.com"
+    },
+    {
+      "id": "d2f9380402ac223a408b9171f9cdfb35",
+      "status": "restricted",
+      "message": "书源返回 HTTP 403",
+      "httpStatus": 403,
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:42:12.629Z",
+      "durationMs": 1983,
+      "name": "⚡笔趣阁c11",
+      "url": "https://www.bqg6.com"
+    },
+    {
+      "id": "65ecb040813f98222b6642181750911b",
+      "status": "unreachable",
+      "message": "书源连接失败，请检查地址或稍后重试",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:42:13.546Z",
+      "durationMs": 800,
+      "name": "⚡笔趣阁c21",
+      "url": "https://www.ibiquge.la"
+    },
+    {
+      "id": "74df78784568a9763a07d5a4a66f92d9",
+      "status": "suspect",
+      "message": "书源返回 HTTP 404",
+      "httpStatus": 404,
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:42:13.613Z",
+      "durationMs": 865,
+      "name": "⚡笔趣阁c22",
+      "url": "https://www.96biquge.com",
+      "homepageChecks": [
+        {
+          "httpStatus": 200,
+          "characters": 2395
+        }
+      ],
+      "confirmedUnavailable": false
+    },
+    {
+      "id": "1cda4d04571661eb09dd89c8cb7da67b",
+      "status": "restricted",
+      "message": "书源返回 HTTP 403",
+      "httpStatus": 403,
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:42:15.164Z",
+      "durationMs": 2069,
+      "name": "⚡麒麟中文网",
+      "url": "https://www.70zw.com"
+    },
+    {
+      "id": "fcbda6bb8570e12e713002e28955fddf",
+      "status": "review",
+      "message": "书籍链接或重定向超出书源域名",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:42:13.642Z",
+      "durationMs": 546,
+      "name": "⚡笔趣阁c28",
+      "url": "http://www.1biqug.com"
+    },
+    {
+      "id": "7e05756a669b4bb78327e6ff9061b924",
+      "status": "restricted",
+      "message": "书源返回 HTTP 403",
+      "httpStatus": 403,
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:42:16.719Z",
+      "durationMs": 1871,
+      "name": "⚡乐文小说1",
+      "url": "https://www.lewen.org"
+    },
+    {
+      "id": "c95f5ed21dd400ae67875f90fae4d37c",
+      "status": "unreachable",
+      "message": "书源连接失败，请检查地址或稍后重试",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:42:15.228Z",
+      "durationMs": 380,
+      "name": "⚡飘天文学1",
+      "url": "https://www.piaotian.org"
+    },
+    {
+      "id": "8deaa5dd5f82377ca03a8c41a75fbd6b",
+      "status": "restricted",
+      "message": "书源返回 HTTP 403",
+      "httpStatus": 403,
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:42:17.570Z",
+      "durationMs": 2374,
+      "name": "⚡紫薇中文网1",
+      "url": "https://www.zw0000.com"
+    },
+    {
+      "id": "6873f021b3af8c56226e92e5535136db",
+      "status": "review",
+      "message": "书籍链接或重定向超出书源域名",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:42:17.335Z",
+      "durationMs": 2139,
+      "name": "⚡必去小说",
+      "url": "http://www.ibiquw.com"
+    },
+    {
+      "id": "5065aaabf43e688f7159ecd4ceff0766",
+      "status": "unreachable",
+      "message": "书源连接失败，请检查地址或稍后重试",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:42:18.318Z",
+      "durationMs": 1371,
+      "name": "⚡爱下书网",
+      "url": "https://www.aixiaxs.net"
+    },
+    {
+      "id": "1ef27179ef8be57445b020fd602c3c2c",
+      "status": "unreachable",
+      "message": "书源连接失败，请检查地址或稍后重试",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:42:17.452Z",
+      "durationMs": 504,
+      "name": "⚡亿软小说",
+      "url": "https://www.yiruan.la"
+    },
+    {
+      "id": "f0b5fbacd430900e29499c4c4f567e58",
+      "status": "unreachable",
+      "message": "书源连接失败，请检查地址或稍后重试",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:42:18.296Z",
+      "durationMs": 723,
+      "name": "⚡八零小说",
+      "url": "https://www.80wx.la"
+    },
+    {
+      "id": "131755f2717e338162e429e4399dee2c",
+      "status": "unreachable",
+      "message": "书源请求超时，请稍后重试",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:42:29.574Z",
+      "durationMs": 12000,
+      "name": "⚡九五书包",
+      "url": "http://www.95shubao.net"
+    },
+    {
+      "id": "25882e6e7c4f8209a1e6e28d94ddb759",
+      "status": "unreachable",
+      "message": "书源请求超时，请稍后重试",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:42:31.049Z",
+      "durationMs": 12002,
+      "name": "⚡选书网1",
+      "url": "https://www.ixuanshu.org"
+    },
+    {
+      "id": "1fdf935b0ae71221c2d03f133dfd9cfd",
+      "status": "unreachable",
+      "message": "书源请求超时，请稍后重试",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:42:31.050Z",
+      "durationMs": 12002,
+      "name": "⚡天域小说网1",
+      "url": "https://www.tycqzw.com"
+    },
+    {
+      "id": "bbaef34460cfb389d6da40c55fd9b32a",
+      "status": "review",
+      "message": "书籍链接或重定向超出书源域名",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:42:30.305Z",
+      "durationMs": 727,
+      "name": "⚡鬼吹灯1",
+      "url": "http://www.gdbzkz.org"
+    },
+    {
+      "id": "1e45c79d4817508edc91c014e1cbd52c",
+      "status": "review",
+      "message": "书籍链接或重定向超出书源域名",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:42:31.380Z",
+      "durationMs": 1801,
+      "name": "⚡笔趣网2",
+      "url": "http://www.biquw.com"
+    },
+    {
+      "id": "59d26719d1d6b924626b83a9ecd82734",
+      "status": "review",
+      "message": "书籍链接或重定向超出书源域名",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:42:31.878Z",
+      "durationMs": 825,
+      "name": "⚡鬼吹灯",
+      "url": "http://www.gdbzkz.com"
+    },
+    {
+      "id": "60c3c9a7e5c4e986d27ce41c979bad01",
+      "status": "unreachable",
+      "message": "书源连接失败，请检查地址或稍后重试",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:42:32.000Z",
+      "durationMs": 946,
+      "name": "⚡书香小说",
+      "url": "https://www.xbiquge.la"
+    },
+    {
+      "id": "18715a6c5b4fd130ac5566dc77b95475",
+      "status": "review",
+      "message": "书籍链接或重定向超出书源域名",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:42:32.363Z",
+      "durationMs": 684,
+      "name": "⚡文桑小说",
+      "url": "http://www.wlwx.org"
+    },
+    {
+      "id": "43fe06053f579502084971efac0d92af",
+      "status": "review",
+      "message": "书籍链接或重定向超出书源域名",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:42:33.153Z",
+      "durationMs": 1473,
+      "name": "⚡爱下书小说1",
+      "url": "http://www.aixiashu.com"
+    },
+    {
+      "id": "a8a23576ae79ab332fb541059fc53a4a",
+      "status": "review",
+      "message": "书籍链接或重定向超出书源域名",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:42:35.108Z",
+      "durationMs": 1329,
+      "name": "⚡00小说网1",
+      "url": "http://www.00shu.com"
+    },
+    {
+      "id": "62d12586f834dbe143aaa6cc41290424",
+      "status": "empty",
+      "message": "搜索未解析出结果：可换书名重测，也可能是验证页或规则变化",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:42:34.858Z",
+      "durationMs": 1078,
+      "name": "⚡微云中文",
+      "url": "http://www.viviyzw.com"
+    },
+    {
+      "id": "b6e03db35c5e94e9774b956a94da6235",
+      "status": "restricted",
+      "message": "书源返回 HTTP 403",
+      "httpStatus": 403,
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:42:36.700Z",
+      "durationMs": 819,
+      "name": "⚡星门网",
+      "url": "https://www.xingmen.cc"
+    },
+    {
+      "id": "41b5a4cbf87f6c49524e09a4fb16d26e",
+      "status": "empty",
+      "message": "搜索未解析出结果：可换书名重测，也可能是验证页或规则变化",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:42:36.592Z",
+      "durationMs": 710,
+      "name": "⚡22中文网",
+      "url": "https://www.999xs.com"
+    },
+    {
+      "id": "8550a5295435481be9a2c116d57db9d5",
+      "status": "unreachable",
+      "message": "书源连接失败，请检查地址或稍后重试",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:42:38.530Z",
+      "durationMs": 5376,
+      "name": "⚡无双小说",
+      "url": "http://www.buxia.net"
+    },
+    {
+      "id": "f40105fd8d53c6a54010605d3d6bcac1",
+      "status": "unreachable",
+      "message": "书源请求超时，请稍后重试",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:42:45.155Z",
+      "durationMs": 12001,
+      "name": "⚡悠久小说",
+      "url": "http://www.ujxsw.com"
+    },
+    {
+      "id": "ce989e85bc50a201b8b6eda2efee1197",
+      "status": "unreachable",
+      "message": "书源请求超时，请稍后重试",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:42:49.984Z",
+      "durationMs": 12001,
+      "name": "醋溜文学3",
+      "url": "https://www.clewxc.com"
+    },
+    {
+      "id": "2956ab2c0024245825e9eb22f7b126d4",
+      "status": "review",
+      "message": "书籍链接或重定向超出书源域名",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:42:38.880Z",
+      "durationMs": 896,
+      "name": "天涯书库1",
+      "url": "https://www.tysk.cc"
+    },
+    {
+      "id": "d41f2aa57a41606e025639f78523ab4d",
+      "status": "review",
+      "message": "书籍链接或重定向超出书源域名",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:42:45.915Z",
+      "durationMs": 756,
+      "name": "101言情",
+      "url": "http://www.txt101.com"
+    },
+    {
+      "id": "43ed29aa4441a2e7b61d582158b3f215",
+      "status": "unreachable",
+      "message": "书源域名解析失败",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:42:53.161Z",
+      "durationMs": 8001,
+      "name": "星星小说",
+      "url": "https://m.zbcxw.cn"
+    },
+    {
+      "id": "46a18f8981e842fdfd13da175c337271",
+      "status": "restricted",
+      "message": "书源返回 HTTP 403",
+      "httpStatus": 403,
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:42:50.861Z",
+      "durationMs": 874,
+      "name": "原创阅读",
+      "url": "https://www.ycydu.com"
+    },
+    {
+      "id": "334cc1e45d4d8cd3cf1cbeb5c29de2f9",
+      "status": "unreachable",
+      "message": "书源请求超时，请稍后重试",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:43:01.989Z",
+      "durationMs": 12000,
+      "name": "Woo小说",
+      "url": "https://m.woo15.com"
+    },
+    {
+      "id": "a08367b81d5c9e1ce85ae44ba6c36921",
+      "status": "restricted",
+      "message": "书源返回 HTTP 403",
+      "httpStatus": 403,
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:42:54.709Z",
+      "durationMs": 1530,
+      "name": "宝书网1",
+      "url": "http://www.baoshus.com"
+    },
+    {
+      "id": "7c6cc79ed45074319f04d2ae61fe456a",
+      "status": "unreachable",
+      "message": "书源请求超时，请稍后重试",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:43:05.180Z",
+      "durationMs": 12000,
+      "name": "UC书库",
+      "url": "http://m.ucshuku.com"
+    },
+    {
+      "id": "d64ef658f2d6d7ae28f1c9a0dc6e56e8",
+      "status": "unreachable",
+      "message": "书源连接失败，请检查地址或稍后重试",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:43:02.928Z",
+      "durationMs": 933,
+      "name": "新笔趣阁1",
+      "url": "https://www.biquban.com"
+    },
+    {
+      "id": "f6ca3e8549c756e768d5406be6b16cb8",
+      "status": "unreachable",
+      "message": "书源连接失败，请检查地址或稍后重试",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:43:07.317Z",
+      "durationMs": 5319,
+      "name": "2K小说4",
+      "url": "http://www.2kxs.org"
+    },
+    {
+      "id": "41c41fcb476d8e15425c2e016c7a2fc2",
+      "status": "unreachable",
+      "message": "书源忽略了明文传输约定",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:43:05.909Z",
+      "durationMs": 725,
+      "name": "基友书屋1",
+      "url": "https://www.gaysay.com"
+    },
+    {
+      "id": "25288224c3725223d0173ba350962cb9",
+      "status": "review",
+      "message": "书籍链接或重定向超出书源域名",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:43:08.084Z",
+      "durationMs": 2899,
+      "name": "广安中文",
+      "url": "http://www.gazww.com"
+    },
+    {
+      "id": "c4bd39d157e492fae06ae79fa38b883a",
+      "status": "unreachable",
+      "message": "书源连接失败，请检查地址或稍后重试",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:43:12.536Z",
+      "durationMs": 5216,
+      "name": "顶点小说d5",
+      "url": "https://www.23wx.cc"
+    },
+    {
+      "id": "39f6d37b8bbfca04d319880798dfd93f",
+      "status": "unreachable",
+      "message": "书源连接失败，请检查地址或稍后重试",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:43:08.115Z",
+      "durationMs": 794,
+      "name": "恋上你看书2",
+      "url": "https://www.630shu.com"
+    },
+    {
+      "id": "630f1c9fe06fa063cc9a7a814c5992dc",
+      "status": "restricted",
+      "message": "书源返回 HTTP 403",
+      "httpStatus": 403,
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:43:10.151Z",
+      "durationMs": 2064,
+      "name": "62中文网",
+      "url": "https://www.62zw.com"
+    },
+    {
+      "id": "f9dd517af941cb85240280305eeaa05b",
+      "status": "unreachable",
+      "message": "书源请求超时，请稍后重试",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:43:20.088Z",
+      "durationMs": 12000,
+      "name": "望书阁1",
+      "url": "https://wap.wangshuge.com"
+    },
+    {
+      "id": "8a8fbe0d0b115f8fd0e1bac1ef85e118",
+      "status": "empty",
+      "message": "搜索未解析出结果：可换书名重测，也可能是验证页或规则变化",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:43:24.534Z",
+      "durationMs": 4443,
+      "name": "去看看",
+      "url": "http://www.qkkan.com"
+    },
+    {
+      "id": "73f2bc418a0d422bbbbba862fd62c33e",
+      "status": "unreachable",
+      "message": "书源连接失败，请检查地址或稍后重试",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:43:20.952Z",
+      "durationMs": 859,
+      "name": "无限小说1",
+      "url": "https://www.61ww.com"
+    },
+    {
+      "id": "3112d5cbd3335478de244f36463233a2",
+      "status": "unreachable",
+      "message": "书源请求超时，请稍后重试",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:43:24.541Z",
+      "durationMs": 12002,
+      "name": "笔趣阁d07",
+      "url": "https://www.9biquge.com"
+    },
+    {
+      "id": "5e554d4c61dbad53aca08ba418e6c0ec",
+      "status": "review",
+      "message": "书籍链接或重定向超出书源域名",
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:43:13.950Z",
+      "durationMs": 1408,
+      "name": "龙坛书网1",
+      "url": "https://www.longtanshuw.net"
+    },
+    {
+      "id": "3a5cc54b3fd0ef22c41dd2c56292cd80",
+      "status": "suspect",
+      "message": "书源返回 HTTP 404",
+      "httpStatus": 404,
+      "stage": "search",
+      "checkedAt": "2026-10-15T08:43:25.291Z",
+      "durationMs": 753,
+      "name": "🍒零点看书7",
+      "url": "http://www.axeslide.com",
+      "homepageChecks": [
+        {
+          "httpStatus": 200,
+          "characters": 138
+        }
+      ],
+      "confirmedUnavailable": false
+    }
+  ]
+}

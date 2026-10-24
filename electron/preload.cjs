@@ -125,6 +125,7 @@ contextBridge.exposeInMainWorld('novelStudio', {
   confirmManualFinalization: (payload) => ipcRenderer.invoke('chapter:manual-confirm', payload),
   restartCodexAdapter: () => ipcRenderer.invoke('codex:restart-adapter'),
   openCodexProject: (projectId) => ipcRenderer.invoke('codex:open-project', projectId),
+  openClaudeProject: (projectId) => ipcRenderer.invoke('claude:open-project', projectId),
   getWorkDesignSync: (projectId) => ipcRenderer.invoke('work-design:state', projectId),
   bindWorkDesignSync: (payload) => ipcRenderer.invoke('work-design:bind', payload),
   getWorkDesignPrompt: (payload) => ipcRenderer.invoke('work-design:prompt', payload),

@@ -171,7 +171,8 @@ import { runWithStructuredOutputRetry } from './structured-output-retry.js'
 import { AgentRuntime, manuscriptLengthRange } from './agent-runtime.js'
 import { CodexAgentGateway, inspectCodexRuntime } from './codex-agent-gateway.js'
 import { QoderAgentGateway, inspectQoderRuntime } from './qoder-agent-gateway.js'
-import { AgentGatewayRouter, agentProviderLabel, normalizeAgentProvider } from './agent-gateway-router.js'
+import { ClaudeAgentGateway, inspectClaudeRuntime } from './claude-agent-gateway.js'
+import { AgentGatewayRouter, agentProviderLabel, agentProviderModel, agentProviderReasoningEffort, agentProviderBackend, normalizeAgentProvider } from './agent-gateway-router.js'
 import { createCodexBookWorkspace, createCodexProjectMirror, findCodexBookWorkspace, removeCodexBookWorkspace } from './codex-project-mirror.js'
 import { codexTaskDisplayTitle } from './codex-task-label.js'
 import { projectForInlineTarget, sanitizeProjectDraftContext } from './inline-creative.js'
@@ -193,6 +194,7 @@ let codexComponents = null
 let codexModelCatalog = null
 let codexComponentTimer = null
 let qoderGateway = null
+let claudeGateway = null
 let agentGateway = null
 let agentRuntime = null
 let idleInlineTimer = null
@@ -300,10 +302,10 @@ function codexBookWorkspaceForProject(projectId) {
 
 function repairMissingCodexBookWorkspaces() {
   const baseDirectory = getLibraryDirectory()
-  for (const project of listProjects()) {
-    if (findCodexBookWorkspace({ baseDirectory, projectId: project.id })) continue
+  for (const project of listProjects()) for (const provider of ['codex', 'claude']) {
+    if (findCodexBookWorkspace({ baseDirectory, projectId: project.id, provider })) continue
     try {
-      createCodexBookWorkspace({ baseDirectory, project })
+      createCodexBookWorkspace({ baseDirectory, project, provider })
     } catch (error) {
       console.warn(`[Codex] 修复《${project.title}》书籍工作区失败：${error.message}`)
     }
@@ -533,10 +535,10 @@ async function prepareCodexPrompt({ run, step, extra = {} }) {
   const agentProvider = normalizeAgentProvider(run.modelRoutes?.agentProvider ?? codexSettings?.agentProvider)
   const codexRunSettings = {
     agentProvider,
-    model: run.modelRoutes?.codexModel ?? (agentProvider === 'qoder' ? codexSettings?.qoderModel || 'auto' : codexSettings?.model || ''),
-    reasoningEffort: run.modelRoutes?.codexReasoningEffort ?? codexSettings?.reasoningEffort ?? 'high',
+    model: run.modelRoutes?.codexModel ?? agentProviderModel(codexSettings, agentProvider),
+    reasoningEffort: run.modelRoutes?.codexReasoningEffort ?? agentProviderReasoningEffort(codexSettings, agentProvider),
     fastMode: run.modelRoutes?.codexFastMode ?? Boolean(codexSettings?.fastMode),
-    authMethod: run.modelRoutes?.codexAuthMethod ?? codexSettings?.authMethod ?? 'chatgpt',
+    authMethod: run.modelRoutes?.codexAuthMethod ?? (agentProvider === 'claude' ? codexSettings?.claudeAuthMethod || 'cli' : codexSettings?.authMethod || 'chatgpt'),
   }
   const agentLabel = agentProviderLabel(codexRunSettings.agentProvider)
   const inlineAction = run.workflowId === 'inline-action' ? step.input || {} : null
@@ -767,7 +769,7 @@ async function prepareCodexPrompt({ run, step, extra = {} }) {
     },
     intent,
     parentGenerationId: revisionCandidate?.evidence?.generationRecordId || selectedSourceGeneration?.id || null,
-    executionBackend: 'codex_acp',
+    executionBackend: agentProviderBackend(codexRunSettings.agentProvider),
     agentRunId: run.id,
     agentStepId: step.id,
     retryOfId: extra.structuredRepair?.retryOfGenerationId || null,
@@ -784,6 +786,7 @@ async function prepareCodexPrompt({ run, step, extra = {} }) {
     fastMode: Boolean(codexRunSettings.fastMode),
     authMethod: codexRunSettings.agentProvider === 'qoder'
       ? (process.env.QODER_PERSONAL_ACCESS_TOKEN ? 'environment' : 'qoder-login')
+      : codexRunSettings.agentProvider === 'claude' ? (codexRunSettings.authMethod === 'environment' ? 'api-key' : 'claude-login')
       : (codexRunSettings.authMethod === 'environment' ? 'api-key' : 'chat-gpt'),
     displayTitle,
     generationRecordId: generationRecord.id,
@@ -804,9 +807,9 @@ async function completeCodexGeneration({ prepared, result, error, status, attemp
       text: String(event.text || '').slice(0, 2000),
       createdAt: event.createdAt || '',
     })),
-    executionBackend: result?.backend || 'codex_acp',
+    executionBackend: result?.backend || agentProviderBackend(prepared.agentProvider),
     executionSnapshot: {
-      backend: result?.backend || 'codex_acp',
+      backend: result?.backend || agentProviderBackend(prepared.agentProvider),
       model: result?.modelSnapshot || null,
       fallbackReason: result?.fallbackReason || '',
       contextReuse: result?.contextReuse || 'full',
@@ -1069,7 +1072,7 @@ async function applyAgentCandidate({ run, candidate, applyOptions = {} }) {
     const sourceGeneration = getGenerationRecord(inlineTarget?.sourceGenerationId || '')
     if (!sourceGeneration || sourceGeneration.projectId !== run.projectId) throw new Error('质量评审缺少有效生成记录')
     const chapter = getWorkspaceChapter({ projectId: run.projectId, chapterId: run.chapterId })
-    const codexBackends = new Set(['codex_acp', 'codex_exec'])
+    const codexBackends = new Set(['codex_acp', 'codex_exec', 'qoder_acp', 'claude_sdk'])
     const sourceRemote = codexBackends.has(sourceGeneration.executionBackend)
       || qualityEvidenceExecution(sourceGeneration, 'remote') === 'remote'
     const reviewerRemote = codexBackends.has(candidate.evidence?.executionBackend)
@@ -1149,7 +1152,13 @@ async function initializeCodexIntegration() {
     shouldAutoApprove: ({ actionType, projectId }) => actionType === 'model_call' && codexSessionModelApprovalProjects.has(projectId),
     onGlobalEvent: onGlobalAgentEvent,
   })
-  agentGateway = new AgentGatewayRouter({ repository, codex: codexGateway, qoder: qoderGateway })
+  claudeGateway = new ClaudeAgentGateway({
+    repository,
+    settingsProvider: loadCodexSettings,
+    shouldAutoApprove: ({ actionType, projectId }) => actionType === 'model_call' && codexSessionModelApprovalProjects.has(projectId),
+    onGlobalEvent: onGlobalAgentEvent,
+  })
+  agentGateway = new AgentGatewayRouter({ repository, codex: codexGateway, qoder: qoderGateway, claude: claudeGateway })
   codexModelCatalog = new CodexModelCatalog({
     file: path.join(app.getPath('userData'), 'codex-model-catalog.json'),
     identity: () => {
@@ -1223,7 +1232,7 @@ async function initializeCodexIntegration() {
       })
       const sourceBackend = source.executionBackend || sourceCandidate.evidence?.executionBackend || ''
       const reviewerBackend = result.backend || result.execution || ''
-      const realCodexBackends = new Set(['codex_acp', 'codex_exec'])
+      const realCodexBackends = new Set(['codex_acp', 'codex_exec', 'qoder_acp', 'claude_sdk'])
       const report = createQualityReport({
         projectId: run.projectId,
         chapterId: run.chapterId,
@@ -1366,6 +1375,8 @@ function runtimeInfo() {
     },
     codex,
     qoder,
+    claude: claudeGateway?.inspectRuntime?.() || inspectClaudeRuntime({ configuredPath: loadCodexSettings()?.claudeCliPath || '' }),
+    agentProvider: loadCodexSettings()?.agentProvider || 'codex',
   }
 }
 
@@ -2279,8 +2290,8 @@ async function initializeCreativeInterface() {
     stageCandidate:input => {
       const defaults=loadCodexSettings()
       const agentProvider=normalizeAgentProvider(defaults.agentProvider)
-      return agentRuntime.stageExternalCandidate({ ...input,modelRoutes:{ codexModel:agentProvider === 'qoder' ? defaults.qoderModel || 'auto' : defaults.model,
-        codexReasoningEffort:defaults.reasoningEffort,codexFastMode:defaults.fastMode,codexAuthMethod:defaults.authMethod,
+      return agentRuntime.stageExternalCandidate({ ...input,modelRoutes:{ codexModel:agentProviderModel(defaults, agentProvider),
+        codexReasoningEffort:agentProviderReasoningEffort(defaults, agentProvider),codexFastMode:defaults.fastMode,codexAuthMethod:agentProvider === 'claude' ? defaults.claudeAuthMethod : defaults.authMethod,
         agentProvider } })
     },
     onChange:payload => publishCodexEvent('creative:changed',payload),
@@ -2326,7 +2337,8 @@ function registerIpc() {
     const workspace = createProject(input)
     try {
       const codexWorkspace = createCodexBookWorkspace({ baseDirectory: getLibraryDirectory(), project: workspace.project })
-      return { ...workspace, codexWorkspace: { root: codexWorkspace.root, descriptor: codexWorkspace.descriptor } }
+      const claudeWorkspace = createCodexBookWorkspace({ baseDirectory: getLibraryDirectory(), project: workspace.project, provider: 'claude' })
+      return { ...workspace, codexWorkspace: { root: codexWorkspace.root, descriptor: codexWorkspace.descriptor }, claudeWorkspace: { root: claudeWorkspace.root, descriptor: claudeWorkspace.descriptor } }
     } catch (error) {
       console.error(`[Codex] 新书《${workspace.project.title}》的书籍工作区创建失败：${error.message}`)
       return { ...workspace, codexWorkspaceError: error.message }
@@ -2343,7 +2355,7 @@ function registerIpc() {
     }
     const promise = (async () => {
       await deleteProjectOffMainThread({ databasePath: getDatabaseInfo().path, projectId })
-      try { removeCodexBookWorkspace({ baseDirectory: getLibraryDirectory(), projectId }) }
+      try { for (const provider of ['codex', 'claude']) removeCodexBookWorkspace({ baseDirectory: getLibraryDirectory(), projectId, provider }) }
       catch (error) { console.warn(`[Codex] 清理书籍工作区失败：${error.message}`) }
       return loadWorkspaceCatalog()
     })()
@@ -2440,6 +2452,7 @@ function registerIpc() {
   ipcMain.handle('codex:status', () => ({
     runtime: codexGateway.inspectRuntime(),
     qoderRuntime: qoderGateway.inspectRuntime(),
+    claudeRuntime: claudeGateway.inspectRuntime(),
     settings: loadCodexSettings(),
     components: codexComponents.status(),
     modelCatalog: codexModelCatalog.get(),
@@ -2458,6 +2471,10 @@ function registerIpc() {
     if (before.agentProvider !== saved.agentProvider || before.qoderCliPath !== saved.qoderCliPath) {
       await qoderGateway.restartAdapter({ suppressErrors: true })
     }
+    // Active Claude runs keep their pinned CLI/model; path changes apply to the
+    // next session rather than interrupting a manuscript generation.
+    claudeGateway.useConfiguredPath(saved.claudeCliPath)
+    publishRuntimeInfo()
     return saved
   })
   ipcMain.handle('codex:start-auth', async (_event, methodId) => {
@@ -2469,7 +2486,7 @@ function registerIpc() {
     const diagnosticDirectory = path.join(app.getPath('userData'), 'codex-diagnostics')
     fs.mkdirSync(diagnosticDirectory, { recursive: true, mode: 0o700 })
     const provider = normalizeAgentProvider(payload.agentProvider)
-    const gateway = provider === 'qoder' ? qoderGateway : codexGateway
+    const gateway = agentGateway.gateway(provider)
     if (provider === 'codex' && payload.automatic && process.env.NOVEL_STUDIO_TEST_USER_DATA) {
       return { ok: false, skipped: true, message: '隔离界面测试：不调用外部 Codex 模型目录' }
     }
@@ -2479,7 +2496,8 @@ function registerIpc() {
     const read = async () => {
       try {
         return await gateway.testConnection({ cwd: diagnosticDirectory,
-          model: String(payload.model || ''), reasoningEffort: String(payload.reasoningEffort || ''), fastMode: Boolean(payload.fastMode) })
+          model: String(payload.model || ''), configuredPath: provider === 'claude' ? payload.claudeCliPath : undefined,
+          authMethod: payload.claudeAuthMethod || loadCodexSettings()?.claudeAuthMethod || 'cli', reasoningEffort: String(payload.reasoningEffort || ''), fastMode: Boolean(payload.fastMode) })
       } catch (error) {
         // A removed/renamed saved model must not block discovery of its replacement.
         if (provider !== 'codex' || !directoryOnly || error.codexPhase !== 'session_config') throw error
@@ -2487,7 +2505,9 @@ function registerIpc() {
       }
     }
     const status = provider === 'codex' ? await codexModelCatalog.refresh(`${String(payload.model || '')}:${payload.reasoningEffort || ''}:${Boolean(payload.fastMode)}`, read) : await read()
-    return { ok: true, status, message: provider === 'qoder'
+    return { ok: true, status, message: provider === 'claude'
+      ? 'Claude Code SDK 认证信息与模型目录已读取；未发送创作请求。实际模型权限及计费以调用结果和 Claude 账号规则为准。'
+      : provider === 'qoder'
       ? 'Qoder ACP 已建立诊断会话并正常释放；未发送创作请求。'
       : status.configurationWarning ? `模型目录已更新；原选择待重新验证：${status.configurationWarning}。默认模型保持不变。`
         : '模型目录与配置已回读，诊断连接已释放；未发送创作请求。' }
@@ -2495,6 +2515,14 @@ function registerIpc() {
   ipcMain.handle('codex:test', (_event, payload) => inspectCodexModels(payload))
   ipcMain.handle('codex:models', (_event, payload) => inspectCodexModels(payload, true))
   ipcMain.handle('codex:restart-adapter', () => codexGateway.restartAdapter())
+  ipcMain.handle('claude:open-project', async (_event, projectId) => {
+    const project = listProjects().find(item => item.id === String(projectId || ''))
+    if (!project) throw new Error('项目不存在')
+    const workspace = createCodexBookWorkspace({ baseDirectory: getLibraryDirectory(), project, provider: 'claude' })
+    const error = await shell.openPath(workspace.root)
+    if (error) throw new Error(error)
+    return { root: workspace.root, projectId: project.id }
+  })
   ipcMain.handle('codex:open-project', async (_event, projectId) => {
     const workspace = codexBookWorkspaceForProject(String(projectId || ''))
     const setupModule = app.isPackaged
@@ -2536,11 +2564,12 @@ function registerIpc() {
       targetLength: Math.max(800, Math.min(12000, Math.round(Number(payload.targetLength) || 2000))),
         codexModel: agentProvider === 'qoder'
           ? payload.qoderModel ?? codexDefaults.qoderModel ?? 'auto'
+          : agentProvider === 'claude' ? payload.claudeModel ?? codexDefaults.claudeModel ?? ''
           : payload.codexModel ?? codexDefaults.model ?? '',
         agentProvider,
-        codexReasoningEffort: payload.codexReasoningEffort ?? codexDefaults.reasoningEffort ?? 'high',
+        codexReasoningEffort: agentProvider === 'claude' ? payload.claudeReasoningEffort ?? agentProviderReasoningEffort(codexDefaults, agentProvider) : payload.codexReasoningEffort ?? agentProviderReasoningEffort(codexDefaults, agentProvider),
         codexFastMode: payload.codexFastMode ?? Boolean(codexDefaults.fastMode),
-        codexAuthMethod: payload.codexAuthMethod ?? codexDefaults.authMethod ?? 'chatgpt',
+        codexAuthMethod: agentProvider === 'claude' ? codexDefaults.claudeAuthMethod || 'cli' : payload.codexAuthMethod ?? codexDefaults.authMethod ?? 'chatgpt',
       },
     }, event)
   })
@@ -2564,11 +2593,12 @@ function registerIpc() {
         targetLength: Math.max(0, Math.min(12000, Math.round(Number(payload.targetLength) || 0))),
         codexModel: agentProvider === 'qoder'
           ? payload.qoderModel ?? codexDefaults.qoderModel ?? 'auto'
+          : agentProvider === 'claude' ? payload.claudeModel ?? codexDefaults.claudeModel ?? ''
           : payload.codexModel ?? codexDefaults.model ?? '',
         agentProvider,
-        codexReasoningEffort: payload.codexReasoningEffort ?? codexDefaults.reasoningEffort ?? 'high',
+        codexReasoningEffort: agentProvider === 'claude' ? payload.claudeReasoningEffort ?? agentProviderReasoningEffort(codexDefaults, agentProvider) : payload.codexReasoningEffort ?? agentProviderReasoningEffort(codexDefaults, agentProvider),
         codexFastMode: payload.codexFastMode ?? Boolean(codexDefaults.fastMode),
-        codexAuthMethod: payload.codexAuthMethod ?? codexDefaults.authMethod ?? 'chatgpt',
+        codexAuthMethod: agentProvider === 'claude' ? codexDefaults.claudeAuthMethod || 'cli' : payload.codexAuthMethod ?? codexDefaults.authMethod ?? 'chatgpt',
       },
     }, event)
   })
@@ -2583,10 +2613,10 @@ function registerIpc() {
     const codex = loadCodexSettings()
     const selectedAgentProvider = normalizeAgentProvider(codex.agentProvider)
     const selectedAgentLabel = agentProviderLabel(selectedAgentProvider)
-    const selectedAgentModel = selectedAgentProvider === 'qoder' ? codex.qoderModel || 'auto' : codex.model
+    const selectedAgentModel = agentProviderModel(codex, selectedAgentProvider)
     const reviewer = executionMode === 'codex'
-      ? { executionMode, model: requested.model || selectedAgentModel, reasoningEffort: requested.reasoningEffort || codex.reasoningEffort, fastMode: codex.fastMode,
-          authMethod: codex.authMethod, agentProvider: selectedAgentProvider,
+      ? { executionMode, model: requested.model || selectedAgentModel, reasoningEffort: requested.reasoningEffort ?? agentProviderReasoningEffort(codex, selectedAgentProvider), fastMode: codex.fastMode,
+          authMethod: selectedAgentProvider === 'claude' ? codex.claudeAuthMethod : codex.authMethod, agentProvider: selectedAgentProvider,
           label: `${selectedAgentLabel} · 独立上下文审稿（相同模型时并非跨模型评审）` }
       : { executionMode, profileId, model: profile.model, provider: profile.provider, settings: profile.settings,
           label: `${profile.name} · 独立上下文审稿` }
