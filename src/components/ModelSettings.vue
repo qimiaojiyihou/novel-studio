@@ -32,9 +32,21 @@
           <div class="codex-settings-grid">
             <label><span>Agent 提供方</span><select v-model="codexDraft.agentProvider"><option value="codex">Codex</option><option value="qoder">Qoder</option><option value="claude">Claude Code</option></select></label>
             <template v-if="codexDraft.agentProvider === 'claude'">
-              <label><span>Claude Code 认证</span><select v-model="codexDraft.claudeAuthMethod"><option value="cli">本机 Claude Code 登录</option><option value="environment">环境 API Key</option></select></label>
-              <label class="wide"><span>Claude Code CLI 路径</span><input v-model.trim="codexDraft.claudeCliPath" placeholder="留空自动检测，例如 ~/.local/bin/claude" /><small>先在终端执行 claude auth login。API Key 模式读取应用进程的 ANTHROPIC_API_KEY，应用不保存或显示凭据。</small></label>
-              <label class="wide"><span>Claude Code 默认模型</span><select v-model="codexDraft.claudeModel"><option value="">CLI 默认模型</option><option v-for="option in claudeModelOptions" :key="option.value" :value="option.value">{{ option.name }}</option><option v-if="codexDraft.claudeModel && !claudeModelOptions.some(option => option.value === codexDraft.claudeModel)" :value="codexDraft.claudeModel">{{ codexDraft.claudeModel }} · 待验证</option></select><details><summary>高级模型 ID</summary><input v-model.trim="codexDraft.claudeModel" placeholder="可填写 CLI 支持的模型 ID 或别名" aria-label="高级 Claude Code 模型 ID" /></details><small>点击测试读取本机 CLI 模型目录；目录不保证账号权限。订阅额度或 API 计费以 Claude 账号规则为准，已有任务继续使用锁定的模型。</small></label>
+              <label><span>Claude Code 认证</span><select v-model="codexDraft.claudeAuthMethod" @change="refreshClaudeModels(true)"><option value="cli">本机 Claude Code 登录</option><option value="environment">环境 API Key</option></select></label>
+              <label class="wide"><span>Claude Code CLI 路径</span><input v-model.trim="codexDraft.claudeCliPath" @change="refreshClaudeModels(true)" placeholder="留空自动检测，例如 ~/.local/bin/claude" /><small>先在终端执行 claude auth login。API Key 模式读取应用进程的 ANTHROPIC_API_KEY，应用不保存或显示凭据。</small></label>
+              <label class="wide">
+                <span>Claude Code 默认模型</span>
+                <select v-model="codexDraft.claudeModel" aria-label="Claude Code 默认模型">
+                  <option value="">{{ claudeDefaultModelLabel }}</option>
+                  <option v-for="option in claudeModelOptions" :key="option.value" :value="option.value" :title="option.description">{{ option.name }}</option>
+                  <option v-if="codexDraft.claudeModel && !claudeModelOptions.some(option => option.value === codexDraft.claudeModel)" :value="codexDraft.claudeModel">{{ codexDraft.claudeModel }} · 当前选择</option>
+                </select>
+                <small v-if="claudeSelectedModel?.resolvedModel">CLI 解析模型 ID：{{ claudeSelectedModel.resolvedModel }}{{ claudeSelectedModel.value !== claudeSelectedModel.resolvedModel ? '；系列别名会随 CLI 更新。' : '' }}</small>
+                <small v-else-if="claudeSelectedModel?.versionLabel">版本来自 CLI 目录描述，当前 CLI 未返回解析模型 ID。</small>
+                <small>{{ claudeModelsLoading ? '正在读取 Claude 模型列表，可先选择模型系列…' : '模型名称中的版本来自当前 CLI 目录，直接选择后保存即可。' }}</small>
+                <small v-if="claudeCatalogLabel">{{ claudeCatalogLabel }}</small>
+                <details><summary>高级：自定义模型 ID（可选）</summary><input v-model.trim="codexDraft.claudeModel" placeholder="仅自定义服务模型需要手动填写" aria-label="高级 Claude Code 模型 ID" /></details>
+              </label>
               <label><span>Claude Code 思考强度</span><select v-model="codexDraft.claudeReasoningEffort"><option value="">模型默认</option><option v-for="option in claudeEffortOptions" :key="option.value" :value="option.value">{{ option.name }}</option><option v-if="codexDraft.claudeReasoningEffort && !claudeEffortOptions.some(option => option.value === codexDraft.claudeReasoningEffort)" :value="codexDraft.claudeReasoningEffort">{{ codexDraft.claudeReasoningEffort }} · 待验证</option></select><small>优先显示 CLI 返回的支持档位；未提供能力信息时，选择值会交由实际调用验证。已有任务继续使用锁定的强度。</small></label>
             </template>
             <label v-if="codexDraft.agentProvider === 'codex'"><span>默认认证</span><select v-model="codexDraft.authMethod"><option value="chatgpt">ChatGPT 登录</option><option value="environment" :disabled="!codexStatus.runtime?.environmentAuthAvailable">环境 API Key</option></select></label>
@@ -66,6 +78,7 @@
             <button v-if="codexDraft.agentProvider === 'codex'" class="outline-button" :disabled="codexBusy" @click="authenticateCodex">{{ codexDraft.authMethod === 'environment' ? '使用环境变量认证' : '登录 ChatGPT' }}</button>
             <button class="test-button" :disabled="codexBusy" @click="testCodex">测试 {{ agentName }} {{ codexDraft.agentProvider === 'claude' ? 'SDK / 刷新模型' : 'ACP' }}</button>
             <button v-if="codexDraft.agentProvider === 'codex'" class="outline-button" :disabled="codexBusy" @click="refreshCodexModels()">刷新模型列表</button>
+            <button v-if="codexDraft.agentProvider === 'claude'" class="outline-button" :disabled="codexBusy || claudeModelsLoading" @click="refreshClaudeModels()">{{ claudeModelsLoading ? '正在刷新模型…' : '刷新 Claude 模型列表' }}</button>
             <button class="primary-button" :disabled="codexBusy" @click="saveCodex">保存 Agent 设置</button>
           </div>
           <section v-if="codexDraft.agentProvider === 'codex'" class="codex-component-box" aria-label="Codex 组件更新">
@@ -278,11 +291,12 @@
 </template>
 
 <script setup>
-import { computed, reactive, ref, watch, onUnmounted } from 'vue'
+import { computed, reactive, ref, watch, onUnmounted, nextTick } from 'vue'
 import { appService } from '../services/app-service.js'
 import StorageSettings from './StorageSettings.vue'
 import ReaderSettings from './ReaderSettings.vue'
 import { modelDirectory } from '../../electron/codex-models.js'
+import { claudeModelDirectory } from '../utils/claude-models.js'
 import {
   normalizeRequestConfig,
   parseRequestConfigJson,
@@ -320,9 +334,22 @@ const codexMessage = reactive({ state: 'idle', text: '' })
 const codexBusy = ref(false)
 const agentName = computed(() => ({ codex: 'Codex', qoder: 'Qoder', claude: 'Claude Code' }[codexDraft.agentProvider] || 'Codex'))
 const selectedAgentRuntime = computed(() => codexDraft.agentProvider === 'claude' ? codexStatus.claudeRuntime : codexDraft.agentProvider === 'qoder' ? codexStatus.qoderRuntime : codexStatus.runtime)
-const claudeModelOptions = computed(() => codexStatus.claudeRuntime?.configOptions?.find(option => option.id === 'model')?.options || [])
+const claudeModelOptions = computed(() => claudeModelDirectory(codexStatus.claudeRuntime?.configOptions || []))
+const claudeSelectedModel = computed(() => claudeModelOptions.value.find(option => option.value === (codexDraft.claudeModel || 'default') || option.resolvedModel === codexDraft.claudeModel))
+const claudeDefaultModelLabel = computed(() => {
+  const model = claudeModelOptions.value.find(option => option.value === 'default')
+  return model?.versionLabel ? `CLI 默认模型（当前 ${model.versionLabel}）` : 'CLI 默认模型 · 版本待读取'
+})
+const claudeModelsLoading = ref(false)
+const claudeCatalogLabel = computed(() => {
+  const catalog = codexStatus.claudeRuntime?.modelCatalog
+  return catalog?.refreshedAt ? `${catalog.cached ? '上次模型列表' : '模型列表更新时间'}：${new Date(catalog.refreshedAt).toLocaleString()}` : ''
+})
+let claudeDirectorySequence = 0
+const claudeDirectoryRequests = new Map()
+let applyingCodexStatus = false
 const claudeEffortOptions = computed(() => {
-  const selected = claudeModelOptions.value.find(option => option.value === codexDraft.claudeModel || option.resolvedModel === codexDraft.claudeModel)
+  const selected = claudeSelectedModel.value
   const levels = selected?.supportsEffort === false ? [] : selected?.supportedEffortLevels?.length ? selected.supportedEffortLevels : ['low', 'medium', 'high', 'xhigh', 'max']
   const labels = { low: '低', medium: '中', high: '高', xhigh: '极高', max: '最高' }
   return levels.map(value => ({ value, name: `${labels[value] || value} · ${value}` }))
@@ -377,26 +404,42 @@ const qoderModelOptions = computed(() => {
 
 watch(() => props.visible, (visible) => {
   clearInterval(componentPoll); componentPoll = null
-  if (!visible) { cancelEdit(); refreshSequence++ }
+  if (!visible) { cancelEdit(); refreshSequence++; claudeDirectorySequence++; claudeModelsLoading.value = false }
   else {
     void loadCodex()
     componentPoll = setInterval(() => { void pollComponents() }, 2000)
   }
 })
-onUnmounted(() => { clearInterval(componentPoll); refreshSequence++ })
-watch(() => codexDraft.agentProvider, provider => { if (props.visible && provider === 'codex') void refreshCodexModels(false, true) })
+onUnmounted(() => { clearInterval(componentPoll); refreshSequence++; claudeDirectorySequence++ })
+watch(() => codexDraft.agentProvider, provider => {
+  if (applyingCodexStatus) return
+  refreshSequence++; claudeDirectorySequence++; codexBusy.value = false; claudeModelsLoading.value = false
+  if (!props.visible) return
+  if (provider === 'codex') void refreshCodexModels(false, true)
+  if (provider === 'claude') void refreshClaudeModels(true)
+})
+watch(() => [codexDraft.claudeCliPath, codexDraft.claudeAuthMethod], () => {
+  if (applyingCodexStatus) return
+  claudeDirectorySequence++; claudeModelsLoading.value = false
+  codexStatus.claudeRuntime = { ...codexStatus.claudeRuntime, configOptions: [], modelCatalog: null }
+})
 
 async function loadCodex() {
   try {
     const loaded = await appService.getCodexStatus()
+    if (!props.visible) return
+    applyingCodexStatus = true
     Object.assign(codexStatus, loaded)
     Object.assign(codexDraft, loaded.settings || {})
+    await nextTick()
+    applyingCodexStatus = false
     codexModelsRefreshed.value = false
     if (!loaded.runtime?.configOptions?.length && loaded.modelCatalog?.cached) codexStatus.runtime.configOptions = loaded.modelCatalog.configOptions
     if (props.visible && codexDraft.agentProvider === 'codex') await refreshCodexModels(false, true)
+    if (props.visible && codexDraft.agentProvider === 'claude') await refreshClaudeModels(true)
   } catch (error) {
     Object.assign(codexMessage, { state: 'error', text: `Codex 状态读取失败：${error.message}` })
-  }
+  } finally { applyingCodexStatus = false }
 }
 
 async function pollComponents() {
@@ -458,6 +501,7 @@ async function authenticateCodex() {
 }
 
 async function testCodex() {
+  if (codexDraft.agentProvider === 'claude') return refreshClaudeModels()
   codexBusy.value = true
   Object.assign(codexMessage, { state: 'testing', text: `正在校验 ${agentName.value} 执行器与模型目录…` })
   try {
@@ -473,6 +517,31 @@ async function testCodex() {
   } catch (error) {
     Object.assign(codexMessage, { state: 'error', text: `测试失败：${error.message}` })
   } finally { codexBusy.value = false }
+}
+
+async function refreshClaudeModels(automatic = false) {
+  await nextTick()
+  if (!props.visible || codexDraft.agentProvider !== 'claude') return
+  const sequence = ++claudeDirectorySequence
+  const source = JSON.stringify([codexDraft.claudeCliPath.trim(), codexDraft.claudeAuthMethod])
+  const current = () => sequence === claudeDirectorySequence && props.visible && codexDraft.agentProvider === 'claude'
+    && source === JSON.stringify([codexDraft.claudeCliPath.trim(), codexDraft.claudeAuthMethod])
+  claudeModelsLoading.value = true
+  try {
+    if (!claudeDirectoryRequests.has(source)) claudeDirectoryRequests.set(source, appService.getCodexModels({
+      agentProvider: 'claude', claudeCliPath: codexDraft.claudeCliPath.trim(), claudeAuthMethod: codexDraft.claudeAuthMethod, model: '', automatic,
+    }))
+    const result = await claudeDirectoryRequests.get(source)
+    if (!current() || result.skipped) return
+    codexStatus.claudeRuntime = { ...codexStatus.claudeRuntime, ...result.status.runtime, configOptions: result.status.configOptions,
+      modelCatalog: { refreshedAt: result.status.refreshedAt, cached: false } }
+    Object.assign(codexMessage, { state: 'success', text: 'Claude 模型列表已更新，直接在下拉框选择后保存即可。未发送生成请求。' })
+  } catch (error) {
+    if (current()) Object.assign(codexMessage, { state: 'error', text: `Claude 模型列表刷新失败：${error.message}；保留已有列表和选择，也可使用模型系列别名。` })
+  } finally {
+    claudeDirectoryRequests.delete(source)
+    if (sequence === claudeDirectorySequence) claudeModelsLoading.value = false
+  }
 }
 
 async function refreshCodexModels(selectModel = false, automatic = false) {

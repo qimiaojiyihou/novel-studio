@@ -231,6 +231,30 @@ test('Claude diagnostic reads model/auth metadata without submitting a prompt or
   } finally { await gateway.shutdown(); f.cleanup() }
 })
 
+test('Claude model directory survives restart, keeps the last success on failure and invalidates changed sources', async () => {
+  const f = fixture(), file = path.join(f.root, 'models.json')
+  let identity = 'source-a', fail = false
+  const options = { modelCatalogFile: file, catalogIdentity: () => identity, settingsProvider: () => ({ claudeCliPath: f.executablePath }),
+    queryFactory: () => fakeQuery([], { supportedModels: async () => { if (fail) throw new Error('offline'); return [{ value: 'future-claude', displayName: 'Future Claude', supportedEffortLevels: ['low', 'high'] }] },
+      accountInfo: async () => ({ tokenSource: 'keychain', email: 'private@example.invalid' }) }) }
+  const gateway = new ClaudeAgentGateway(options)
+  let restored
+  try {
+    await gateway.testConnection({ cwd: f.mirror })
+    assert.equal(gateway.inspectRuntime().configOptions[0].options[0].value, 'future-claude')
+    assert.doesNotMatch(fs.readFileSync(file, 'utf8'), /private@example|tokenSource|keychain/)
+    restored = new ClaudeAgentGateway(options)
+    assert.equal(restored.inspectRuntime().configOptions[0].options[0].value, 'future-claude')
+    fail = true
+    await assert.rejects(restored.testConnection({ cwd: f.mirror }), /offline/)
+    assert.equal(restored.getModelCatalog().models, undefined)
+    assert.equal(restored.getModelCatalog().configOptions[0].options[0].value, 'future-claude')
+    identity = 'source-b'
+    assert.equal(restored.getModelCatalog().cached, false)
+    assert.deepEqual(restored.inspectRuntime().configOptions, [])
+  } finally { await gateway.shutdown(); await restored?.shutdown(); f.cleanup() }
+})
+
 test('Claude diagnostic rejects the explicit none credential source and releases the subprocess', async () => {
   const f = fixture(); let closed = false
   const gateway = new ClaudeAgentGateway({ settingsProvider: () => ({ claudeCliPath: f.executablePath }), queryFactory: () => fakeQuery([], {

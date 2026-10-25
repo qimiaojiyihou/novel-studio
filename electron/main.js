@@ -1155,6 +1155,7 @@ async function initializeCodexIntegration() {
   claudeGateway = new ClaudeAgentGateway({
     repository,
     settingsProvider: loadCodexSettings,
+    modelCatalogFile: path.join(app.getPath('userData'), 'claude-model-catalog.json'),
     shouldAutoApprove: ({ actionType, projectId }) => actionType === 'model_call' && codexSessionModelApprovalProjects.has(projectId),
     onGlobalEvent: onGlobalAgentEvent,
   })

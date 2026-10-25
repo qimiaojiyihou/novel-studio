@@ -33,6 +33,15 @@ export function claudeSdkLaunchOptions(executablePath, { execPath = process.exec
     nodeEnvironment: electron && /\.(?:[cm]?js)$/i.test(cliPath) ? { ELECTRON_RUN_AS_NODE: '1' } : {} }
 }
 
+export function claudeCatalogIdentity({ configuredPath = '', authMethod = 'cli', env = process.env } = {}) {
+  const runtime = inspectClaudeRuntime({ configuredPath, env })
+  const config = env.CLAUDE_CONFIG_DIR || path.join(env.HOME || os.homedir(), '.claude')
+  const stamp = file => { try { const stat = fs.statSync(file); return `${file}:${stat.size}:${stat.mtimeMs}` } catch { return `${file}:missing` } }
+  return createHash('sha256').update(JSON.stringify([runtime.executablePath, stamp(runtime.executablePath), authMethod, config,
+    stamp(path.join(config, 'settings.json')), stamp(path.join(config, '.credentials.json')),
+    authMethod === 'environment' ? env.ANTHROPIC_API_KEY || '' : '', env.ANTHROPIC_BASE_URL || ''])).digest('hex')
+}
+
 // Keep CLI authentication compatible without loading user hooks, permissions,
 // plugins, shell environment, or project settings into an embedded agent.
 export function claudeQueryEnvironment({ env = process.env, authMethod = 'cli', readFile = fs.readFileSync } = {}) {
@@ -110,13 +119,32 @@ async function defaultQuery(input) {
 }
 
 export class ClaudeAgentGateway extends CodexAgentGateway {
-  constructor({ settingsProvider = () => ({}), queryFactory = defaultQuery, diagnosticTimeoutMs = 20000, ...options } = {}) {
+  constructor({ settingsProvider = () => ({}), queryFactory = defaultQuery, diagnosticTimeoutMs = 20000, modelCatalogFile = '', catalogIdentity = claudeCatalogIdentity, ...options } = {}) {
     super({ ...options, agentId: 'claude', agentName: 'Claude Code', acpBackend: 'claude_sdk', adapterVersion: SDK_VERSION, supportsExecFallback: false })
     this.settingsProvider = settingsProvider
     this.queryFactory = queryFactory
     this.diagnosticTimeoutMs = diagnosticTimeoutMs
     this.runtimePathOverride = null
     this.diagnostics = new Set()
+    this.modelCatalogFile = modelCatalogFile
+    this.catalogIdentity = catalogIdentity
+    this.modelCatalog = null
+    try { if (modelCatalogFile) this.modelCatalog = JSON.parse(fs.readFileSync(modelCatalogFile, 'utf8')) } catch { /* first launch or invalid cache */ }
+  }
+
+  catalogSource({ configuredPath, authMethod } = {}) {
+    return { configuredPath: configuredPath ?? this.runtimePathOverride ?? this.settingsProvider()?.claudeCliPath ?? '',
+      authMethod: authMethod || this.settingsProvider()?.claudeAuthMethod || 'cli' }
+  }
+
+  getModelCatalog(source = this.catalogSource()) {
+    const cached = this.modelCatalog
+    if (cached?.identity !== this.catalogIdentity(source) || !Array.isArray(cached.models) || cached.models.length > 500) return { configOptions: [], refreshedAt: '', cached: false }
+    const models = cached.models.filter(item => item && typeof item.value === 'string' && item.value).map(item => ({
+      value: item.value, name: String(item.name || item.value), description: String(item.description || ''), resolvedModel: String(item.resolvedModel || ''),
+      supportsEffort: item.supportsEffort, supportedEffortLevels: Array.isArray(item.supportedEffortLevels) ? item.supportedEffortLevels.filter(value => CLAUDE_EFFORT_LEVELS.includes(value)) : [],
+    }))
+    return { configOptions: [{ id: 'model', type: 'select', name: 'Claude Code 模型', options: models }], refreshedAt: cached.refreshedAt, cached: true }
   }
 
   useConfiguredPath(value) {
@@ -128,8 +156,9 @@ export class ClaudeAgentGateway extends CodexAgentGateway {
 
   inspectRuntime() {
     const detected = inspectClaudeRuntime({ configuredPath: this.runtimePathOverride ?? this.settingsProvider()?.claudeCliPath ?? '' })
+    const catalog = this.getModelCatalog()
     return { ...detected, cliVersion: this.runtime?.cliVersion || '', adapterStatus: this.sessions.size ? 'ready' : 'stopped',
-      authenticatedMethod: this.authenticatedMethod, configOptions: this.configOptions,
+      authenticatedMethod: this.authenticatedMethod, configOptions: catalog.configOptions, modelCatalog: catalog,
       sessions: [...this.sessions.values()].map(s => ({ agentRunId: s.agentRunId, sessionId: s.sessionId, active: Boolean(s.activeStepId) })) }
   }
 
@@ -156,6 +185,8 @@ export class ClaudeAgentGateway extends CodexAgentGateway {
   }
 
   async testConnection({ cwd, model = '', configuredPath, authMethod = this.settingsProvider()?.claudeAuthMethod || 'cli' } = {}) {
+    const source = this.catalogSource({ configuredPath, authMethod })
+    const sourceIdentity = this.catalogIdentity(source)
     const controller = new AbortController()
     let query
     const timer = setTimeout(() => { controller.abort(); query?.close?.() }, this.diagnosticTimeoutMs)
@@ -181,9 +212,22 @@ export class ClaudeAgentGateway extends CodexAgentGateway {
           options: models.map(item => ({ value: item.value, name: item.displayName || item.value, description: item.description || '',
             resolvedModel: item.resolvedModel || '', supportsEffort: item.supportsEffort,
             supportedEffortLevels: item.supportedEffortLevels || [] })) }]
+        const refreshedAt = new Date().toISOString()
+        if (sourceIdentity === this.catalogIdentity(source) && sourceIdentity === this.catalogIdentity(this.catalogSource())) {
+          this.modelCatalog = { identity: sourceIdentity, models: this.configOptions[0].options, refreshedAt }
+          if (this.modelCatalogFile) {
+            const temporary = `${this.modelCatalogFile}.${process.pid}.tmp`
+            try {
+              fs.mkdirSync(path.dirname(this.modelCatalogFile), { recursive: true, mode: 0o700 })
+              fs.writeFileSync(temporary, JSON.stringify(this.modelCatalog), { mode: 0o600 })
+              fs.renameSync(temporary, this.modelCatalogFile)
+            } catch { /* a readable live directory should still work on a read-only disk */ }
+            finally { try { fs.rmSync(temporary, { force: true }) } catch {} }
+          }
+        }
         return { ok: true, provider: 'claude', sessionCreated: false, adapterVersion: SDK_VERSION,
           configOptions: this.configOptions, models: this.configOptions[0].options,
-          selected: { provider: 'claude', model, verified: false, source: 'sdk_catalog' }, runtime: this.inspectRuntime(), refreshedAt: new Date().toISOString() }
+          selected: { provider: 'claude', model, verified: false, source: 'sdk_catalog' }, runtime: this.inspectRuntime(), refreshedAt }
       })()])
     } finally {
       clearTimeout(timer)
