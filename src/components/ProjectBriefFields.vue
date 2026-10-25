@@ -96,7 +96,7 @@
           <strong id="style-heading">项目文风</strong>
           <small>不用掌握术语，先选一种读感，再修改不合适的字句</small>
         </div>
-        <span>全书生效</span>
+        <span>{{ shortStory ? '全文生效' : '全书生效' }}</span>
       </div>
       <div class="style-preset-grid" role="list" aria-label="文风起步方案">
         <button
@@ -131,6 +131,7 @@ import { computed, reactive } from 'vue'
 import { buildIdeaSentence, GENRE_OPTIONS, STYLE_PRESETS } from '../utils/project-brief.js'
 
 defineProps({
+  shortStory: { type: Boolean, default: false },
   genre: { type: String, default: '' },
   idea: { type: String, default: '' },
   style: { type: String, default: '' },

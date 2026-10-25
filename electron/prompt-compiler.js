@@ -9,6 +9,7 @@ import {
 } from './prompt-templates.js'
 import { planningPromptProfile, renderScenePlan } from './creative-quality.js'
 import { COMPACT_HANDOFF_MODE, COMPACT_HANDOFF_CONTRACT } from './chapter-handoff.js'
+import { isShortStory, shortStoryGuidance } from './work-format.js'
 
 function compactJson(value, limit = 12000) {
   const content = JSON.stringify(value || {})
@@ -110,6 +111,11 @@ function doorVoiceBoundary(input) {
 }
 
 function chapterStopContract(input) {
+  if (isShortStory(input.project)) return [
+    '【短故事结局边界】',
+    input.chapter?.card?.ending ? `本篇约定的结局：${input.chapter.card.ending}` : '让本篇核心冲突与人物选择获得落点，不为下一章预留连载断点。',
+    '全文场景服务于这一篇的完整变化。已有场景、已确认事实、作者指定停止点和本次要求仍然有效；只返回所请求的正文，不输出规划解释。',
+  ].join('\n')
   if (modernCreativeRules(input)) {
     const ending = String(input.chapter?.card?.ending || '').trim()
     const mode = input.boundaryMode || input.chapter?.card?.boundaryMode || 'semantic'
@@ -156,6 +162,13 @@ function chapterStopContract(input) {
 }
 
 function taskDetails(task, input) {
+  if (isShortStory(input.project) && ['chapter_card', 'scene_plan'].includes(task)) return [
+    shortStoryGuidance(input.project),
+    task === 'chapter_card' ? '用故事卡规划整篇：核心冲突、人物欲求、阻力、关键转折与结局。沿用既有输出字段，targetLength 对应全文目标字数。' : '场景计划覆盖整篇，从开端推进至结局；场景数量服从篇幅。沿用既有场景字段与类型约定。',
+    `已有故事卡：${JSON.stringify(input.chapter?.card || {})}`,
+    input.intent === 'repair' ? `本次修订问题：${compactJson(input.repairIssues || [], 10000)}` : '',
+    chapterStopContract(input),
+  ].filter(Boolean).join('\n')
   if (modernCreativeRules(input) && ['chapter_card', 'scene_plan'].includes(task)) return [
     task === 'chapter_card' ? '整卡统一构思：先确定本章变化、人物目标与阻力、章末落点；其他字段只补充真正需要的细节，避免互相复述。约2000字正文建议章节卡合计300—600字，这是建议而非硬限制。' : '仅在复杂行动、多人视角或作者需要时展开场景计划；场景数量服从故事，不要求统一节奏。',
     `已有章节合同：${JSON.stringify(input.chapter?.card || {})}`,
@@ -410,6 +423,7 @@ export function compilePrompt(input = {}) {
     const details = taskDetails(task, input)
     const systemContent = uniqueParts([
       template.content.system,
+      shortStoryGuidance(input.project),
       template.content.outputContract,
       CORE_SYSTEM_RULES,
       input.protectedOutputContract || PROTECTED_OUTPUT_CONTRACTS[task],
@@ -474,6 +488,7 @@ export function compilePrompt(input = {}) {
   const systemContent = uniqueParts([
     template.content.system,
     planningProfile?.system,
+    shortStoryGuidance(input.project),
     template.content.outputContract,
     CORE_SYSTEM_RULES,
     input.protectedOutputContract || PROTECTED_OUTPUT_CONTRACTS[task],

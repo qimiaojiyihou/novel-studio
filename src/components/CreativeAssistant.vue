@@ -89,9 +89,11 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { appService } from '../services/app-service.js'
 import { useCreativeAgent } from '../composables/useCreativeAgent.js'
 import { creativeAgentLabel, creativeBackendLabel } from '../utils/agent-provider.js'
+import { isShortStory } from '../../electron/work-format.js'
 const { agentLabel } = useCreativeAgent()
 
 const props = defineProps({
+  project: { type: Object, default: () => ({}) },
   projectId: { type: String, default: '' },
   chapterId: { type: String, default: '' },
   modelSettings: { type: Object, default: () => ({ profiles: [], routes: {} }) },
@@ -103,6 +105,9 @@ const busy = ref(false)
 const candidateReason = ref('')
 const message = reactive({ state: 'idle', text: '' })
 const launch = reactive({ executionMode: 'codex', workflowId: 'chapter-creation', modelProfileId: '', reviewerProfileId: '', targetLength: 2000 })
+watch(() => [props.projectId, props.project.target_word_count, props.project.work_format], () => {
+  launch.targetLength = isShortStory(props.project) ? props.project.target_word_count || 8000 : 2000
+}, { immediate: true })
 const creativePreferences = ref(null)
 async function loadPreferences() {
   try {
@@ -208,11 +213,11 @@ async function retryStep(step) {
   catch (error) { message.text = error.message; message.state = 'error' }
 }
 
-function workflowLabel(id) { return ({ 'project-initialization': '项目初始化', 'chapter-creation': '完整章节流程', 'chapter-compact': '精简章节创作', 'inline-action': '就地任务' }[id] || id) }
+function workflowLabel(id) { return ({ 'project-initialization': '项目初始化', 'chapter-creation': isShortStory(props.project) ? '完整短故事流程' : '完整章节流程', 'chapter-compact': isShortStory(props.project) ? '精简短故事创作' : '精简章节创作', 'inline-action': '就地任务' }[id] || id) }
 function backendName(value) { return creativeBackendLabel(value) }
 function backendLabel(run) { return run.actualBackend ? backendName(run.actualBackend) : run.executionMode === 'codex' ? `${creativeAgentLabel(run.modelRoutes?.agentProvider)} · 等待连接` : '应用模型路由' }
 function statusLabel(value) { return ({ pending: '待开始', waiting_approval: '等待审批', running: '执行中', waiting_confirmation: '等待确认', paused: '已暂停', interrupted: '已中断', completed: '已完成', confirmed: '已确认', rejected: '已拒绝', stale: '已过期', cancelled: '已取消', failed: '失败' }[value] || value) }
-function stepLabel(step) { return ({ preflight: '生成前准备度', chapter_card: '生成章节卡', scene_plan: '生成场景计划', chapter: '生成正文候选', quality_review: '质量评审', chapter_state_extract: '提取章后状态' }[step.task] || (step.action === 'checkpoint' ? '等待作者确认' : step.key)) }
-function candidateLabel(type) { return ({ chapter_card: '章节卡候选', scene_plan: '场景计划候选', manuscript: '正文候选', manuscript_selection: '局部重写候选', planning_field: '规划字段候选', renderer_draft: '编辑器草稿候选', chapter_state: '章后状态候选', continuity_audit: '连续性审计候选', quality_review: '质量评审候选', foundation_bundle: '故事基础候选' }[type] || type) }
+function stepLabel(step) { return ({ preflight: '生成前准备度', chapter_card: isShortStory(props.project) ? '生成故事卡' : '生成章节卡', scene_plan: '生成场景计划', chapter: '生成正文候选', quality_review: '质量评审', chapter_state_extract: '提取章后状态' }[step.task] || (step.action === 'checkpoint' ? '等待作者确认' : step.key)) }
+function candidateLabel(type) { return ({ chapter_card: isShortStory(props.project) ? '故事卡候选' : '章节卡候选', scene_plan: '场景计划候选', manuscript: '正文候选', manuscript_selection: '局部重写候选', planning_field: '规划字段候选', renderer_draft: '编辑器草稿候选', chapter_state: '章后状态候选', continuity_audit: '连续性审计候选', quality_review: '质量评审候选', foundation_bundle: '故事基础候选' }[type] || type) }
 function shortTime(value) { const date = new Date(value); return Number.isNaN(date.getTime()) ? '' : date.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }) }
 </script>

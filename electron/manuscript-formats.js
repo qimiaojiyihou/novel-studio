@@ -1,4 +1,5 @@
 import { inflateRawSync } from 'node:zlib'
+import { isShortStory } from './work-format.js'
 
 const CHAPTER_HEADING = /^(第\s*[零〇一二三四五六七八九十百千万两\d]+\s*[章节回卷部集](?:[：:\s·-].*)?|chapter\s+\d+(?:[：:\s·-].*)?)$/i
 
@@ -59,7 +60,7 @@ function manuscriptParagraphs(value = '') {
 
 export function createTextManuscript(workspace) {
   const chapters = normalizeChapters(workspace.chapters)
-  return [workspace.project.title, ...chapters.flatMap((chapter) => [chapterHeading(chapter), chapter.manuscript])]
+  return [workspace.project.title, ...chapters.flatMap((chapter) => isShortStory(workspace.project) ? [chapter.manuscript] : [chapterHeading(chapter), chapter.manuscript])]
     .join('\n\n').trimEnd() + '\n'
 }
 
@@ -69,7 +70,7 @@ export function createMarkdownManuscript(workspace) {
   return [
     `# ${workspace.project.title}`,
     metadata ? `> ${metadata}` : '',
-    ...chapters.flatMap((chapter) => [`## ${chapterHeading(chapter)}`, chapter.manuscript]),
+    ...chapters.flatMap((chapter) => isShortStory(workspace.project) ? [chapter.manuscript] : [`## ${chapterHeading(chapter)}`, chapter.manuscript]),
   ].filter((part, index) => part || index > 1).join('\n\n').trimEnd() + '\n'
 }
 
@@ -191,7 +192,7 @@ function wordParagraph(text, style = 'Normal', { pageBreakBefore = false } = {})
 function documentXml(workspace) {
   const paragraphs = [wordParagraph(workspace.project.title, 'Title')]
   normalizeChapters(workspace.chapters).forEach((chapter, index) => {
-    paragraphs.push(wordParagraph(wordChapterHeading(chapter), 'Heading1', { pageBreakBefore: index > 0 }))
+    if (!isShortStory(workspace.project)) paragraphs.push(wordParagraph(wordChapterHeading(chapter), 'Heading1', { pageBreakBefore: index > 0 }))
     for (const paragraph of manuscriptParagraphs(chapter.manuscript)) paragraphs.push(wordParagraph(paragraph))
   })
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>

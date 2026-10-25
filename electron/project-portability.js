@@ -1,7 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto'
+import { WORK_FORMATS, isShortStory, shortStoryWordCount } from './work-format.js'
 
 export const PROJECT_BACKUP_FORMAT = 'novel-studio-project'
-export const PROJECT_BACKUP_VERSION = 8
+export const PROJECT_BACKUP_VERSION = 9
 
 const UPGRADE_TABLES = { 6: ['chapter_finalizations'], 7: ['author_style_samples', 'creative_messages', 'manuscript_protections', 'creative_patches'], 8: ['creative_dependencies'] }
 const NEW_TABLES = Object.values(UPGRADE_TABLES).flat()
@@ -160,10 +161,15 @@ export function validateProjectBackup(bundle) {
   if (bundle.integrity?.algorithm !== 'sha256' || bundle.integrity.digest !== sha256(bundle.data)) throw new Error('项目备份完整性校验失败')
   const normalizedProject = {
     ...bundle.data.project,
+    work_format: bundle.data.project.work_format || 'novel',
+    target_word_count: bundle.data.project.target_word_count ?? 8000,
     default_execution_mode: ['app_model', 'codex'].includes(bundle.data.project.default_execution_mode)
       ? bundle.data.project.default_execution_mode
       : 'app_model',
   }
+  if (!WORK_FORMATS.includes(normalizedProject.work_format)) throw new Error('备份作品形式不受支持')
+  shortStoryWordCount(normalizedProject.target_word_count)
+  if (isShortStory(normalizedProject) && bundle.data.tables.chapters.length !== 1) throw new Error('短故事备份应当只有一篇正文')
   if (version === PROJECT_BACKUP_VERSION) {
     return { ...bundle, data: { ...bundle.data, project: normalizedProject } }
   }

@@ -34,7 +34,7 @@
         <div class="panel-heading">
           <span class="eyebrow">作品工作台</span>
           <div class="panel-heading-actions">
-            <button class="quiet-button add-chapter-button" title="添加章节" :disabled="taskIsRunning()" @click="openNewChapter">＋</button>
+            <button v-if="!isShortStory" class="quiet-button add-chapter-button" title="添加章节" :disabled="taskIsRunning()" @click="openNewChapter">＋</button>
             <button
               class="sidebar-collapse-button"
               type="button"
@@ -55,7 +55,7 @@
           <div v-for="item in activeProjects" :key="item.id" class="project-shelf-row" :class="{ active: item.id === project.id }">
             <button class="project-select" @click="switchProject(item.id)">
               <span>{{ item.title }}</span>
-              <small>{{ item.chapterCount }} 章 · {{ item.characterCount }} 字</small>
+              <small>{{ workFormatLabel(item) }} · {{ projectIsShortStory(item) ? '单篇' : `${item.chapterCount} 章` }} · {{ item.characterCount }} 字</small>
             </button>
             <button class="row-more" :aria-label="`管理《${item.title}》`" @click.stop="toggleProjectActions(item.id)">⋯</button>
             <div v-if="projectActionId === item.id" class="row-action-menu project-action-menu" @click.stop>
@@ -63,7 +63,7 @@
               <button @click="openWorkDesignSync(item)">同步 ChatGPT Work 设计</button>
               <button @click="openBookInCodex(item)">准备并打开 Codex 专属任务</button>
               <button @click="openBookInClaude(item)">打开 Claude Code 书籍目录</button>
-              <button @click="exportBookFile(item)">导出 Word 书籍</button>
+              <button @click="exportBookFile(item)">{{ projectIsShortStory(item) ? '导出 Word 短故事' : '导出 Word 书籍' }}</button>
               <button @click="openProjectTransfer(item)">导入与导出</button>
               <button @click="askArchiveProject(item)">归档项目</button>
               <button class="danger" @click="askDeleteProject(item)">删除项目</button>
@@ -75,7 +75,7 @@
             </button>
             <div v-if="archiveListOpen" class="archive-list">
               <div v-for="item in archivedProjects" :key="item.id" class="project-shelf-row archived">
-                <div class="archived-project-copy"><span>{{ item.title }}</span><small>{{ item.chapterCount }} 章 · {{ item.characterCount }} 字</small></div>
+                <div class="archived-project-copy"><span>{{ item.title }}</span><small>{{ workFormatLabel(item) }} · {{ projectIsShortStory(item) ? '单篇' : `${item.chapterCount} 章` }} · {{ item.characterCount }} 字</small></div>
                 <button class="archive-restore" @click="restoreArchivedProject(item)">恢复</button>
                 <button class="row-more" :aria-label="`管理归档项目《${item.title}》`" @click.stop="toggleProjectActions(item.id)">⋯</button>
                 <div v-if="projectActionId === item.id" class="row-action-menu project-action-menu" @click.stop>
@@ -85,7 +85,7 @@
               </div>
             </div>
           </div>
-          <button class="new-project-link" @click="openNewProject">＋ 新建小说项目</button>
+          <button class="new-project-link" @click="openNewProject">＋ 新建作品 · 小说 / 短故事</button>
           <button class="new-project-link" @click="openProjectTransfer(project)">⇩ 导入文件或项目备份</button>
         </div>
 
@@ -102,10 +102,10 @@
 
         <div ref="chapterSectionRef" class="chapter-section">
           <div class="section-label">
-            <span>正文结构</span>
-            <span class="section-count">{{ chapters.length }} 章</span>
+            <span>{{ isShortStory ? '短故事正文' : '正文结构' }}</span>
+            <span class="section-count">{{ isShortStory ? '单篇' : `${chapters.length} 章` }}</span>
           </div>
-          <div class="chapter-page-controls" aria-label="章节目录分页">
+          <div v-if="!isShortStory" class="chapter-page-controls" aria-label="章节目录分页">
             <button type="button" aria-label="上一组章节" :disabled="chapterPageIndex === 0" @click="changeChapterPage(-1)">‹</button>
             <select v-model.number="chapterPageIndex" aria-label="选择章节范围" @change="jumpToChapterPage">
               <option v-for="page in chapterGroups" :key="page.index" :value="page.index">{{ page.label }}</option>
@@ -120,14 +120,14 @@
               :class="{ selected: chapter.id === activeChapter?.id }"
             >
               <button class="chapter-item" @click="selectChapter(chapter.id)">
-                <span class="chapter-number">{{ String(chapter.chapter_no).padStart(2, '0') }}</span>
+                <span v-if="!isShortStory" class="chapter-number">{{ String(chapter.chapter_no).padStart(2, '0') }}</span>
                 <span class="chapter-copy">
                   <strong>{{ chapter.title }}</strong>
                   <small>{{ chapter.status === 'completed' ? (chapter.finalization_manual ? '已定稿·人工' : chapter.finalization_correction ? '已定稿·已校正' : '已定稿') : chapter.finalized_version_id ? '修订待定稿' : chapter.status === 'draft' ? '草稿' : chapter.status }}</small>
                 </span>
                 <span class="chapter-state" :class="chapter.status"></span>
               </button>
-              <button class="chapter-more" :aria-label="`管理${chapter.title}`" @click.stop="toggleChapterActions(chapter.id)">⋯</button>
+              <button v-if="!isShortStory" class="chapter-more" :aria-label="`管理${chapter.title}`" @click.stop="toggleChapterActions(chapter.id)">⋯</button>
               <div v-if="chapterActionId === chapter.id" class="row-action-menu chapter-action-menu" @click.stop>
                 <button @click="openRenameChapter(chapter)">重命名</button>
                 <button :disabled="chapter.id === chapters[0]?.id" @click="moveChapter(chapter, -1)">上移一章</button>
@@ -156,16 +156,17 @@
       <section class="editor-panel" :inert="activeChapter.detailLoaded === false || navigationPending">
         <div class="editor-heading">
           <div class="editor-heading-copy">
-            <div class="eyebrow copper">CHAPTER {{ String(activeChapter.chapter_no).padStart(2, '0') }}</div>
-            <div class="chapter-title-line"><input v-model="activeChapter.title" class="chapter-title-input" aria-label="章节标题" @blur="saveChapterTitle" /></div>
+            <div class="eyebrow copper">{{ isShortStory ? 'SHORT STORY · 单篇创作' : `CHAPTER ${String(activeChapter.chapter_no).padStart(2, '0')}` }}</div>
+            <div v-if="isShortStory" class="chapter-title-line short-story-title"><h1>{{ project.title }}</h1><button type="button" @click="openEditProject(project)">编辑故事信息</button></div>
+            <div v-else class="chapter-title-line"><input v-model="activeChapter.title" class="chapter-title-input" aria-label="章节标题" @blur="saveChapterTitle" /></div>
             <div class="chapter-subline">
               <span>{{ countChinese(editorText) }} 中文字</span>
               <span class="dot-separator">·</span>
-              <span>{{ activeTab === 'manuscript' ? '正文编辑' : activeTab === 'card' ? '章节卡' : '场景计划' }}</span>
+              <span>{{ activeTab === 'manuscript' ? '正文编辑' : activeTab === 'card' ? cardLabel : '场景计划' }}</span>
               <button class="chapter-finalization-status" @click="openFinalization">{{ activeChapter.status === 'completed' && !isDirty ? (activeChapter.finalization_manual ? '已定稿·人工' : activeChapter.finalization_correction ? '已定稿·已校正' : '已确认定稿') : activeChapter.finalized_version_id ? '修订待定稿' : '待检查 / 待定稿' }}</button>
               <button v-if="activeChapter.finalized_version_id && !activeChapter.finalization_manual" class="chapter-linked-edit" @click="openFinalization">定稿后校正</button>
               <span v-if="activeChapter.finalization_manual" class="chapter-manual-handoff-note">未审稿 · 交接未更新</span>
-              <span class="chapter-title-actions">
+              <span v-if="!isShortStory" class="chapter-title-actions">
                 <CreativeExecutionControl
                   compact
                   class="chapter-title-generation"
@@ -189,7 +190,7 @@
               <button class="outline-button" @click="openVersionHistory">版本历史</button>
               <button class="outline-button" @click="saveManuscript">保存版本</button>
               <button class="outline-button" :disabled="zhuqueOpening" @click="openZhuqueDetection">{{ zhuqueOpening ? '准备检测…' : '朱雀 AI 检测' }}</button>
-              <button class="outline-button finalize-chapter-button" @click="openFinalization"><AppIcon name="quality" :size="15" />完成本章</button>
+              <button class="outline-button finalize-chapter-button" @click="openFinalization"><AppIcon name="quality" :size="15" />{{ isShortStory ? '完成本篇' : '完成本章' }}</button>
               <button v-if="runningTask" class="cancel-generation-button" :disabled="generationCancelPending" @click="cancelGeneration">
                 {{ generationCancelPending ? '正在取消…' : '取消生成' }}
               </button>
@@ -198,7 +199,7 @@
               <select v-model="generationIntent" class="generation-intent" aria-label="正文生成方式" :disabled="taskIsRunning()">
                 <option v-if="!editorText.trim()" value="draft">生成首稿</option>
                 <option v-if="editorText.trim()" value="continue">从光标续写</option>
-                <option v-if="editorText.trim()" value="rewrite">整章重写</option>
+                <option v-if="editorText.trim()" value="rewrite">{{ isShortStory ? '整篇重写' : '整章重写' }}</option>
               </select>
               <CreativeExecutionControl
                 :default-mode="defaultExecutionMode"
@@ -215,7 +216,7 @@
 
         <div class="editor-tabs" role="tablist" aria-label="章节内容" @keydown="navigateEditorTabs">
           <button id="editor-tab-manuscript" role="tab" :aria-selected="activeTab === 'manuscript'" :tabindex="activeTab === 'manuscript' ? 0 : -1" aria-controls="chapter-editor-content" :class="{ active: activeTab === 'manuscript' }" @click="activeTab = 'manuscript'">正文</button>
-          <button id="editor-tab-card" role="tab" :aria-selected="activeTab === 'card'" :tabindex="activeTab === 'card' ? 0 : -1" aria-controls="chapter-editor-content" :class="{ active: activeTab === 'card' }" @click="activeTab = 'card'">章节卡</button>
+          <button id="editor-tab-card" role="tab" :aria-selected="activeTab === 'card'" :tabindex="activeTab === 'card' ? 0 : -1" aria-controls="chapter-editor-content" :class="{ active: activeTab === 'card' }" @click="activeTab = 'card'">{{ cardLabel }}</button>
           <button id="editor-tab-scene" role="tab" :aria-selected="activeTab === 'scene'" :tabindex="activeTab === 'scene' ? 0 : -1" aria-controls="chapter-editor-content" :class="{ active: activeTab === 'scene' }" @click="activeTab = 'scene'">场景计划</button>
           <span class="tab-spacer"></span>
           <ManuscriptFormatMenu
@@ -241,12 +242,12 @@
           />
           <p v-else-if="activeChapter.detailLoaded === false" role="status">正在读取本章…</p>
           <div v-else-if="activeTab === 'card'" class="artifact-view card-view">
-            <details class="formal-card-edit"><summary>手动编辑章节卡</summary>
+            <details class="formal-card-edit"><summary>手动编辑{{ cardLabel }}</summary>
               <CreativeCandidateEditor :model-value="formalCardDraft" description="修改暂存在表单中，点击保存章节卡后生效" @update:model-value="formalCardDraft = $event" />
-              <button class="outline-button" @click="saveFormalCard">保存章节卡</button>
+              <button class="outline-button" @click="saveFormalCard">保存{{ cardLabel }}</button>
             </details>
             <div class="artifact-header"><span class="eyebrow copper">CHAPTER CONTRACT</span><span class="artifact-state">{{ activeChapter.card?.goal ? '已生成' : '待生成' }}</span></div>
-            <h2>{{ activeChapter.card?.goal || '还没有章节卡' }}</h2>
+            <h2>{{ activeChapter.card?.goal || `还没有${cardLabel}` }}</h2>
             <div class="artifact-grid">
               <article><span>正文目标</span><p>{{ chapterTargetLength.toLocaleString('zh-CN') }} 中文字</p></article>
               <article><span>主角目标</span><p>{{ activeChapter.card?.protagonistGoal || '等待规划' }}</p></article>
@@ -298,23 +299,23 @@
         </div>
       </section>
 
-      <aside v-show="lensVisible && !writingFocus" id="writing-lens" class="context-panel" aria-label="本章写作镜头">
+      <aside v-show="lensVisible && !writingFocus" id="writing-lens" class="context-panel" :aria-label="isShortStory ? '短故事写作镜头' : '本章写作镜头'">
         <div class="context-heading">
-          <div><span class="eyebrow">WRITING LENS</span><h2>本章写作镜头</h2></div>
+          <div><span class="eyebrow">WRITING LENS</span><h2>{{ isShortStory ? '短故事写作镜头' : '本章写作镜头' }}</h2></div>
           <button class="icon-button" type="button" aria-label="收起写作镜头" title="收起写作镜头" @click="lensOpen = false">×</button>
         </div>
 
         <section class="context-section focus-section">
           <div class="section-label"><span>当前目标</span><span class="verified">● 已确认</span></div>
-          <p class="focus-copy">{{ activeChapter.card?.goal || '先生成一张章节卡，让故事从想法变成可以执行的动作。' }}</p>
+          <p class="focus-copy">{{ activeChapter.card?.goal || `先生成一张${cardLabel}，让故事从想法变成可以执行的动作。` }}</p>
         </section>
 
         <section class="context-section">
-          <div class="section-label"><span>本章场景</span><CreativeExecutionControl compact :default-mode="defaultExecutionMode" :app-model-label="modelName('chapter_card')" action-label="生成章节卡" :busy="isTaskRunning('chapter_card')" :disabled="taskIsRunning()" @execute="runCreativeTask('chapter_card', $event)" @edit-default="openEditProject(project)" /></div>
+          <div class="section-label"><span>{{ isShortStory ? '全文场景' : '本章场景' }}</span><CreativeExecutionControl compact :default-mode="defaultExecutionMode" :app-model-label="modelName('chapter_card')" :action-label="`生成${cardLabel}`" :busy="isTaskRunning('chapter_card')" :disabled="taskIsRunning()" @execute="runCreativeTask('chapter_card', $event)" @edit-default="openEditProject(project)" /></div>
           <div v-if="activeChapter.card?.requiredScenes?.length" class="context-scenes">
             <div v-for="scene in activeChapter.card.requiredScenes" :key="scene.id" class="context-scene"><span>{{ scene.id }}</span><strong>{{ scene.title }}</strong><small>{{ scene.goal }}</small></div>
           </div>
-          <div v-else class="empty-context">章节卡还没有内容<br><small>先从一个具体目标开始</small></div>
+          <div v-else class="empty-context">{{ cardLabel }}还没有内容<br><small>先从一个具体目标开始</small></div>
         </section>
 
         <section class="context-section">
@@ -331,7 +332,7 @@
         </section>
 
         <section class="context-section progress-section">
-          <div class="section-label"><span>章节进度</span><span>{{ chapterProgress }}%</span></div>
+          <div class="section-label"><span>{{ isShortStory ? '全文进度' : '章节进度' }}</span><span>{{ chapterProgress }}%</span></div>
           <div class="progress-track"><div class="progress-bar" :style="{ width: `${chapterProgress}%` }"></div></div>
           <div class="progress-meta"><span>{{ countChinese(editorText) }} 中文字</span><span>目标 {{ chapterTargetLength.toLocaleString('zh-CN') }} 字</span></div>
         </section>
@@ -346,6 +347,7 @@
         v-else-if="workspaceView === 'assistant'"
         :project-id="project.id"
         :chapter-id="activeChapterId"
+        :project="project"
         :model-settings="modelSettings"
         @workspace-change="refreshWorkspaceFromAgent"
       />
@@ -482,11 +484,17 @@
     <div v-if="newProjectOpen" class="project-dialog-backdrop" @mousedown.self="newProjectOpen = false">
       <form class="project-dialog project-brief-dialog" @submit.prevent="createNewProject">
         <span class="eyebrow copper">NEW MANUSCRIPT</span>
-        <h2>建立新的小说项目</h2>
+        <h2>建立新的作品</h2>
+        <div class="work-format-choice" role="group" aria-label="作品形式">
+          <button type="button" :aria-pressed="newProjectDraft.work_format === 'novel'" @click="newProjectDraft.work_format = 'novel'"><b>小说</b><small>分章节创作，持续推进长线情节</small></button>
+          <button type="button" :aria-pressed="newProjectDraft.work_format === 'short_story'" @click="newProjectDraft.work_format = 'short_story'"><b>短故事</b><small>单篇正文，写完整的冲突与结局</small></button>
+        </div>
+        <label v-if="newProjectDraft.work_format === 'short_story'" class="story-word-count"><span>全文目标字数</span><input v-model.number="newProjectDraft.target_word_count" type="number" min="800" max="12000" step="100" required /><small>800—12000 字，之后可在故事信息中调整</small></label>
         <p>只要选一个方向，写下几个关键词就能开始。所有内容之后都能继续修改。</p>
         <label><span>项目名称</span><input v-model.trim="newProjectDraft.title" required autofocus placeholder="例如：雾港来信" /></label>
         <ProjectBriefFields
           id-prefix="new-project"
+          :short-story="newProjectDraft.work_format === 'short_story'"
           :genre="newProjectDraft.genre"
           :idea="newProjectDraft.idea"
           :style="newProjectDraft.style"
@@ -503,11 +511,13 @@
     <div v-if="editProjectOpen" class="project-dialog-backdrop" @mousedown.self="editProjectOpen = false">
       <form class="project-dialog project-edit-dialog project-brief-dialog" @submit.prevent="saveProjectEdits">
         <span class="eyebrow copper">PROJECT NOTES</span>
-        <h2>编辑项目信息</h2>
+        <h2>{{ editProjectDraft.work_format === 'short_story' ? '编辑短故事信息' : '编辑项目信息' }}</h2>
+        <label v-if="editProjectDraft.work_format === 'short_story'" class="story-word-count"><span>全文目标字数</span><input v-model.number="editProjectDraft.target_word_count" type="number" min="800" max="12000" step="100" required /></label>
         <p>这里修改的是作品层信息，会成为后续规划和生成的共同上下文。</p>
         <label><span>项目名称</span><input v-model.trim="editProjectDraft.title" required autofocus /></label>
         <ProjectBriefFields
           id-prefix="edit-project"
+          :short-story="editProjectDraft.work_format === 'short_story'"
           :genre="editProjectDraft.genre"
           :idea="editProjectDraft.idea"
           :style="editProjectDraft.style"
@@ -621,6 +631,7 @@ import { REWRITE_PRESETS } from '../electron/prompt-templates.js'
 import { appService } from './services/app-service.js'
 import { countChinese, formatRelativeTime } from './services/format.js'
 import { chapterPageIndexFor, chapterPages } from './utils/chapter-navigation.js'
+import { isShortStory as projectIsShortStory, workFormatLabel } from '../electron/work-format.js'
 
 const workspaceReady = ref(false)
 const SIDEBAR_COLLAPSED_KEY = 'novel-studio:structure-sidebar-collapsed'
@@ -807,8 +818,8 @@ const revisions = ref([])
 watch(sidebarCollapsed, (collapsed) => {
   try { globalThis.localStorage?.setItem(SIDEBAR_COLLAPSED_KEY, String(collapsed)) } catch {}
 })
-const newProjectDraft = reactive({ title: '', genre: '', idea: '', style: '' })
-const editProjectDraft = reactive({ id: '', title: '', genre: '', idea: '', style: '', default_execution_mode: 'app_model' })
+const newProjectDraft = reactive({ title: '', genre: '', idea: '', style: '', work_format: 'novel', target_word_count: 8000 })
+const editProjectDraft = reactive({ id: '', title: '', genre: '', idea: '', style: '', work_format: 'novel', target_word_count: 8000, default_execution_mode: 'app_model' })
 const newChapterDraft = reactive({ title: '', mode: 'blank' })
 const renameChapterDraft = reactive({ id: '', title: '' })
 const confirmDialog = reactive({ visible: false, title: '', body: '', note: '', confirmLabel: '确认', danger: false })
@@ -825,7 +836,9 @@ const streamPreview = reactive({ visible: false, task: '', status: '', content: 
 const runtime = reactive({ goServiceStatus: 'embedded-fallback', mode: 'embedded' })
 provide('creative-agent-provider', computed(() => runtime.agentProvider || 'codex'))
 const agentLabel = computed(() => creativeAgentLabel(runtime.agentProvider))
-const project = reactive({ title: '', genre: '', idea: '', style: '', default_execution_mode: 'app_model' })
+const project = reactive({ title: '', genre: '', idea: '', style: '', work_format: 'novel', target_word_count: 8000, default_execution_mode: 'app_model' })
+const isShortStory = computed(() => projectIsShortStory(project))
+const cardLabel = computed(() => isShortStory.value ? '故事卡' : '章节卡')
 const modelSettings = reactive({ profiles: [], routes: {} })
 const modelProfileSaveState = reactive({ state: 'idle', message: '' })
 let autosaveTimer = null
@@ -851,7 +864,7 @@ watch(() => [inlineRun.value?.chapterId, project.id], async ([chapterId, project
     chapters.value = boundChapterDetails(chapters.value, [...recentChapterIds, chapterId], activeChapterId.value)
   } catch (error) { showToast(`读取候选源正文失败：${error.message}`) }
 })
-const chapterTargetLength = computed(() => Math.max(800, Math.min(12000, Math.round(Number(activeChapter.value?.card?.targetLength) || 2000))))
+const chapterTargetLength = computed(() => Math.max(800, Math.min(12000, Math.round(Number(isShortStory.value ? project.target_word_count : activeChapter.value?.card?.targetLength) || 2000))))
 const liveManuscriptChecks = computed(() => checkManuscript(editorText.value, { targetLength: chapterTargetLength.value }))
 const formalCardDraft = ref({})
 let formalCardSource = ''
@@ -886,7 +899,7 @@ const selectionToolsStyle = computed(() => ({
   left: `${selectionTools.left || 50}%`,
   top: `${selectionTools.bottom || 23}px`,
 }))
-const generationIntentLabel = computed(() => ({ draft: '生成首稿', continue: '从光标续写', rewrite: '整章重写' }[generationIntent.value] || '生成正文'))
+const generationIntentLabel = computed(() => ({ draft: '生成首稿', continue: '从光标续写', rewrite: isShortStory.value ? '整篇重写' : '整章重写' }[generationIntent.value] || '生成正文'))
 const defaultExecutionMode = computed(() => projectExecutionMode(project))
 const inlineCurrentDraftDigest = computed(() => inlineBindings.get(inlineRunId.value)?.getDraftDigest?.() || inlineDraftDigest.value)
 const inlineCurrentDraftValue = computed(() => inlineBindings.get(inlineRunId.value)?.getDraftValue?.())
@@ -1156,6 +1169,8 @@ function toggleChapterActions(chapterId) {
 function openNewProject() {
   projectMenuOpen.value = false
   projectActionId.value = ''
+  newProjectDraft.work_format = 'novel'
+  newProjectDraft.target_word_count = 8000
   newProjectDraft.title = ''
   newProjectDraft.genre = ''
   newProjectDraft.idea = ''
@@ -1280,7 +1295,7 @@ async function createNewProject() {
     newProjectOpen.value = false
     showToast(loaded.codexWorkspaceError
       ? `《${loaded.project.title}》已建立，但 Codex 项目目录创建失败：${loaded.codexWorkspaceError}`
-      : `《${loaded.project.title}》与 Codex 项目目录已建立，可以开始第一章`)
+      : `《${loaded.project.title}》与 Codex 项目目录已建立，${projectIsShortStory(loaded.project) ? '可以开始写短故事' : '可以开始第一章'}`)
   } catch (error) {
     showToast(`建立项目失败：${error.message}`)
   } finally {
@@ -1297,6 +1312,8 @@ function openEditProject(item) {
     genre: item.genre || '',
     idea: item.idea || '',
     style: item.style || '',
+    work_format: item.work_format || 'novel',
+    target_word_count: item.target_word_count || 8000,
     default_execution_mode: projectExecutionMode(item),
   })
   editProjectOpen.value = true

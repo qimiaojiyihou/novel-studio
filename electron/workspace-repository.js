@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { emptyScenePlan, normalizeScenePlan, renderScenePlan } from './creative-quality.js'
 import { bindDefaultCreativePack } from './creative-pack.js'
+import { WORK_FORMATS, isShortStory, shortStoryWordCount } from './work-format.js'
 
 function parseJson(value, fallback) {
   try {
@@ -143,6 +144,7 @@ export function createWorkspaceRepository(database, {
   function createChapter({ projectId, title = '', mode = 'blank', sourceChapterId = '' }) {
     const project = projectById.get(projectId)
     if (!project) throw new Error('项目不存在')
+    if (isShortStory(project)) throw new Error('短故事使用单篇正文，请新建另一篇短故事')
     if (project.archived_at) throw new Error('归档项目需要先恢复才能添加章节')
     const source = sourceChapterId ? chapterById.get(sourceChapterId) : null
     if (source && source.project_id !== projectId) throw new Error('模板章节不属于当前项目')
@@ -168,14 +170,18 @@ export function createWorkspaceRepository(database, {
   }
 
   function createProject(input = {}) {
+    const workFormat = input.work_format || 'novel'
+    if (!WORK_FORMATS.includes(workFormat)) throw new Error('作品形式不受支持')
+    const shortStory = workFormat === 'short_story'
+    const targetWordCount = shortStory ? shortStoryWordCount(input.target_word_count ?? 8000) : 8000
     const id = createId('project')
     const createdAt = now()
-    const title = cleanText(input.title, '未命名小说')
+    const title = cleanText(input.title, shortStory ? '未命名短故事' : '未命名小说')
     database.exec('BEGIN IMMEDIATE')
     try {
       database.prepare(`
-        INSERT INTO projects (id, title, genre, idea, style, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO projects (id, title, genre, idea, style, created_at, updated_at, work_format, target_word_count)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         id,
         title,
@@ -184,12 +190,14 @@ export function createWorkspaceRepository(database, {
         cleanText(input.style, '克制、具体、以动作和对白推进。'),
         createdAt,
         createdAt,
+        workFormat,
+        targetWordCount,
       )
       const chapterId = createId('chapter')
       database.prepare(`
         INSERT INTO chapters (id, project_id, chapter_no, title, status, card_json, scene_plan, manuscript, updated_at)
-        VALUES (?, ?, 1, '第一章', 'draft', '{}', '', '', ?)
-      `).run(chapterId, id, createdAt)
+        VALUES (?, ?, 1, ?, 'draft', ?, '', '', ?)
+      `).run(chapterId, id, shortStory ? '正文' : '第一章', shortStory ? JSON.stringify({ targetLength: targetWordCount }) : '{}', createdAt)
       bindDefaultCreativePack(database, id, { boundAt: createdAt })
       database.prepare(`
         INSERT INTO app_settings (key, value, updated_at) VALUES ('active_project_id', ?, ?)
@@ -206,10 +214,11 @@ export function createWorkspaceRepository(database, {
   function updateProject(patch = {}) {
     const projectId = patch.id || activeProjectId()
     if (!projectById.get(projectId)) throw new Error('项目不存在')
-    const allowed = ['title', 'genre', 'idea', 'style', 'default_execution_mode']
+    const allowed = ['title', 'genre', 'idea', 'style', 'default_execution_mode', 'target_word_count']
     const entries = Object.entries(patch)
       .filter(([key]) => allowed.includes(key))
       .map(([key, value]) => {
+        if (key === 'target_word_count') return [key, shortStoryWordCount(value)]
         if (key === 'title') return [key, cleanText(value, '未命名小说')]
         if (key === 'default_execution_mode') {
           const mode = String(value || '').trim()
@@ -402,6 +411,7 @@ export function createWorkspaceRepository(database, {
   function duplicateChapter(chapterId) {
     const source = chapterById.get(chapterId)
     if (!source) throw new Error('章节不存在')
+    if (isShortStory(projectById.get(source.project_id))) throw new Error('短故事使用单篇正文，请通过项目备份创建副本')
     const id = createId('chapter')
     const updatedAt = now()
     const currentChapters = database.prepare('SELECT id FROM chapters WHERE project_id=? ORDER BY chapter_no').all(source.project_id)

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { COMPACT_HANDOFF_MODE } from './chapter-handoff.js'
+import { shortStoryGuidance } from './work-format.js'
 const parse = (text, fallback = {}) => { try { return JSON.parse(text) } catch { return fallback } }
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 const terms = text => [...new Set(String(text || '').match(/[\u3400-\u9fff]{2,4}|[a-z0-9_]{3,}/gi) || [])]
@@ -51,6 +52,7 @@ export function buildCreativeContext(db, input = {}) {
     parts.push(text); sources.push(source); items.push({ ...source, label, text })
   }
   add(`project:${project.id}:identity`, '任务与作品（作者设定）', { title: project.title, genre: project.genre, idea: project.idea }, true)
+  if (shortStoryGuidance(project)) add(`project:${project.id}:work-format`, '短故事篇幅与结构', shortStoryGuidance(project), true)
   if (chapter) add(`chapter:${chapter.id}:planning`, '当前章节目标与边界', { title: chapter.title, card: parse(chapter.card_json), scenes: parse(chapter.scene_plan, chapter.scene_plan) }, true)
   const documents = db.prepare('SELECT * FROM planning_documents WHERE project_id = ?').all(project.id)
   for (const doc of documents.filter(item => item.kind === 'foundation')) add(`planning_document:${project.id}:${doc.kind}`, '相关硬事实 · 故事基础', parse(doc.content_json), true)
@@ -101,6 +103,7 @@ function dependencyValue(db, key) {
   const [kind, id, field] = key.split(':')
   if (kind === 'project') {
     const row = db.prepare('SELECT * FROM projects WHERE id=?').get(id)
+    if (field === 'work-format') return row ? shortStoryGuidance(row) : null
     return !row ? null : field === 'style' ? row.style || '' : { title: row.title, genre: row.genre, idea: row.idea }
   }
   if (kind === 'planning_document') {

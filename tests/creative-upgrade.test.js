@@ -30,12 +30,12 @@ function setup() {
 const reviewer = { executionMode: 'app_model', profileId: 'review-model', model: 'fixture', label: '独立上下文' }
 function state() { return { summary: '周砚付租金并开摊。', facts: [{ text: '租金已付', evidence: '周砚付了摊位租金。' }], characterStates: [], relationshipChanges: [], timelineEvents: [], openThreads: [], foreshadow: { setups: [], payoffs: [] } } }
 
-test('v21→v35 preserves pinned historical packs, runs sequentially and cascades new data', () => {
+test('v21→v36 preserves pinned historical packs, runs sequentially and cascades new data', () => {
   const db = new DatabaseSync(':memory:')
   runMigrations(db, { targetVersion: 21 })
   const before = db.prepare('SELECT version,digest FROM creative_pack_versions ORDER BY version').all()
   runMigrations(db)
-  assert.deepEqual(db.prepare('SELECT version FROM schema_migrations WHERE version>=22 ORDER BY version').all().map(r=>r.version), [22,23,24,25,26,27,28,29,30,31,32,33,34,35])
+  assert.deepEqual(db.prepare('SELECT version FROM schema_migrations WHERE version>=22 ORDER BY version').all().map(r=>r.version), [22,23,24,25,26,27,28,29,30,31,32,33,34,35,36])
   assert.deepEqual(db.prepare("SELECT version,digest FROM creative_pack_versions WHERE version!='1.3.0' ORDER BY version").all(), before)
   runMigrations(db)
   assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(), [])
@@ -171,7 +171,7 @@ test('discussion persists messages without replacing or staling the pending cand
   db.close()
 })
 
-test('style samples stay distinct from facts, protections use authoritative sources, backup8 roundtrips', async () => {
+test('style samples stay distinct from facts, protections use authoritative sources, backup9 roundtrips', async () => {
   const db=setup(),author=createAuthoringRepository(db)
   author.saveSample({projectId:'p',chapterId:'c',text:'周砚付了摊位租金。',reason:'干脆的动作'})
   assert.throws(()=>author.saveSample({projectId:'p',chapterId:'c',text:'编造的原文'}),/当前原文/)
@@ -183,7 +183,7 @@ test('style samples stay distinct from facts, protections use authoritative sour
   const finalRepo=createFinalizationRepository(db)
   finalRepo.start({projectId:'p',chapterId:'c',reviewer})
   const backup=createProjectBackup(db,'p')
-  assert.equal(backup.version,8)
+  assert.equal(backup.version,9)
   const restored=restoreProjectBackup(db,backup)
   assert.equal(author.listSamples({projectId:restored.projectId}).length,1)
   assert.equal(db.prepare('SELECT status FROM chapter_finalizations WHERE project_id=?').get(restored.projectId).status,'paused')

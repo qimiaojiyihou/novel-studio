@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
+import { importManuscriptProject } from '../electron/project-portability.js'
 import { runMigrations } from '../electron/database-migrations.js'
 import { createWorkspaceRepository } from '../electron/workspace-repository.js'
 import { compactCompletedEventBatch, compactRequestReceipts } from '../electron/storage-maintenance.js'
@@ -80,7 +81,9 @@ test('schema v32 reschedules runs skipped by the first legacy-safe compactor', (
   const database = new DatabaseSync(':memory:')
   try {
     runMigrations(database, { targetVersion: 31 })
-    const book = createWorkspaceRepository(database).createProject({ title: '模拟书' })
+    // Seed the historical schema with its original import path, before v36 columns exist.
+    const imported = importManuscriptProject(database, { title: '模拟书', chapters: [{ title: '第一章', manuscript: '' }] })
+    const book = createWorkspaceRepository(database).loadWorkspace(imported.projectId)
     const binding = database.prepare('SELECT pack_id,pack_version FROM project_pack_bindings WHERE project_id=?').get(book.project.id)
     database.prepare(`INSERT INTO agent_runs (id,project_id,chapter_id,workflow_id,creative_pack_id,creative_pack_version,
       creative_pack_digest,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,'completed','now','now')`)

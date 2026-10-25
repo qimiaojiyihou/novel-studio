@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url'
 import { validateCreativePack } from './creative-pack.js'
 import { creativeUpgradeMigrations } from './creative-upgrade-migrations.js'
 
-export const LATEST_SCHEMA_VERSION = 35
+export const LATEST_SCHEMA_VERSION = 36
 
 function bundledOfficialPack(version = '1.2.0') {
   const directory = version === '1.3.0' ? 'dist' : 'historical'
@@ -1586,6 +1586,17 @@ migrations.push({ version: 34, name: 'claude-code-agent-provider', up(db) {
 
 migrations.push({ version: 35, name: 'claude_reasoning_effort', up(database) {
   database.exec("ALTER TABLE agent_provider_settings ADD COLUMN claude_reasoning_effort TEXT NOT NULL DEFAULT ''")
+} })
+
+migrations.push({ version: 36, name: 'short_story_work_format', up(database) {
+  database.exec(`
+    ALTER TABLE projects ADD COLUMN work_format TEXT NOT NULL DEFAULT 'novel' CHECK(work_format IN ('novel','short_story'));
+    ALTER TABLE projects ADD COLUMN target_word_count INTEGER NOT NULL DEFAULT 8000 CHECK(target_word_count BETWEEN 800 AND 12000);
+    CREATE TRIGGER short_story_single_manuscript BEFORE INSERT ON chapters
+    WHEN (SELECT work_format FROM projects WHERE id=NEW.project_id)='short_story'
+      AND EXISTS(SELECT 1 FROM chapters WHERE project_id=NEW.project_id)
+    BEGIN SELECT RAISE(ABORT,'短故事使用单篇正文，请新建另一篇短故事'); END;
+  `)
 } })
 
 function readForeignKeyCheck(database) {
