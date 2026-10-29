@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url'
 import { validateCreativePack } from './creative-pack.js'
 import { creativeUpgradeMigrations } from './creative-upgrade-migrations.js'
 
-export const LATEST_SCHEMA_VERSION = 37
+export const LATEST_SCHEMA_VERSION = 38
 
 function bundledOfficialPack(version = '1.2.0') {
   const directory = version === '1.3.0' ? 'dist' : 'historical'
@@ -1645,6 +1645,22 @@ export function getSchemaVersion(database) {
   const row = database.prepare('SELECT COALESCE(MAX(version), 0) AS version FROM schema_migrations').get()
   return Number(row?.version || 0)
 }
+
+migrations.push({ version: 38, name: 'chapter-chinese-count', up(database) {
+  database.exec(`
+    ALTER TABLE chapter_statistics ADD COLUMN chinese_count INTEGER;
+    DROP TRIGGER chapter_statistics_insert;
+    DROP TRIGGER chapter_statistics_update;
+    CREATE TRIGGER chapter_statistics_insert AFTER INSERT ON chapters BEGIN
+      INSERT INTO chapter_statistics (chapter_id,project_id,character_count,chinese_count)
+      VALUES (NEW.id,NEW.project_id,length(NEW.manuscript),NULL);
+    END;
+    CREATE TRIGGER chapter_statistics_update AFTER UPDATE OF manuscript,project_id ON chapters BEGIN
+      UPDATE chapter_statistics SET project_id=NEW.project_id,
+        character_count=length(NEW.manuscript),chinese_count=NULL WHERE chapter_id=NEW.id;
+    END;
+  `)
+} })
 
 export function runMigrations(database, { now = () => new Date().toISOString(), targetVersion = LATEST_SCHEMA_VERSION } = {}) {
   database.exec(`

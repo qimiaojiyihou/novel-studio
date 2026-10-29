@@ -1,8 +1,15 @@
+import { countChinese } from '../services/format.js'
+
+export function chapterChineseCount(chapter) {
+  return typeof chapter.manuscript === 'string' ? countChinese(chapter.manuscript) : chapter.chineseCount ?? 0
+}
+
 export function chapterSummary(chapter) {
   const { id, project_id, chapter_no, title, status, updated_at, finalized_version_id,
     finalization_correction, finalization_manual } = chapter
   return { id, project_id, chapter_no, title, status, updated_at, finalized_version_id,
     finalization_correction, finalization_manual,
+    chineseCount: chapterChineseCount(chapter),
     characterCount: chapter.characterCount ?? Array.from(chapter.manuscript || '').length, detailLoaded: false }
 }
 

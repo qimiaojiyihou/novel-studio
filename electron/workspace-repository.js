@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { emptyScenePlan, normalizeScenePlan, renderScenePlan } from './creative-quality.js'
 import { bindDefaultCreativePack } from './creative-pack.js'
 import { WORK_FORMATS, isShortStory, shortStoryWordCount } from './work-format.js'
+import { countChinese } from './text-statistics.js'
 
 function parseJson(value, fallback) {
   try {
@@ -26,7 +27,7 @@ function mapChapter(chapter) {
     } catch { scenePlanCorrupt = true }
   }
   const scenePlan = normalizeScenePlan(chapter.scene_plan_json, chapter.scene_plan)
-  return { ...chapter, card: parseJson(chapter.card_json, {}), scenePlan, scenePlanCorrupt }
+  return { ...chapter, chineseCount: countChinese(chapter.manuscript || ''), card: parseJson(chapter.card_json, {}), scenePlan, scenePlanCorrupt }
 }
 
 function mapProject(project) {
@@ -59,8 +60,26 @@ export function createWorkspaceRepository(database, {
   }
 
   function listChapterCatalog(projectId) {
+    // Count only new/changed manuscripts. Other database writers invalidate the
+    // cached value transactionally through the chapter statistics triggers.
+    const pending = database.prepare(`SELECT c.id,c.manuscript FROM chapters c
+      JOIN chapter_statistics s ON s.chapter_id=c.id
+      WHERE c.project_id=? AND s.chinese_count IS NULL`).all(projectId)
+    if (pending.length) {
+      const storeCount = database.prepare(`UPDATE chapter_statistics SET chinese_count=? WHERE chapter_id=?
+        AND EXISTS(SELECT 1 FROM chapters WHERE id=? AND manuscript=?)`)
+      database.exec('SAVEPOINT catalog_counts')
+      try {
+        for (const chapter of pending) storeCount.run(countChinese(chapter.manuscript), chapter.id, chapter.id, chapter.manuscript)
+        database.exec('RELEASE catalog_counts')
+      } catch (error) {
+        database.exec('ROLLBACK TO catalog_counts; RELEASE catalog_counts')
+        throw error
+      }
+    }
     return database.prepare(`SELECT c.id,c.project_id,c.chapter_no,c.title,c.status,c.updated_at,
       COALESCE((SELECT character_count FROM chapter_statistics WHERE chapter_id=c.id),0) AS characterCount,
+      COALESCE((SELECT chinese_count FROM chapter_statistics WHERE chapter_id=c.id),0) AS chineseCount,
       ${finalizationSelection} WHERE c.project_id=? ORDER BY c.chapter_no`).all(projectId)
       .map(chapter => ({ ...chapter, detailLoaded: false }))
   }

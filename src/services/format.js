@@ -1,6 +1,4 @@
-export function countChinese(text = '') {
-  return [...text].filter((char) => /[\u3400-\u4dbf\u4e00-\u9fff]/u.test(char)).length
-}
+export { countChinese } from '../../electron/text-statistics.js'
 
 export function countCharacters(text = '') {
   return [...text].length

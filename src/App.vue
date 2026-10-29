@@ -124,7 +124,7 @@
                 <span v-if="!isShortStory" class="chapter-number">{{ String(chapter.chapter_no).padStart(2, '0') }}</span>
                 <span class="chapter-copy">
                   <strong>{{ chapter.title }}</strong>
-                  <small>{{ chapter.status === 'completed' ? (chapter.finalization_manual ? '已定稿·人工' : chapter.finalization_correction ? '已定稿·已校正' : '已定稿') : chapter.finalized_version_id ? '修订待定稿' : chapter.status === 'draft' ? '草稿' : chapter.status }}</small>
+                  <small>{{ chapter.status === 'completed' ? (chapter.finalization_manual ? '已定稿·人工' : chapter.finalization_correction ? '已定稿·已校正' : '已定稿') : chapter.finalized_version_id ? '修订待定稿' : chapter.status === 'draft' ? '草稿' : chapter.status }} · {{ chapter.id === activeChapter?.id && chapter.detailLoaded !== false ? countChinese(editorText) : chapterChineseCount(chapter) }} 字</small>
                 </span>
                 <span class="chapter-state" :class="chapter.status"></span>
               </button>
@@ -611,7 +611,7 @@ import ChapterFinalization from './components/ChapterFinalization.vue'
 import ZhuqueDetection from './components/ZhuqueDetection.vue'
 import StoryChangePanel from './components/StoryChangePanel.vue'
 import ModelSettings from './components/ModelSettings.vue'
-import { boundChapterDetails } from './utils/chapter-catalog.js'
+import { boundChapterDetails, chapterChineseCount } from './utils/chapter-catalog.js'
 import NovelEditor from './components/NovelEditor.vue'
 import ManuscriptFormatMenu from './components/ManuscriptFormatMenu.vue'
 import ProjectBriefFields from './components/ProjectBriefFields.vue'

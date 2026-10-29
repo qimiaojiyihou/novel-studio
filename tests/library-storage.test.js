@@ -178,6 +178,7 @@ test('500-chapter navigation transfers one body, statistics remain transactional
     assert.equal(loaded.chapters.length, 500)
     assert.equal(loaded.chapters.filter(chapter => Object.hasOwn(chapter, 'manuscript')).length, 1)
     assert.ok(JSON.stringify(loaded).length < 300_000)
+    assert.equal(loaded.chapters.at(-1).chineseCount, 3000)
     assert.equal(repo.listProjects().find(project => project.id === a.project.id).characterCount, 499*3000)
     assert.equal(repo.getChapter({ projectId: a.project.id, chapterId: 'chapter-large-500' }).manuscript, manuscript)
     assert.throws(() => repo.getChapter({ projectId: b.project.id, chapterId: 'chapter-large-500' }), /不属于/)
