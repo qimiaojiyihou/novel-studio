@@ -83,7 +83,7 @@ function readProjectDescriptor(root) {
 }
 
 export function findCodexBookWorkspace({ baseDirectory, projectId, provider = 'codex' }) {
-  const projectsRoot = path.join(baseDirectory, provider === 'claude' ? 'claude-projects' : 'codex-projects')
+  const projectsRoot = path.join(baseDirectory, ['claude', 'grok'].includes(provider) ? `${provider}-projects` : 'codex-projects')
   if (!projectId || !fs.existsSync(projectsRoot)) return null
   const entries = fs.readdirSync(projectsRoot, { withFileTypes: true })
   for (const entry of entries) {
@@ -97,8 +97,8 @@ export function findCodexBookWorkspace({ baseDirectory, projectId, provider = 'c
 
 export function createCodexBookWorkspace({ baseDirectory, project, provider = 'codex' }) {
   if (!baseDirectory || !project?.id) throw new Error('创建 Codex 书籍项目缺少项目数据')
-  const agent = provider === 'claude' ? 'claude' : 'codex'
-  const label = agent === 'claude' ? 'Claude Code' : 'Codex'
+  const agent = ['claude', 'grok'].includes(provider) ? provider : 'codex'
+  const label = { claude: 'Claude Code', grok: 'Grok Build', codex: 'Codex' }[agent]
   const projectsRoot = path.join(baseDirectory, `${agent}-projects`)
   fs.mkdirSync(projectsRoot, { recursive: true, mode: 0o700 })
   const existing = findCodexBookWorkspace({ baseDirectory, projectId: project.id, provider: agent })
@@ -226,7 +226,7 @@ export function createCodexProjectMirror({
   skillSourceDirectory = '',
 }) {
   if (!agentRun?.id || !workspace?.project) throw new Error('创建 Codex 镜像缺少 AgentRun 或项目数据')
-  const provider = agentRun.modelRoutes?.agentProvider === 'claude' ? 'claude' : 'codex'
+  const provider = ['claude', 'grok'].includes(agentRun.modelRoutes?.agentProvider) ? agentRun.modelRoutes.agentProvider : 'codex'
   const bookWorkspace = createCodexBookWorkspace({ baseDirectory, project: codexProject, provider })
   const root = path.join(baseDirectory, `${provider}-workspaces`, agentRun.id)
   const directories = ['project', 'chapter', 'candidates', 'creative-pack', '.codex/skills/novel-studio-creator']

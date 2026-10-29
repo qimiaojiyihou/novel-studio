@@ -4,6 +4,7 @@ import { cleanPlanningFieldText } from './generated-text.js'
 import { createPromptRepository } from './prompt-repository.js'
 import { contentDigest } from './chapter-finalization.js'
 import { buildPlanningChapterBundleTarget, buildPlanningDocumentBundleTarget, buildPlanningEntityBundleTarget } from './planning-bundle.js'
+import { COLLABORATIVE_WORKFLOW_ID, collaborativeWorkflow, lockCollaborativeModels } from './collaborative-writing.js'
 
 const EVENT_TOOL_OUTPUT_LIMIT = 64 * 1024
 const RUN_EVENT_LIMIT = 5 * 1024 * 1024
@@ -188,13 +189,16 @@ export function createCodexRepository(database, {
       fastMode: Boolean(row.fast_mode),
       adapterVersion: row.adapter_version,
       authMethod: row.auth_method,
-      agentProvider: ['qoder', 'claude'].includes(row.agent_provider) ? row.agent_provider : 'codex',
+      agentProvider: ['qoder', 'claude', 'grok'].includes(row.agent_provider) ? row.agent_provider : 'codex',
       qoderCliPath: row.qoder_cli_path || '',
       qoderModel: row.qoder_model || 'auto',
       claudeCliPath: row.claude_cli_path || '',
       claudeModel: row.claude_model || '',
       claudeAuthMethod: row.claude_auth_method || 'cli',
       claudeReasoningEffort: row.claude_reasoning_effort || '',
+      grokCliPath: row.grok_cli_path || '',
+      grokModel: row.grok_model || '',
+      grokReasoningEffort: row.grok_reasoning_effort || '',
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     } : null
@@ -208,7 +212,8 @@ export function createCodexRepository(database, {
     database.prepare(`
       UPDATE agent_provider_settings SET enabled = ?, preferred_backend = ?, model = ?,
         reasoning_effort = ?, fast_mode = ?, auth_method = ?, agent_provider = ?, qoder_cli_path = ?, qoder_model = ?,
-        claude_cli_path = ?, claude_model = ?, claude_auth_method = ?, claude_reasoning_effort = ?, updated_at = ? WHERE id = 'codex'
+        claude_cli_path = ?, claude_model = ?, claude_auth_method = ?, claude_reasoning_effort = ?,
+        grok_cli_path = ?, grok_model = ?, grok_reasoning_effort = ?, updated_at = ? WHERE id = 'codex'
     `).run(
       input.enabled === undefined ? Number(current.enabled) : Number(Boolean(input.enabled)),
       input.preferredBackend || current.preferredBackend,
@@ -216,13 +221,16 @@ export function createCodexRepository(database, {
       input.reasoningEffort ?? current.reasoningEffort,
       input.fastMode === undefined ? Number(current.fastMode) : Number(Boolean(input.fastMode)),
       input.authMethod || current.authMethod,
-      input.agentProvider === undefined ? current.agentProvider : (['qoder', 'claude'].includes(input.agentProvider) ? input.agentProvider : 'codex'),
+      input.agentProvider === undefined ? current.agentProvider : (['qoder', 'claude', 'grok'].includes(input.agentProvider) ? input.agentProvider : 'codex'),
       input.qoderCliPath === undefined ? current.qoderCliPath : String(input.qoderCliPath || '').trim().slice(0, 4096),
       input.qoderModel === undefined ? current.qoderModel : String(input.qoderModel || 'auto').trim().slice(0, 256),
       input.claudeCliPath === undefined ? current.claudeCliPath : String(input.claudeCliPath || '').trim().slice(0, 4096),
       input.claudeModel === undefined ? current.claudeModel : String(input.claudeModel || '').trim().slice(0, 256),
       input.claudeAuthMethod === undefined ? current.claudeAuthMethod : (input.claudeAuthMethod === 'environment' ? 'environment' : 'cli'),
       input.claudeReasoningEffort === undefined ? current.claudeReasoningEffort : String(input.claudeReasoningEffort || ''),
+      input.grokCliPath === undefined ? current.grokCliPath : String(input.grokCliPath || '').trim().slice(0, 4096),
+      input.grokModel === undefined ? current.grokModel : String(input.grokModel || '').trim().slice(0, 256),
+      input.grokReasoningEffort === undefined ? current.grokReasoningEffort : String(input.grokReasoningEffort || '').trim().slice(0, 64),
       updatedAt,
     )
     return getProviderSettings()
@@ -244,11 +252,14 @@ export function createCodexRepository(database, {
     `).get(input.projectId)
     if (!binding) throw new Error('项目尚未绑定 Creative Pack')
     const pack = parseJson(binding.content_json)
-    const workflow = (pack.workflows || []).find((item) => item.id === input.workflowId)
+    const collaborative = input.workflowId === COLLABORATIVE_WORKFLOW_ID
+    const workflow = collaborative ? collaborativeWorkflow() : (pack.workflows || []).find((item) => item.id === input.workflowId)
     if (!workflow) throw new Error('Creative Pack 中不存在所选工作流')
+    if (collaborative && !input.chapterId) throw new Error('协作创作需要选择正文')
+    const modelRoutes = collaborative ? lockCollaborativeModels(database, input.modelRoutes) : input.modelRoutes || {}
     const id = createId('agent-run')
     const createdAt = now()
-    const executionMode = input.executionMode === 'codex' ? 'codex' : 'app_model'
+    const executionMode = !collaborative && input.executionMode === 'codex' ? 'codex' : 'app_model'
     database.exec('BEGIN IMMEDIATE')
     try {
       database.prepare(`
@@ -257,7 +268,7 @@ export function createCodexRepository(database, {
           creative_pack_digest, model_routes_json, execution_mode, status, created_at, updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
       `).run(id, input.projectId, input.chapterId || null, workflow.id, binding.pack_id,
-        binding.pack_version, binding.digest, JSON.stringify(input.modelRoutes || {}), executionMode,
+        binding.pack_version, binding.digest, JSON.stringify(modelRoutes), executionMode,
         createdAt, createdAt)
       const insertStep = database.prepare(`
         INSERT INTO agent_steps (
@@ -269,6 +280,8 @@ export function createCodexRepository(database, {
         createId('agent-step'), id, step.id, index + 1, step.action, step.task || '',
         step.candidateType || '', JSON.stringify(step.dependsOn || []), createdAt, createdAt,
       ))
+      if (collaborative) database.prepare("UPDATE projects SET creative_preferences_json=json_set(creative_preferences_json,'$.collaborativeModels',json(?),'$.collaborativeAgentSettings',json(?)) WHERE id=?")
+        .run(JSON.stringify(modelRoutes.stageModels), JSON.stringify(modelRoutes.stageAgentSettings), input.projectId)
       database.exec('COMMIT')
     } catch (error) {
       database.exec('ROLLBACK')
@@ -601,7 +614,8 @@ export function createCodexRepository(database, {
     const contexts = Object.fromEntries((pack?.manifest?.tasks || []).map(task => [task,
       prompts.resolvePromptContext({ projectId: run.projectId, chapterId: run.chapterId, task })]))
     database.prepare('UPDATE agent_runs SET frozen_context_json = ? WHERE id = ?')
-      .run(JSON.stringify({ schemaVersion: 7, compilerVersion: 'creative-compiler-7', prompts: contexts }), id)
+      .run(JSON.stringify({ schemaVersion: 7, compilerVersion: 'creative-compiler-7', prompts: contexts,
+        ...(run.workflowId === COLLABORATIVE_WORKFLOW_ID ? { applicationWorkflow: collaborativeWorkflow() } : {}) }), id)
   }
 
   function updateRun(id, patch = {}) {
@@ -692,6 +706,16 @@ export function createCodexRepository(database, {
       VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)`).run(createId('patch'), run.project_id, run.id, id,
         input.payload.sourceDigest, JSON.stringify(parseJson(step.input_json, {}).modificationScope || {}), JSON.stringify(input.payload.patches), now())
     return mapCandidate(candidateById.get(id))
+  }
+
+  function retireManuscriptCandidate({ id, acceptedCandidateId }) {
+    const source = candidateById.get(id), accepted = candidateById.get(acceptedCandidateId)
+    if (!source || source.status !== 'pending' || source.artifact_type !== 'manuscript'
+      || accepted?.status !== 'accepted' || accepted.artifact_type !== 'manuscript' || source.run_id !== accepted.run_id) throw new Error('待保留原稿与已确认候选不属于同一次运行')
+    // Choosing a revision retires its sibling, it does not reject the earlier
+    // workflow step or invalidate the review and revision that depend on it.
+    database.prepare("UPDATE agent_candidates SET status='rejected',override_reason=?,resolved_at=? WHERE id=?")
+      .run(`作者已确认另一版正文：${acceptedCandidateId}`, now(), id)
   }
 
   function saveDiscussion({ runId, stepId, text }) {
@@ -967,6 +991,7 @@ export function createCodexRepository(database, {
     createCandidate,
     saveDiscussion,
     resolveCandidate,
+    retireManuscriptCandidate,
     updateResolvedCandidate,
     markCandidateStale,
     cancelPendingCandidates,

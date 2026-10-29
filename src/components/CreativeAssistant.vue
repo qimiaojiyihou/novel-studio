@@ -1,20 +1,39 @@
 <template>
   <section class="assistant-center">
-    <header class="assistant-hero">
+    <header class="assistant-hero" :class="{ 'collaborative-hero': collaborativeSelected }">
       <div>
         <span class="eyebrow copper">CREATIVE ORCHESTRATOR</span>
         <h1>创作助手</h1>
         <p>把章节卡、场景计划、正文、质量评审和章后状态放在同一次运行中。每一步都先成为候选，由你确认后才写入项目。</p>
       </div>
       <div class="assistant-launch">
-        <label><span>执行方式</span><select v-model="launch.executionMode"><option value="codex">{{ agentLabel }} · 创作 Agent</option><option value="app_model">应用模型路由</option></select></label>
-        <small v-if="launch.executionMode === 'codex'" class="assistant-launch-note">ACP Agent 提供方与模型在“模型与项目设置 → 创作 Agent”中选择，并在 AgentRun 启动时锁定。</small>
+        <label v-if="!collaborativeSelected"><span>执行方式</span><select v-model="launch.executionMode"><option value="codex">{{ agentLabel }} · 创作 Agent</option><option value="app_model">应用模型路由</option></select></label>
+        <small v-if="!collaborativeSelected && launch.executionMode === 'codex'" class="assistant-launch-note">ACP Agent 提供方与模型在“模型与项目设置 → 创作 Agent”中选择，并在 AgentRun 启动时锁定。</small>
         <label><span>工作流 · Creative Pack {{ creativePreferences?.version }}</span><select v-model="launch.workflowId"><option v-for="workflow in creativePreferences?.workflows || []" :key="workflow.id" :value="workflow.id">{{ workflow.name }}</option></select></label>
         <details v-if="creativePreferences?.upgrade"><summary>预览升级到 1.3.0</summary><p>新增精简流程；场景按需展开，章末默认约束事件，字数偏差保留候选。现有正文、长章节卡和已启动运行保持原样。</p><p>涉及任务：{{ creativePreferences.upgrade.changedTasks.join('、') }}</p><button type="button" @click="upgradePack">确认升级创作规则</button></details>
-        <label v-if="launch.executionMode === 'app_model'"><span>生成模型</span><select v-model="launch.modelProfileId"><option v-for="profile in enabledProfiles" :key="profile.id" :value="profile.id">{{ profile.name }}</option></select></label>
+        <div v-if="collaborativeSelected" class="collaborative-routing">
+          <p>四个环节分别选择模型。规划确认后生成正文；独立审稿后，先勾选问题再修稿；最终确认前保留原稿。</p>
+          <div v-for="stage in COLLABORATIVE_STAGES" :key="stage.id" class="collaborative-stage">
+            <label><span>{{ stage.label }}执行方式</span>
+              <select v-model="stageModels[stage.id]" :aria-label="`${stage.label}模型`" @change="resetStageAgent(stage.id)">
+                <option value="">请选择模型</option><option value="codex">Codex · GPT</option><option value="grok-build">Grok Build · 本机登录态</option>
+                <option v-for="profile in enabledProfiles" :key="profile.id" :value="profile.id">{{ profile.name }} · {{ profile.model || '未填写模型' }}{{ profile.provider !== 'local' && !profile.apiKeyConfigured ? ' · 未配置密钥' : '' }}</option>
+                <option v-if="stageModels[stage.id] && !['codex','grok-build'].includes(stageModels[stage.id]) && !enabledProfiles.some(p => p.id === stageModels[stage.id])" :value="stageModels[stage.id]" disabled>此前模型已停用或删除，请重新选择</option>
+              </select>
+            </label>
+            <div v-if="isStageAgent(stage.id)" class="collaborative-stage-options">
+              <label><span>具体模型</span><select v-model="stageAgentSettings[stage.id].model" :aria-label="`${stage.label}具体模型`" @change="refreshStageModels(stage.id)"><option value="">CLI 默认</option><option v-for="option in stageChoices(stage.id, 'model')" :key="option.value" :value="option.value">{{ option.name }}</option><option v-if="stageAgentSettings[stage.id].model && !stageChoices(stage.id, 'model').some(o => o.value === stageAgentSettings[stage.id].model)" :value="stageAgentSettings[stage.id].model">{{ stageAgentSettings[stage.id].model }} · 待验证</option></select></label>
+              <label><span>思考强度</span><select v-model="stageAgentSettings[stage.id].reasoningEffort" :aria-label="`${stage.label}思考强度`"><option value="">模型默认</option><option v-for="option in stageChoices(stage.id, 'reasoning_effort')" :key="option.value" :value="option.value">{{ option.name }}</option><option v-if="stageAgentSettings[stage.id].reasoningEffort && !stageChoices(stage.id, 'reasoning_effort').some(o => o.value === stageAgentSettings[stage.id].reasoningEffort)" :value="stageAgentSettings[stage.id].reasoningEffort">{{ stageAgentSettings[stage.id].reasoningEffort }} · 待验证</option></select></label>
+              <button class="outline-button" :disabled="stageCatalogs[stage.id]?.loading" @click="refreshStageModels(stage.id)">{{ stageCatalogs[stage.id]?.loading ? '正在读取…' : '刷新可用模型与强度' }}</button>
+              <small v-if="stageCatalogs[stage.id]?.error" role="status">{{ stageCatalogs[stage.id].error }}</small>
+            </div>
+          </div>
+          <small>Grok Build 复用本机登录，Grok / xAI 使用 API 配置。四个环节可分别选择执行器、模型和思考强度；按作品记住，启动后锁定。</small>
+        </div>
+        <label v-if="!collaborativeSelected && launch.executionMode === 'app_model'"><span>生成模型</span><select v-model="launch.modelProfileId"><option v-for="profile in enabledProfiles" :key="profile.id" :value="profile.id">{{ profile.name }}</option></select></label>
         <label v-if="launch.workflowId === 'chapter-creation'"><span>独立审稿</span><select v-model="launch.reviewerProfileId"><option value="">质量评审路由</option><option value="codex">{{ agentLabel }} · 新会话</option><option v-for="profile in enabledProfiles" :key="profile.id" :value="profile.id">{{ profile.name }}</option></select></label>
         <label v-if="launch.workflowId !== 'project-initialization'"><span>正文目标字数</span><input v-model.number="launch.targetLength" type="number" min="800" max="12000" step="100" /></label>
-        <button class="primary-button" :disabled="busy || !projectId" @click="startRun">{{ busy ? '正在启动…' : '开始新的 AgentRun' }}</button>
+        <button class="primary-button" :disabled="busy || !projectId || (collaborativeSelected && COLLABORATIVE_STAGES.some(s => !stageModels[s.id]))" @click="startRun">{{ busy ? '正在启动…' : collaborativeSelected ? '开始协作创作' : '开始新的 AgentRun' }}</button>
       </div>
     </header>
 
@@ -44,6 +63,8 @@
             <button v-if="!['completed','cancelled'].includes(activeRun.status)" class="danger-quiet" @click="cancelRun">取消</button>
           </div>
         </header>
+        <div v-if="activeRun.workflowId === COLLABORATIVE_WORKFLOW_ID" class="collaborative-run-models"><span v-for="stage in COLLABORATIVE_STAGES" :key="stage.id">{{ stage.label }}：{{ lockedStageLabel(stage.id) }}</span></div>
+        <p v-if="activeRun.error" class="assistant-message error" role="alert">{{ activeRun.error }}</p>
 
         <div v-if="activeRun.actualBackend === 'codex_exec'" class="compatibility-banner">Codex 兼容模式：ACP 尚未产生输出即失败，本次改用只读 exec；工具能力暂不可用。</div>
         <div v-if="activeRun.sessionRecreated" class="compatibility-banner neutral">应用重启后已重建 ACP 会话，只使用已确认内容恢复上下文。</div>
@@ -64,11 +85,20 @@
         <section v-if="pendingCandidate" class="agent-candidate-card">
           <header><div><span class="settings-kicker">CANDIDATE</span><h3>{{ candidateLabel(pendingCandidate.artifactType) }}</h3></div><span><template v-if="pendingCandidate.artifactType === 'manuscript'">{{ manuscriptCount }} / {{ activeRun.modelRoutes?.targetLength || '—' }} 字 · </template>源摘要 {{ pendingCandidate.sourceDigest.slice(0, 10) }}</span></header>
           <CreativeCandidateEditor v-if="candidateDraft" v-model="candidateDraft" />
+          <details v-if="pendingCandidate.evidence?.parentCandidateId" class="collaborative-diff" @toggle="showCollaborativeDiff = $event.target.open"><summary>比较原稿与定向修稿</summary><div v-if="showCollaborativeDiff"><InlineManuscriptDiff :original="collaborativeOriginal?.payload?.manuscript || ''" :candidate="candidateDraft?.manuscript || ''" /></div></details>
           <div class="candidate-actions">
             <input v-model.trim="candidateReason" placeholder="可选：记录本次判断" />
             <button class="outline-button" :disabled="busy" @click="resolveCandidate(false)">拒绝并暂停</button>
             <button class="primary-button" :disabled="busy" @click="resolveCandidate(true)">确认并继续</button>
           </div>
+        </section>
+
+        <section v-if="reviewSelectionPending" class="agent-candidate-card collaborative-review-selection">
+          <h3>选择需要定向修改的问题</h3><p>只将勾选的问题交给修稿模型；原稿尚未写入正文。</p>
+          <label v-for="issue in collaborativeIssues" :key="issue.selectionId" class="collaborative-issue"><input v-model="selectedIssueIds" type="checkbox" :value="issue.selectionId" /><span><b>{{ issue.severity }} · {{ issue.category }}</b><span>{{ issue.criterion }}</span><blockquote v-if="issue.evidence">{{ issue.evidence }}</blockquote><small>{{ issue.repairInstruction }}</small></span></label>
+          <p v-if="!collaborativeIssues.length">审稿未列出问题，可以保留原稿并进入最终确认。</p>
+          <details><summary>查看待审原稿</summary><pre>{{ collaborativeOriginal?.payload?.manuscript }}</pre></details>
+          <div class="candidate-actions"><button class="outline-button" :disabled="busy" @click="continueReview(true)">保留原稿，进入确认</button><button class="primary-button" :disabled="busy || !selectedIssueIds.length" @click="continueReview(false)">按勾选问题定向修稿</button></div>
         </section>
 
         <section v-if="qualityStep?.output?.review" class="agent-quality-card">
@@ -85,11 +115,14 @@
 
 <script setup>
 import CreativeCandidateEditor from './CreativeCandidateEditor.vue'
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { appService } from '../services/app-service.js'
 import { useCreativeAgent } from '../composables/useCreativeAgent.js'
 import { creativeAgentLabel, creativeBackendLabel } from '../utils/agent-provider.js'
+import { grokChoices } from '../../electron/grok-config.js'
 import { isShortStory } from '../../electron/work-format.js'
+import { COLLABORATIVE_STAGES, COLLABORATIVE_WORKFLOW_ID, reviewedIssues } from '../../electron/collaborative-writing.js'
+const InlineManuscriptDiff = defineAsyncComponent(() => import('./InlineManuscriptDiff.vue'))
 const { agentLabel } = useCreativeAgent()
 
 const props = defineProps({
@@ -105,15 +138,35 @@ const busy = ref(false)
 const candidateReason = ref('')
 const message = reactive({ state: 'idle', text: '' })
 const launch = reactive({ executionMode: 'codex', workflowId: 'chapter-creation', modelProfileId: '', reviewerProfileId: '', targetLength: 2000 })
+const stageModels = reactive({ planning: 'codex', writing: '', review: 'codex', repair: '' })
+const stageAgentSettings = reactive(Object.fromEntries(COLLABORATIVE_STAGES.map(s => [s.id, { model: '', reasoningEffort: '' }])))
+const stageCatalogs = reactive({})
+const agentStatus = ref({})
+let stageDirectorySequence = 0
+const collaborativeSelected = computed(() => launch.workflowId === COLLABORATIVE_WORKFLOW_ID)
+const selectedIssueIds = ref([])
+const showCollaborativeDiff = ref(false)
+const reviewSelectionPending = computed(() => activeRun.value?.workflowId === COLLABORATIVE_WORKFLOW_ID && activeRun.value?.status === 'waiting_confirmation' && activeRun.value.steps.find(s => s.id === activeRun.value.currentStepId)?.key === 'choose-repairs')
+const collaborativeIssues = computed(() => activeRun.value ? reviewedIssues(activeRun.value) : [])
+const collaborativeOriginal = computed(() => activeRun.value?.candidates.find(c => c.stepId === activeRun.value.steps.find(s => s.key === 'chapter-draft')?.id))
 watch(() => [props.projectId, props.project.target_word_count, props.project.work_format], () => {
   launch.targetLength = isShortStory(props.project) ? props.project.target_word_count || 8000 : 2000
 }, { immediate: true })
 const creativePreferences = ref(null)
 async function loadPreferences() {
   try {
-    creativePreferences.value = await appService.creativePreferences({ projectId: props.projectId })
+    const projectId = props.projectId
+    const [preferences, status] = await Promise.all([appService.creativePreferences({ projectId }), appService.getCodexStatus()])
+    if (projectId !== props.projectId) return
+    creativePreferences.value = preferences
+    agentStatus.value = status
+    stageDirectorySequence++; Object.keys(stageCatalogs).forEach(key => delete stageCatalogs[key])
     launch.executionMode = creativePreferences.value.executionMode
     launch.workflowId = creativePreferences.value.workflows.some(item => item.id === 'chapter-compact') ? 'chapter-compact' : 'chapter-creation'
+    const gpt = enabledProfiles.value.find(p => p.provider === 'openai' && p.apiKeyConfigured && p.model)?.id || 'codex'
+    const grok = status.grokRuntime?.available ? 'grok-build' : enabledProfiles.value.find(p => p.provider === 'grok')?.id || 'grok-build'
+    Object.assign(stageModels, { planning: gpt, writing: grok, review: gpt, repair: grok }, preferences.preferences?.collaborativeModels || {})
+    for (const stage of COLLABORATIVE_STAGES) Object.assign(stageAgentSettings[stage.id], stageDefaults(stage.id), preferences.preferences?.collaborativeAgentSettings?.[stage.id] || {})
   } catch (error) { message.text = error.message; message.state = 'error' }
 }
 async function upgradePack() {
@@ -122,12 +175,19 @@ async function upgradePack() {
 let unsubscribe = null
 
 const enabledProfiles = computed(() => props.modelSettings.profiles?.filter((profile) => profile.enabled) || [])
-const pendingCandidate = computed(() => activeRun.value?.candidates?.find((candidate) => candidate.status === 'pending') || null)
+const pendingCandidate = computed(() => {
+  const run = activeRun.value
+  if (run?.workflowId === COLLABORATIVE_WORKFLOW_ID && (run.status !== 'waiting_confirmation' || reviewSelectionPending.value)) return null
+  return (run?.workflowId === COLLABORATIVE_WORKFLOW_ID ? [...run.candidates].reverse() : run?.candidates)?.find(c => c.status === 'pending') || null
+})
 const candidateDraft = ref(null)
 watch(() => pendingCandidate.value?.id, () => { candidateDraft.value = pendingCandidate.value ? JSON.parse(JSON.stringify(pendingCandidate.value.payload)) : null })
 const prettyCandidate = computed(() => JSON.stringify(pendingCandidate.value?.payload || {}, null, 2))
 const manuscriptCount = computed(() => [...String(pendingCandidate.value?.payload?.manuscript || '')].filter((char) => /[\u3400-\u4dbf\u4e00-\u9fff]/u.test(char)).length)
 const qualityStep = computed(() => activeRun.value?.steps?.find((step) => step.action === 'quality_review' && step.status === 'completed'))
+watch(() => JSON.stringify([activeRun.value?.id, qualityStep.value?.output?.review]), () => {
+  selectedIssueIds.value = collaborativeIssues.value.filter(i => !i.resolved && ['high', 'warning'].includes(i.severity)).map(i => i.selectionId)
+})
 
 watch(() => props.projectId, () => { activeRun.value = null; void loadRuns() })
 watch(enabledProfiles, (profiles) => {
@@ -176,6 +236,7 @@ async function startRun() {
       chapterId: props.chapterId,
       workflowId: launch.workflowId,
       executionMode: launch.executionMode,
+      ...(collaborativeSelected.value ? { stageModels: { ...stageModels }, stageAgentSettings: JSON.parse(JSON.stringify(stageAgentSettings)) } : {}),
       modelProfileId: launch.modelProfileId,
       reviewerProfileId: launch.reviewerProfileId,
       targetLength: Math.max(800, Math.min(12000, Math.round(Number(launch.targetLength) || 2000))),
@@ -201,6 +262,53 @@ async function resolveCandidate(accept) {
 }
 
 async function pauseRun() { activeRun.value = await appService.pauseAgentRun(activeRun.value.id) }
+function isStageAgent(stage) { return ['codex','grok-build'].includes(stageModels[stage]) }
+function stageDefaults(stage) {
+  const settings = agentStatus.value.settings || {}, grok = stageModels[stage] === 'grok-build'
+  return { model: grok ? settings.grokModel || '' : settings.model || '', reasoningEffort: grok ? settings.grokReasoningEffort || '' : settings.reasoningEffort || '' }
+}
+function stageChoices(stage, id) {
+  const options = stageCatalogs[stage]?.options || (stageModels[stage] === 'grok-build' ? agentStatus.value.grokRuntime : agentStatus.value.runtime)?.configOptions || []
+  if (id === 'reasoning_effort' && stageAgentSettings[stage].model && options.find(o => o.id === 'model')?.currentValue !== stageAgentSettings[stage].model) return []
+  return grokChoices(options, id)
+}
+function resetStageAgent(stage) {
+  delete stageCatalogs[stage]
+  Object.assign(stageAgentSettings[stage], stageDefaults(stage))
+  if (isStageAgent(stage)) void refreshStageModels(stage)
+}
+async function refreshStageModels(stage) {
+  if (!isStageAgent(stage)) return
+  const projectId = props.projectId, sequence = stageDirectorySequence, provider = stageModels[stage]
+  const model = stageAgentSettings[stage].model
+  const entry = reactive({ loading: true, options: [], error: '' })
+  stageCatalogs[stage] = entry
+  try {
+    const result = await appService.getCodexModels({ agentProvider: provider === 'grok-build' ? 'grok' : 'codex', model, automatic: true,
+      grokCliPath: agentStatus.value.settings?.grokCliPath || '' })
+    if (projectId !== props.projectId || sequence !== stageDirectorySequence || stageCatalogs[stage] !== entry || provider !== stageModels[stage] || model !== stageAgentSettings[stage].model) return
+    entry.options = result.status?.configOptions || []
+    entry.error = result.skipped ? result.message : result.status?.configurationWarning || ''
+  } catch (error) { if (stageCatalogs[stage] === entry) entry.error = error.message }
+  finally { entry.loading = false }
+}
+async function continueReview(skipRepair) {
+  if (!reviewSelectionPending.value || busy.value) return
+  busy.value = true
+  try {
+    activeRun.value = await appService.continueCollaborativeReview({ runId: activeRun.value.id, issueIds: [...selectedIssueIds.value], skipRepair })
+  } catch (error) { message.text = error.message; message.state = 'error' }
+  finally { busy.value = false }
+}
+function lockedStageLabel(stage) {
+  const routes = activeRun.value?.modelRoutes || {}
+  if (['codex', 'grok-build'].includes(routes.stageModels?.[stage])) {
+    const settings = routes.stageAgentSettings?.[stage] || {}
+    return `${routes.stageModels[stage] === 'codex' ? 'Codex' : 'Grok Build'} · ${settings.model || 'CLI 默认'} · ${settings.reasoningEffort || '模型默认强度'}`
+  }
+  const profile = routes.stageProfiles?.[stage]
+  return profile ? `${profile.name} · ${profile.model}` : '未选择'
+}
 async function resumeRun() {
   if (activeRun.value.legacySnapshot && !globalThis.confirm('继续使用此运行锁定的历史能力包规则？旧运行缺少完整冻结信息；取消后可从正式内容开始新的升级运行。')) return
   try { activeRun.value = await appService.resumeAgentRun({ runId: activeRun.value.id, legacyRuleChoice: 'continue' }) }
@@ -213,11 +321,11 @@ async function retryStep(step) {
   catch (error) { message.text = error.message; message.state = 'error' }
 }
 
-function workflowLabel(id) { return ({ 'project-initialization': '项目初始化', 'chapter-creation': isShortStory(props.project) ? '完整短故事流程' : '完整章节流程', 'chapter-compact': isShortStory(props.project) ? '精简短故事创作' : '精简章节创作', 'inline-action': '就地任务' }[id] || id) }
+function workflowLabel(id) { return ({ [COLLABORATIVE_WORKFLOW_ID]: 'GPT / Grok 协作创作', 'project-initialization': '项目初始化', 'chapter-creation': isShortStory(props.project) ? '完整短故事流程' : '完整章节流程', 'chapter-compact': isShortStory(props.project) ? '精简短故事创作' : '精简章节创作', 'inline-action': '就地任务' }[id] || id) }
 function backendName(value) { return creativeBackendLabel(value) }
 function backendLabel(run) { return run.actualBackend ? backendName(run.actualBackend) : run.executionMode === 'codex' ? `${creativeAgentLabel(run.modelRoutes?.agentProvider)} · 等待连接` : '应用模型路由' }
 function statusLabel(value) { return ({ pending: '待开始', waiting_approval: '等待审批', running: '执行中', waiting_confirmation: '等待确认', paused: '已暂停', interrupted: '已中断', completed: '已完成', confirmed: '已确认', rejected: '已拒绝', stale: '已过期', cancelled: '已取消', failed: '失败' }[value] || value) }
-function stepLabel(step) { return ({ preflight: '生成前准备度', chapter_card: isShortStory(props.project) ? '生成故事卡' : '生成章节卡', scene_plan: '生成场景计划', chapter: '生成正文候选', quality_review: '质量评审', chapter_state_extract: '提取章后状态' }[step.task] || (step.action === 'checkpoint' ? '等待作者确认' : step.key)) }
+function stepLabel(step) { return step.key === 'choose-repairs' ? '选择定向修稿问题' : step.key === 'repair-draft' ? '生成定向修稿候选' : ({ preflight: '生成前准备度', chapter_card: isShortStory(props.project) ? '生成故事卡' : '生成章节卡', scene_plan: '生成场景计划', chapter: '生成正文候选', quality_review: '质量评审', chapter_state_extract: '提取章后状态' }[step.task] || (step.action === 'checkpoint' ? '等待作者确认' : step.key)) }
 function candidateLabel(type) { return ({ chapter_card: isShortStory(props.project) ? '故事卡候选' : '章节卡候选', scene_plan: '场景计划候选', manuscript: '正文候选', manuscript_selection: '局部重写候选', planning_field: '规划字段候选', renderer_draft: '编辑器草稿候选', chapter_state: '章后状态候选', continuity_audit: '连续性审计候选', quality_review: '质量评审候选', foundation_bundle: '故事基础候选' }[type] || type) }
 function shortTime(value) { const date = new Date(value); return Number.isNaN(date.getTime()) ? '' : date.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }) }
 </script>

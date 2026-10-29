@@ -63,6 +63,7 @@
               <button @click="openWorkDesignSync(item)">同步 ChatGPT Work 设计</button>
               <button @click="openBookInCodex(item)">准备并打开 Codex 专属任务</button>
               <button @click="openBookInClaude(item)">打开 Claude Code 书籍目录</button>
+              <button @click="openBookInGrok(item)">打开 Grok Build 书籍目录</button>
               <button @click="exportBookFile(item)">{{ projectIsShortStory(item) ? '导出 Word 短故事' : '导出 Word 书籍' }}</button>
               <button @click="openProjectTransfer(item)">导入与导出</button>
               <button @click="askArchiveProject(item)">归档项目</button>
@@ -1216,6 +1217,12 @@ async function openBookInClaude(item = project) {
     await appService.openClaudeProject(item.id)
     showToast(`已打开《${item.title}》的 Claude Code 独立项目目录；应用内创作会话按本书归类`)
   } catch (error) { showToast(`打开 Claude Code 书籍目录失败：${error.message}`) }
+}
+
+async function openBookInGrok(item = project) {
+  projectActionId.value = ''; projectMenuOpen.value = false
+  try { await appService.openGrokProject(item.id); showToast(`已打开《${item.title}》的 Grok Build 独立目录；终端进入该目录运行 grok 可查看本书会话`) }
+  catch (error) { showToast(`打开 Grok Build 书籍目录失败：${error.message}`) }
 }
 
 async function openWorkDesignSync(item = project) {

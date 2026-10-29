@@ -515,7 +515,7 @@ export class CodexAgentGateway {
 
   async resumeSession({ agentRunId, mirrorRoot, workspaceRoot = '', persistedSession, authMethod = '' }) {
     await this.startAdapter()
-    const sessionId = persistedSession?.sessionId
+    const sessionId = persistedSession?.backend === this.acpBackend ? persistedSession.sessionId : ''
     const directories = sessionDirectories(workspaceRoot, mirrorRoot)
     if (workspaceRoot) await this.ensureDesktopWorkspace({ workspaceRoot: directories.cwd })
     if (sessionId && this.initializeResult?.agentCapabilities?.sessionCapabilities?.resume) {
@@ -601,6 +601,11 @@ export class CodexAgentGateway {
 
   async _prompt({ agentRunId, agentStepId, messages, continuationMessages = null, outputSchema = null, signal, onEvent = () => {}, allowExecFallback = true, settings = {} }) {
     let session = this.sessions.get(agentRunId)
+    const collaborativeStage = String(settings.collaborativeStage || '')
+    if (session && collaborativeStage && session.collaborativeStage !== collaborativeStage) {
+      await this.closeSession(agentRunId)
+      session = null
+    }
     const useContextDelta = Boolean(session && Array.isArray(continuationMessages) && continuationMessages.length)
     const fullPromptText = codexPromptText({
       messages,
@@ -627,7 +632,7 @@ export class CodexAgentGateway {
       })
       if (!session) {
         const persistedSession = this.repository?.getRun?.(agentRunId)?.session || null
-        session = persistedSession?.sessionId
+        session = persistedSession?.sessionId && (!collaborativeStage || persistedSession.capabilities?.novelStudioStage === collaborativeStage)
           ? await this.resumeSession({
               agentRunId,
               mirrorRoot: settings.mirrorRoot,
@@ -637,9 +642,21 @@ export class CodexAgentGateway {
             })
           : await this.createSession({ agentRunId, mirrorRoot: settings.mirrorRoot, workspaceRoot: settings.workspaceRoot, authMethod: settings.authMethod })
       }
+      if (collaborativeStage) {
+        session.collaborativeStage = collaborativeStage
+        this.repository?.upsertSession?.({ agentRunId, backend: this.acpBackend, sessionId: session.sessionId, status: 'active', closedAt: '',
+          capabilities: { ...this.initializeResult?.agentCapabilities, novelStudioStage: collaborativeStage } })
+      }
       await this._configureSession(session, settings)
       const lockedRun = this.repository?.getRun?.(agentRunId)
-      if (lockedRun && session.modelSnapshot?.verified && !lockedRun.modelRoutes?.codexCapabilitySnapshot) {
+      if (lockedRun && session.modelSnapshot?.verified && settings.collaborativeStage) {
+        const stage = settings.collaborativeStage
+        this.repository?.updateRun?.(agentRunId, { modelRoutes: { ...lockedRun.modelRoutes,
+          stageAgentSettings: { ...lockedRun.modelRoutes.stageAgentSettings, [stage]: {
+            ...lockedRun.modelRoutes.stageAgentSettings?.[stage], model: session.modelSnapshot.model,
+            reasoningEffort: session.modelSnapshot.reasoningEffort, capabilitySnapshot: session.modelSnapshot,
+          } } } })
+      } else if (lockedRun && session.modelSnapshot?.verified && !lockedRun.modelRoutes?.codexCapabilitySnapshot) {
         this.repository?.updateRun?.(agentRunId, { modelRoutes: { ...lockedRun.modelRoutes,
           codexModel: session.modelSnapshot.model, codexReasoningEffort: session.modelSnapshot.reasoningEffort,
           codexFastMode: session.modelSnapshot.fastMode, codexCapabilitySnapshot: session.modelSnapshot } })

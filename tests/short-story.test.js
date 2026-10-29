@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { DatabaseSync } from 'node:sqlite'
-import { runMigrations, getSchemaVersion } from '../electron/database-migrations.js'
+import { runMigrations, getSchemaVersion, LATEST_SCHEMA_VERSION } from '../electron/database-migrations.js'
 import { createWorkspaceRepository } from '../electron/workspace-repository.js'
 import { createProjectBackup, restoreProjectBackup } from '../electron/project-portability.js'
 import { compilePrompt } from '../electron/prompt-compiler.js'
@@ -25,7 +25,7 @@ test('v36 migration keeps legacy novels, manuscripts and chapter workflows intac
   db.prepare("INSERT INTO chapters(id,project_id,chapter_no,title,status,manuscript,updated_at) VALUES('legacy-body','legacy',1,'第一章','draft','原稿','now')").run()
   runMigrations(db)
   runMigrations(db)
-  assert.equal(getSchemaVersion(db), 36)
+  assert.equal(getSchemaVersion(db), LATEST_SCHEMA_VERSION)
   const loaded = store.loadWorkspace('legacy')
   assert.equal(loaded.project.work_format, 'novel')
   assert.equal(loaded.chapters[0].manuscript, '原稿')

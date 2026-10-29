@@ -1125,3 +1125,28 @@ body { background: #dce7ea; }
 #app .short-story-title h1 { margin: 8px 0 0; font: 28px/1.3 var(--font-display); overflow-wrap: anywhere; }
 #app .short-story-title > button { padding: 7px 10px; color: var(--ns-text-muted); border-color: var(--ns-border); border-radius: 7px; font: 12px/1.4 var(--font-ui); }
 @media (max-width: 520px) { #app .work-format-choice { grid-template-columns: 1fr; } }
+
+#app .collaborative-routing { display: grid; gap: 12px; padding: 16px; border: 1px solid var(--ns-border); border-left: 3px solid var(--ns-action); border-radius: 10px; background: var(--ns-surface-soft); }
+#app .collaborative-routing p, #app .grok-profile-note p { margin: 0; color: var(--ns-text-muted); font-size: 13px; line-height: 1.7; }
+#app .collaborative-routing small { color: var(--ns-text-muted); line-height: 1.7; }
+#app .collaborative-run-models { display: flex; flex-wrap: wrap; gap: 8px 20px; padding: 12px 0; color: var(--ns-text-muted); font-size: 13px; }
+#app .collaborative-issue { display: flex; gap: 12px; padding: 14px 0; border-bottom: 1px solid var(--ns-border); }
+#app .collaborative-issue input { flex: 0 0 18px; width: 18px; height: 18px; margin-top: 3px; accent-color: var(--ns-action); }
+#app .collaborative-issue > span { display: grid; gap: 8px; min-width: 0; line-height: 1.7; }
+#app .collaborative-issue blockquote { margin: 0; padding: 8px 12px; border-left: 2px solid var(--ns-accent); color: var(--ns-text-muted); white-space: pre-wrap; }
+#app .collaborative-issue small { color: var(--ns-text-muted); }
+#app .collaborative-review-selection pre { max-height: 360px; overflow: auto; white-space: pre-wrap; font: inherit; line-height: 1.9; }
+#app .collaborative-diff > div { height: 420px; margin-top: 12px; }
+
+#app .collaborative-stage { display: grid; gap: 10px; padding-bottom: 14px; border-bottom: 1px solid var(--ns-border); }
+#app .collaborative-stage-options { display: grid; gap: 10px; grid-template-columns: repeat(2,minmax(0,1fr)); }
+#app .collaborative-stage-options > button, #app .collaborative-stage-options > small { grid-column: 1 / -1; }
+@media(max-width: 720px) { #app .collaborative-stage-options { grid-template-columns: 1fr; } }
+
+#app .assistant-hero.collaborative-hero { grid-template-columns: minmax(0,1fr); gap: 22px; }
+#app .collaborative-hero .assistant-launch { align-items: start; }
+#app .collaborative-hero .assistant-launch > label { align-content: start; }
+#app .collaborative-routing { grid-column: 1 / -1; grid-template-columns: repeat(2,minmax(0,1fr)); align-items: start; }
+#app .collaborative-routing > p, #app .collaborative-routing > small { grid-column: 1 / -1; }
+#app .collaborative-routing select { width: 100%; min-height: 38px; padding: 7px 10px; font: inherit; font-size: 13px; }
+@media(max-width: 900px) { #app .collaborative-routing { grid-template-columns: minmax(0,1fr); } }

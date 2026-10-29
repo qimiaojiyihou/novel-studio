@@ -2,6 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, Menu, shell, safeStorage } from 'e
 import { createReaderPublisher } from './reader-publisher.js'
 import { applicationMenuTemplate } from './application-menu.js'
 import { CREATIVE_BUILD_ID } from './build-info.js'
+import { collaborativeWorkflow, collaborativeProfile, COLLABORATIVE_WORKFLOW_ID } from './collaborative-writing.js'
 import { deleteProjectOffMainThread } from './project-deletion.js'
 import { runStorageMaintenanceBatch } from './storage-maintenance-runner.js'
 import { readStorageConfig, writeStorageConfig, queueStorageMigration, cancelStorageMigration, commitStorageMigration } from './storage-location.js'
@@ -20,6 +21,7 @@ import { randomBytes, createHash } from 'node:crypto'
 import { createCreativePackRepository, OFFICIAL_PACK_ID } from './creative-pack.js'
 import { ChapterFinalizer, createFinalizationRepository } from './chapter-finalization.js'
 import { createZhuqueDetectionService, zhuqueRepairContext } from './zhuque-detection.js'
+import { exportZhuqueReport } from './zhuque-export.js'
 import { createChapterAmendmentRepository } from './chapter-amendment.js'
 import { createManualFinalizationRepository } from './chapter-manual-finalization.js'
 import { contextDependencyDigest, recordCreativeDependencies, invalidateCreativeDependencies } from './creative-context.js'
@@ -146,6 +148,7 @@ import {
   completeApprovalRequest,
   expirePendingApprovalRequests,
   resolveAgentCandidate,
+  retireAgentManuscriptCandidate,
   resolveApprovalRequest,
   attachStoryChangeAnalysis,
   applyStoryChangeSet,
@@ -171,8 +174,9 @@ import { runWithStructuredOutputRetry } from './structured-output-retry.js'
 import { AgentRuntime, manuscriptLengthRange } from './agent-runtime.js'
 import { CodexAgentGateway, inspectCodexRuntime } from './codex-agent-gateway.js'
 import { QoderAgentGateway, inspectQoderRuntime } from './qoder-agent-gateway.js'
+import { GrokAgentGateway, inspectGrokRuntime } from './grok-agent-gateway.js'
 import { ClaudeAgentGateway, inspectClaudeRuntime } from './claude-agent-gateway.js'
-import { AgentGatewayRouter, agentProviderLabel, agentProviderModel, agentProviderReasoningEffort, agentProviderBackend, normalizeAgentProvider } from './agent-gateway-router.js'
+import { AgentGatewayRouter, agentProviderLabel, agentProviderModel, agentProviderReasoningEffort, agentProviderBackend, normalizeAgentProvider, agentRunSettings } from './agent-gateway-router.js'
 import { createCodexBookWorkspace, createCodexProjectMirror, findCodexBookWorkspace, removeCodexBookWorkspace } from './codex-project-mirror.js'
 import { codexTaskDisplayTitle } from './codex-task-label.js'
 import { projectForInlineTarget, sanitizeProjectDraftContext } from './inline-creative.js'
@@ -194,6 +198,7 @@ let codexComponents = null
 let codexModelCatalog = null
 let codexComponentTimer = null
 let qoderGateway = null
+let grokGateway = null
 let claudeGateway = null
 let agentGateway = null
 let agentRuntime = null
@@ -263,6 +268,7 @@ function agentRepositoryApi() {
     createCandidate: createAgentCandidate,
     saveDiscussion: saveAgentDiscussion,
     resolveCandidate: resolveAgentCandidate,
+    retireManuscriptCandidate: retireAgentManuscriptCandidate,
     markCandidateStale: markAgentCandidateStale,
     cancelPendingCandidates: cancelPendingAgentCandidates,
     upsertSession: saveAgentSession,
@@ -302,7 +308,7 @@ function codexBookWorkspaceForProject(projectId) {
 
 function repairMissingCodexBookWorkspaces() {
   const baseDirectory = getLibraryDirectory()
-  for (const project of listProjects()) for (const provider of ['codex', 'claude']) {
+  for (const project of listProjects()) for (const provider of ['codex', 'claude', 'grok']) {
     if (findCodexBookWorkspace({ baseDirectory, projectId: project.id, provider })) continue
     try {
       createCodexBookWorkspace({ baseDirectory, project, provider })
@@ -537,8 +543,8 @@ async function prepareCodexPrompt({ run, step, extra = {} }) {
     agentProvider,
     model: run.modelRoutes?.codexModel ?? agentProviderModel(codexSettings, agentProvider),
     reasoningEffort: run.modelRoutes?.codexReasoningEffort ?? agentProviderReasoningEffort(codexSettings, agentProvider),
-    fastMode: run.modelRoutes?.codexFastMode ?? Boolean(codexSettings?.fastMode),
-    authMethod: run.modelRoutes?.codexAuthMethod ?? (agentProvider === 'claude' ? codexSettings?.claudeAuthMethod || 'cli' : codexSettings?.authMethod || 'chatgpt'),
+    fastMode: agentProvider === 'codex' && (run.modelRoutes?.codexFastMode ?? Boolean(codexSettings?.fastMode)),
+    authMethod: agentProvider === 'grok' ? 'cached_token' : run.modelRoutes?.codexAuthMethod ?? (agentProvider === 'claude' ? codexSettings?.claudeAuthMethod || 'cli' : codexSettings?.authMethod || 'chatgpt'),
   }
   const agentLabel = agentProviderLabel(codexRunSettings.agentProvider)
   const inlineAction = run.workflowId === 'inline-action' ? step.input || {} : null
@@ -547,7 +553,7 @@ async function prepareCodexPrompt({ run, step, extra = {} }) {
     ? run.candidates?.find((candidate) => candidate.id === inlineRevision.parentCandidateId)
     : null
   if (inlineRevision && !revisionCandidate) throw new Error('Codex 修改步骤缺少上一版候选')
-  const intent = inlineAction?.intent || (step.task === 'quality_review' ? 'analysis' : 'draft')
+  const intent = extra.collaborativeRepair ? 'repair' : inlineAction?.intent || (step.task === 'quality_review' ? 'analysis' : 'draft')
   const target = inlineAction?.target || null
   const planningBundleSchemaValue = ['planning_document_bundle', 'planning_entity_bundle', 'planning_chapter_bundle'].includes(step.candidateType)
     ? outputSchemaForTask(getAgentRunPack(run.id), step.task, step.candidateType, target)
@@ -682,8 +688,8 @@ async function prepareCodexPrompt({ run, step, extra = {} }) {
     selectedText: target?.kind === 'manuscript_selection' ? manuscript.slice(selectionFrom, selectionTo) : '',
     manuscriptPrefix: intent === 'continue' ? manuscript.slice(0, cursorOffset) : '',
     manuscriptSuffix: intent === 'continue' ? manuscript.slice(cursorOffset) : '',
-    sourceText: intent === 'rewrite' || intent === 'repair' ? manuscript : '',
-    repairIssues: zhuqueRepair?.issues || selectedRepairIssues,
+    sourceText: extra.collaborativeRepair?.original.payload.manuscript || (intent === 'rewrite' || intent === 'repair' ? manuscript : ''),
+    repairIssues: extra.collaborativeRepair?.issues || zhuqueRepair?.issues || selectedRepairIssues,
     deterministicChecks: selectedSourceGeneration && step.task === 'quality_review'
       ? deterministicQualityChecks({ task: selectedSourceGeneration.task, output: selectedSourceGeneration.output, chapter, targetLength: run.modelRoutes?.targetLength })
       : undefined,
@@ -694,7 +700,7 @@ async function prepareCodexPrompt({ run, step, extra = {} }) {
       currentValue: '', nearbyContext: JSON.stringify({ genre: workspace.project.genre, idea: workspace.project.idea }),
       boundaries: '同时生成故事前提、阅读承诺、核心冲突、主角、关键世界硬规则和总纲；字段必须具体、可判定且能转化为人物行动。',
     } : inlineAction ? inlinePlanningInput({ step, workspace, planningCenter, chapter }) : undefined,
-    instruction: [...baseInstructionParts, inlineRevisionInstruction].filter(Boolean).join('\n'),
+    instruction: [...baseInstructionParts, inlineRevisionInstruction, extra.collaborativeRepair ? '仅修复作者勾选的问题；保留其他情节、人物声音、有效句子和结局。返回完整候选正文。' : ''].filter(Boolean).join('\n'),
   }
   const compiled = compilePrompt(promptInput)
   const previousStep = [...(run.steps || [])]
@@ -784,7 +790,7 @@ async function prepareCodexPrompt({ run, step, extra = {} }) {
     agentProvider: codexRunSettings.agentProvider,
     reasoningEffort: codexRunSettings.reasoningEffort,
     fastMode: Boolean(codexRunSettings.fastMode),
-    authMethod: codexRunSettings.agentProvider === 'qoder'
+    authMethod: codexRunSettings.agentProvider === 'grok' ? 'cached_token' : codexRunSettings.agentProvider === 'qoder'
       ? (process.env.QODER_PERSONAL_ACCESS_TOKEN ? 'environment' : 'qoder-login')
       : codexRunSettings.agentProvider === 'claude' ? (codexRunSettings.authMethod === 'environment' ? 'api-key' : 'claude-login')
       : (codexRunSettings.authMethod === 'environment' ? 'api-key' : 'chat-gpt'),
@@ -868,7 +874,9 @@ async function runAgentAppModel({ run, step, eventContext, extra, signal }) {
     projectId: run.projectId,
     chapterId: run.chapterId,
     modelProfileId: run.modelRoutes?.[step.task] || run.modelRoutes?.modelProfileId || '',
-    intent: step.task === 'chapter' ? 'draft' : 'analysis',
+    intent: extra.collaborativeRepair ? 'repair' : step.task === 'chapter' ? 'draft' : 'analysis',
+    sourceText: extra.collaborativeRepair?.original.payload.manuscript,
+    repairIssues: extra.collaborativeRepair?.issues,
     planning: step.candidateType === 'foundation_bundle' ? {
       scopeType: 'project', fieldKey: 'foundationBundle', fieldLabel: '故事初始化组合', targetLabel: '当前项目',
       currentValue: '', nearbyContext: '',
@@ -884,7 +892,8 @@ async function runAgentAppModel({ run, step, eventContext, extra, signal }) {
         ? `一次补全当前规划卡的所有请求字段。${planningBundleContract}`
       : step.candidateType === 'planning_chapter_bundle'
         ? `一次补全当前章节规划的所有请求字段。${planningBundleContract}`
-        : '', inlineAction?.instruction || '', lengthInstruction, repairInstruction].filter(Boolean).join('\n'),
+        : '', inlineAction?.instruction || '', lengthInstruction, repairInstruction,
+      extra.collaborativeRepair ? '仅修复作者勾选的问题；保留其他情节、人物声音、有效句子和结局。返回完整候选正文。' : ''].filter(Boolean).join('\n'),
     agentRunId: run.id,
     agentStepId: step.id,
     executionBackend: 'app_model',
@@ -1072,7 +1081,7 @@ async function applyAgentCandidate({ run, candidate, applyOptions = {} }) {
     const sourceGeneration = getGenerationRecord(inlineTarget?.sourceGenerationId || '')
     if (!sourceGeneration || sourceGeneration.projectId !== run.projectId) throw new Error('质量评审缺少有效生成记录')
     const chapter = getWorkspaceChapter({ projectId: run.projectId, chapterId: run.chapterId })
-    const codexBackends = new Set(['codex_acp', 'codex_exec', 'qoder_acp', 'claude_sdk'])
+    const codexBackends = new Set(['codex_acp', 'codex_exec', 'qoder_acp', 'claude_sdk', 'grok_acp'])
     const sourceRemote = codexBackends.has(sourceGeneration.executionBackend)
       || qualityEvidenceExecution(sourceGeneration, 'remote') === 'remote'
     const reviewerRemote = codexBackends.has(candidate.evidence?.executionBackend)
@@ -1159,7 +1168,11 @@ async function initializeCodexIntegration() {
     shouldAutoApprove: ({ actionType, projectId }) => actionType === 'model_call' && codexSessionModelApprovalProjects.has(projectId),
     onGlobalEvent: onGlobalAgentEvent,
   })
-  agentGateway = new AgentGatewayRouter({ repository, codex: codexGateway, qoder: qoderGateway, claude: claudeGateway })
+  grokGateway = new GrokAgentGateway({ repository, settingsProvider: loadCodexSettings,
+    shouldAutoApprove: ({ actionType, projectId }) => actionType === 'model_call' && codexSessionModelApprovalProjects.has(projectId),
+    onGlobalEvent: onGlobalAgentEvent,
+  })
+  agentGateway = new AgentGatewayRouter({ repository, codex: codexGateway, qoder: qoderGateway, claude: claudeGateway, grok: grokGateway })
   codexModelCatalog = new CodexModelCatalog({
     file: path.join(app.getPath('userData'), 'codex-model-catalog.json'),
     identity: () => {
@@ -1182,7 +1195,7 @@ async function initializeCodexIntegration() {
     completeCodexGeneration,
     runIndependentReview: async ({ run, step, sourceCandidate, eventContext, signal }) => {
       const profileId = run.modelRoutes?.reviewerProfileId || loadModelSettings().routes?.quality_review || ''
-      const useCodex = profileId === 'codex'
+      const useCodex = ['codex', 'grok-build'].includes(profileId)
       if (!useCodex && !loadModelSettings().profiles.some(profile => profile.id === profileId && profile.enabled)) throw new Error('请为独立审稿选择质量评审路由或 Codex 新会话')
       let child = step.output?.reviewRunId ? getAgentRun(step.output.reviewRunId) : null
       if (!child) {
@@ -1233,7 +1246,7 @@ async function initializeCodexIntegration() {
       })
       const sourceBackend = source.executionBackend || sourceCandidate.evidence?.executionBackend || ''
       const reviewerBackend = result.backend || result.execution || ''
-      const realCodexBackends = new Set(['codex_acp', 'codex_exec', 'qoder_acp', 'claude_sdk'])
+      const realCodexBackends = new Set(['codex_acp', 'codex_exec', 'qoder_acp', 'claude_sdk', 'grok_acp'])
       const report = createQualityReport({
         projectId: run.projectId,
         chapterId: run.chapterId,
@@ -1247,7 +1260,7 @@ async function initializeCodexIntegration() {
       return report.id
     },
     runAppModel: runAgentAppModel,
-    runPreflight: async ({ run }) => run.executionMode === 'codex'
+    runPreflight: async ({ run }) => run.executionMode === 'codex' || run.workflowId === COLLABORATIVE_WORKFLOW_ID
       ? buildReadinessReport({
           project: loadWorkspaceSnapshot(run.projectId).project,
           chapter: loadWorkspaceSnapshot(run.projectId).chapters.find((item) => item.id === run.chapterId),
@@ -1271,6 +1284,12 @@ async function initializeCodexIntegration() {
     },
     currentSourceDigest: async (run) => {
       if (run.modelRoutes?.creativeRequestId) return readCreativeSnapshot(openDatabase(),run.projectId).sourceDigest
+      if (run.workflowId === COLLABORATIVE_WORKFLOW_ID || run.modelRoutes?.activeStage) {
+        // Match generation's lazy planning/knowledge projections before pinning
+        // a digest; a confirmed card can create new derived knowledge sources.
+        loadPlanningCenter(run.projectId)
+        loadKnowledgeCenter(run.projectId)
+      }
       if (run.creativePack?.version !== '1.3.0') return mirrorForRun(run).sourceDigest
       const step = run.steps?.find(item => item.id === run.currentStepId) || run.steps?.at(-1)
       const context = buildGenerationContext({ projectId: run.projectId, chapterId: run.chapterId, instruction: step?.input?.instruction || '', creativePackVersion: run.creativePack.version,
@@ -1376,6 +1395,7 @@ function runtimeInfo() {
     },
     codex,
     qoder,
+    grok: grokGateway?.inspectRuntime?.() || inspectGrokRuntime({ configuredPath: loadCodexSettings()?.grokCliPath || '' }),
     claude: claudeGateway?.inspectRuntime?.() || inspectClaudeRuntime({ configuredPath: loadCodexSettings()?.claudeCliPath || '' }),
     agentProvider: loadCodexSettings()?.agentProvider || 'codex',
   }
@@ -1549,8 +1569,10 @@ async function runGenerationTask(event, payload = {}, { retryOfId = '' } = {}) {
     || 'local-default'
   const requestedProfile = modelSettings.profiles.find((profile) => profile.id === payload.modelProfileId)
   const modelProfileId = requestedProfile?.id || routedModelProfileId
-  const modelProfile = requestedProfile || modelSettings.profiles.find((profile) => profile.id === routedModelProfileId)
-  const apiKey = getModelApiKey(modelProfileId)
+  const lockedProfile = frozenRun ? collaborativeProfile(frozenRun, modelSettings.profiles) : null
+  const modelProfile = lockedProfile || requestedProfile || modelSettings.profiles.find((profile) => profile.id === routedModelProfileId)
+  const apiKey = getModelApiKey(lockedProfile?.id || modelProfileId)
+  if (lockedProfile && !['local', 'mock'].includes(lockedProfile.provider) && !apiKey) throw new Error('本次运行所选模型缺少 API Key，请补全配置后重试')
   const allowedIntents = new Set(['draft', 'continue', 'rewrite', 'repair', 'analysis'])
   const defaultIntent = payload.task === 'chapter'
     ? (chapter?.manuscript?.trim() ? 'rewrite' : 'draft')
@@ -2292,7 +2314,7 @@ async function initializeCreativeInterface() {
       const defaults=loadCodexSettings()
       const agentProvider=normalizeAgentProvider(defaults.agentProvider)
       return agentRuntime.stageExternalCandidate({ ...input,modelRoutes:{ codexModel:agentProviderModel(defaults, agentProvider),
-        codexReasoningEffort:agentProviderReasoningEffort(defaults, agentProvider),codexFastMode:defaults.fastMode,codexAuthMethod:agentProvider === 'claude' ? defaults.claudeAuthMethod : defaults.authMethod,
+        codexReasoningEffort:agentProviderReasoningEffort(defaults, agentProvider),codexFastMode:agentProvider === 'codex' && defaults.fastMode,codexAuthMethod:agentRunSettings(defaults).codexAuthMethod,
         agentProvider } })
     },
     onChange:payload => publishCodexEvent('creative:changed',payload),
@@ -2311,7 +2333,8 @@ function registerIpc() {
     const project = db.prepare('SELECT creative_preferences_json, default_execution_mode FROM projects WHERE id=?').get(payload.projectId)
     if (!project || !binding) throw new Error('项目或能力包绑定不存在')
     return { preferences: JSON.parse(project.creative_preferences_json), executionMode: project.default_execution_mode,
-      version: binding.version, workflows: binding.content.workflows.map(item => ({ id: item.id, name: item.name })),
+      version: binding.version, workflows: [...binding.content.workflows.map(item => ({ id: item.id, name: item.name })),
+        { id: COLLABORATIVE_WORKFLOW_ID, name: collaborativeWorkflow().name }],
       upgrade: binding.packId === OFFICIAL_PACK_ID && binding.version !== '1.3.0' ? repo.upgradePreview(payload.projectId, OFFICIAL_PACK_ID, '1.3.0') : null }
   })
   ipcMain.handle('creative:upgrade', (_event, payload) => {
@@ -2356,7 +2379,7 @@ function registerIpc() {
     }
     const promise = (async () => {
       await deleteProjectOffMainThread({ databasePath: getDatabaseInfo().path, projectId })
-      try { for (const provider of ['codex', 'claude']) removeCodexBookWorkspace({ baseDirectory: getLibraryDirectory(), projectId, provider }) }
+      try { for (const provider of ['codex', 'claude', 'grok']) removeCodexBookWorkspace({ baseDirectory: getLibraryDirectory(), projectId, provider }) }
       catch (error) { console.warn(`[Codex] 清理书籍工作区失败：${error.message}`) }
       return loadWorkspaceCatalog()
     })()
@@ -2380,6 +2403,11 @@ function registerIpc() {
   ipcMain.handle('zhuque:key-select', (_event, id) => publishZhuqueKeys(selectZhuqueApiKey(id)))
   ipcMain.handle('zhuque:key-remove', (_event, id) => publishZhuqueKeys(removeZhuqueApiKey(id)))
   ipcMain.handle('zhuque:detect', (_event, payload) => zhuqueDetection().detect(payload))
+  ipcMain.handle('zhuque:export', (_event, payload) => exportZhuqueReport({
+    database: openDatabase(), getResult: target => zhuqueDetection().getResult(target),
+    showSaveDialog: options => dialogOptions('showSaveDialog', options),
+    writeFile: (filePath, content, encoding) => fs.promises.writeFile(filePath, content, encoding),
+  }, payload))
   ipcMain.handle('chapters:reorder', (_event, input) => reorderChapters(input))
   ipcMain.handle('chapter:duplicate', (_event, chapterId) => duplicateChapter(chapterId))
   ipcMain.handle('chapter:delete', (_event, chapterId) => deleteChapter(chapterId))
@@ -2453,6 +2481,7 @@ function registerIpc() {
   ipcMain.handle('codex:status', () => ({
     runtime: codexGateway.inspectRuntime(),
     qoderRuntime: qoderGateway.inspectRuntime(),
+    grokRuntime: grokGateway.inspectRuntime(),
     claudeRuntime: claudeGateway.inspectRuntime(),
     settings: loadCodexSettings(),
     components: codexComponents.status(),
@@ -2468,6 +2497,8 @@ function registerIpc() {
   ipcMain.handle('codex:components-rollback', (_event, payload) => codexComponents.rollback(payload?.useBundled === true))
   ipcMain.handle('codex:settings-save', async (_event, payload) => {
     const before = loadCodexSettings()
+    if (payload.grokCliPath !== undefined && before.grokCliPath !== payload.grokCliPath.trim()
+      && grokGateway.useConfiguredPath(payload.grokCliPath)) await grokGateway.restartAdapter({ suppressErrors: true })
     const saved = saveCodexSettings(payload)
     if (before.agentProvider !== saved.agentProvider || before.qoderCliPath !== saved.qoderCliPath) {
       await qoderGateway.restartAdapter({ suppressErrors: true })
@@ -2494,6 +2525,9 @@ function registerIpc() {
     if (provider === 'qoder' && qoderGateway.useConfiguredPath(payload.qoderCliPath)) {
       await qoderGateway.restartAdapter({ suppressErrors: true })
     }
+    if (provider === 'grok' && grokGateway.useConfiguredPath(payload.grokCliPath ?? loadCodexSettings().grokCliPath)) {
+      await grokGateway.restartAdapter({ suppressErrors: true })
+    }
     const read = async () => {
       try {
         return await gateway.testConnection({ cwd: diagnosticDirectory,
@@ -2501,13 +2535,14 @@ function registerIpc() {
           authMethod: payload.claudeAuthMethod || loadCodexSettings()?.claudeAuthMethod || 'cli', reasoningEffort: String(payload.reasoningEffort || ''), fastMode: Boolean(payload.fastMode) })
       } catch (error) {
         // A removed/renamed saved model must not block discovery of its replacement.
-        if (provider !== 'codex' || !directoryOnly || error.codexPhase !== 'session_config') throw error
+        if (!['codex','grok'].includes(provider) || !directoryOnly || error.codexPhase !== 'session_config') throw error
         return { ...await gateway.testConnection({ cwd: diagnosticDirectory }), configurationWarning: error.message }
       }
     }
     const status = provider === 'codex' ? await codexModelCatalog.refresh(`${String(payload.model || '')}:${payload.reasoningEffort || ''}:${Boolean(payload.fastMode)}`, read) : await read()
     return { ok: true, status, message: provider === 'claude'
       ? 'Claude Code SDK 认证信息与模型目录已读取；未发送创作请求。实际模型权限及计费以调用结果和 Claude 账号规则为准。'
+      : provider === 'grok' ? 'Grok Build 本机登录态与模型目录已验证，未发送创作请求。'
       : provider === 'qoder'
       ? 'Qoder ACP 已建立诊断会话并正常释放；未发送创作请求。'
       : status.configurationWarning ? `模型目录已更新；原选择待重新验证：${status.configurationWarning}。默认模型保持不变。`
@@ -2516,6 +2551,14 @@ function registerIpc() {
   ipcMain.handle('codex:test', (_event, payload) => inspectCodexModels(payload))
   ipcMain.handle('codex:models', (_event, payload) => inspectCodexModels(payload, true))
   ipcMain.handle('codex:restart-adapter', () => codexGateway.restartAdapter())
+  ipcMain.handle('grok:open-project', async (_event, projectId) => {
+    const project = listProjects().find(item => item.id === String(projectId || ''))
+    if (!project) throw new Error('项目不存在')
+    const workspace = createCodexBookWorkspace({ baseDirectory: getLibraryDirectory(), project, provider: 'grok' })
+    const error = await shell.openPath(workspace.root)
+    if (error) throw new Error(error)
+    return { root: workspace.root, projectId: project.id }
+  })
   ipcMain.handle('claude:open-project', async (_event, projectId) => {
     const project = listProjects().find(item => item.id === String(projectId || ''))
     if (!project) throw new Error('项目不存在')
@@ -2555,22 +2598,21 @@ function registerIpc() {
   })
   ipcMain.handle('agent:start', (event, payload) => {
     const codexDefaults = loadCodexSettings()
-    const agentProvider = normalizeAgentProvider(payload.agentProvider ?? codexDefaults.agentProvider)
+    const agentProvider = payload.workflowId === COLLABORATIVE_WORKFLOW_ID ? 'codex' : normalizeAgentProvider(payload.agentProvider ?? codexDefaults.agentProvider)
     return agentRuntime.start({
       ...payload,
       modelRoutes: {
         ...(payload._creativeRequestId ? { creativeRequestId:payload._creativeRequestId } : {}),
         modelProfileId: payload.modelProfileId || '',
         reviewerProfileId: payload.reviewerProfileId || '',
+        stageModels: payload.stageModels,
+        stageAgentSettings: Object.fromEntries(Object.entries(payload.stageModels || {}).filter(([,id]) => ['codex','grok-build'].includes(id)).map(([stage,id]) => {
+          const defaults = agentRunSettings(codexDefaults, {}, id === 'grok-build' ? 'grok' : 'codex')
+          const overrides = payload.stageAgentSettings?.[stage] || {}
+          return [stage, { model: overrides.model ?? defaults.codexModel, reasoningEffort: overrides.reasoningEffort ?? defaults.codexReasoningEffort }]
+        })),
       targetLength: Math.max(800, Math.min(12000, Math.round(Number(payload.targetLength) || 2000))),
-        codexModel: agentProvider === 'qoder'
-          ? payload.qoderModel ?? codexDefaults.qoderModel ?? 'auto'
-          : agentProvider === 'claude' ? payload.claudeModel ?? codexDefaults.claudeModel ?? ''
-          : payload.codexModel ?? codexDefaults.model ?? '',
-        agentProvider,
-        codexReasoningEffort: agentProvider === 'claude' ? payload.claudeReasoningEffort ?? agentProviderReasoningEffort(codexDefaults, agentProvider) : payload.codexReasoningEffort ?? agentProviderReasoningEffort(codexDefaults, agentProvider),
-        codexFastMode: payload.codexFastMode ?? Boolean(codexDefaults.fastMode),
-        codexAuthMethod: agentProvider === 'claude' ? codexDefaults.claudeAuthMethod || 'cli' : payload.codexAuthMethod ?? codexDefaults.authMethod ?? 'chatgpt',
+        ...agentRunSettings(codexDefaults, payload, agentProvider),
       },
     }, event)
   })
@@ -2592,14 +2634,7 @@ function registerIpc() {
         planning_field: payload.modelProfileId || '',
         appModelName: payload.modelProfileName || '',
         targetLength: Math.max(0, Math.min(12000, Math.round(Number(payload.targetLength) || 0))),
-        codexModel: agentProvider === 'qoder'
-          ? payload.qoderModel ?? codexDefaults.qoderModel ?? 'auto'
-          : agentProvider === 'claude' ? payload.claudeModel ?? codexDefaults.claudeModel ?? ''
-          : payload.codexModel ?? codexDefaults.model ?? '',
-        agentProvider,
-        codexReasoningEffort: agentProvider === 'claude' ? payload.claudeReasoningEffort ?? agentProviderReasoningEffort(codexDefaults, agentProvider) : payload.codexReasoningEffort ?? agentProviderReasoningEffort(codexDefaults, agentProvider),
-        codexFastMode: payload.codexFastMode ?? Boolean(codexDefaults.fastMode),
-        codexAuthMethod: agentProvider === 'claude' ? codexDefaults.claudeAuthMethod || 'cli' : payload.codexAuthMethod ?? codexDefaults.authMethod ?? 'chatgpt',
+        ...agentRunSettings(codexDefaults, payload, agentProvider),
       },
     }, event)
   })
@@ -2616,8 +2651,8 @@ function registerIpc() {
     const selectedAgentLabel = agentProviderLabel(selectedAgentProvider)
     const selectedAgentModel = agentProviderModel(codex, selectedAgentProvider)
     const reviewer = executionMode === 'codex'
-      ? { executionMode, model: requested.model || selectedAgentModel, reasoningEffort: requested.reasoningEffort ?? agentProviderReasoningEffort(codex, selectedAgentProvider), fastMode: codex.fastMode,
-          authMethod: selectedAgentProvider === 'claude' ? codex.claudeAuthMethod : codex.authMethod, agentProvider: selectedAgentProvider,
+      ? { executionMode, model: requested.model || selectedAgentModel, reasoningEffort: requested.reasoningEffort ?? agentProviderReasoningEffort(codex, selectedAgentProvider), fastMode: selectedAgentProvider === 'codex' && codex.fastMode,
+          authMethod: agentRunSettings(codex).codexAuthMethod, agentProvider: selectedAgentProvider,
           label: `${selectedAgentLabel} · 独立上下文审稿（相同模型时并非跨模型评审）` }
       : { executionMode, profileId, model: profile.model, provider: profile.provider, settings: profile.settings,
           label: `${profile.name} · 独立上下文审稿` }
@@ -2687,6 +2722,7 @@ function registerIpc() {
   ipcMain.handle('agent:resume', (event, runId) => agentRuntime.resume(runId, event))
   ipcMain.handle('agent:cancel', (_event, runId) => agentRuntime.cancel(runId))
   ipcMain.handle('agent:confirm-candidate', (event, payload) => agentRuntime.confirmCandidate({ ...payload, accept: true }, event))
+  ipcMain.handle('agent:collaborative-review', (event, payload) => agentRuntime.continueCollaborativeReview(payload, event))
   ipcMain.handle('agent:reject-candidate', (event, payload) => agentRuntime.confirmCandidate({ ...payload, accept: false }, event))
   ipcMain.handle('agent:retry-step', (event, payload) => agentRuntime.retryStep(payload, event))
   ipcMain.handle('agent:events', (_event, payload) => listAgentEvents(payload.agentRunId, payload))

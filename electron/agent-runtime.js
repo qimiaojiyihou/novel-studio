@@ -4,6 +4,7 @@ import { cleanPlanningFieldText } from './generated-text.js'
 import { checkManuscript } from './manuscript-checks.js'
 import { applyTextPatches, assertProtectedText } from './manuscript-patches.js'
 import { normalizePlanningChapterBundleCandidate, normalizePlanningDocumentBundleCandidate, normalizePlanningEntityBundleCandidate } from './planning-bundle.js'
+import { COLLABORATIVE_WORKFLOW_ID, collaborativeExecution, collaborativeRepairInput, reviewedIssues } from './collaborative-writing.js'
 
 function firstFailed(checks = []) {
   return checks.find((check) => check.critical && !check.passed) || checks.find((check) => !check.passed)
@@ -266,7 +267,7 @@ export class AgentRuntime {
         return run
       }
       this.repository.updateRun(runId, { currentStepId: step.id })
-      if (step.action === 'checkpoint') {
+      if (step.action === 'checkpoint' || step.action === 'review_checkpoint') {
         this.repository.updateStep(step.id, { status: 'waiting_confirmation' })
         return this.repository.updateRun(runId, { status: 'waiting_confirmation', currentStepId: step.id })
       }
@@ -320,8 +321,11 @@ export class AgentRuntime {
         this._emit(run.id, 'discussion_completed', { stepId: step.id, text })
         return
       }
+      const repair = collaborativeRepairInput(run, step)
+      if (repair && repair.original.sourceDigest !== await this.currentSourceDigest({ ...run, currentStepId: repair.original.stepId })) throw new Error('原稿依赖的正式内容已变化，请重新生成并审稿')
       const { result, payload } = await this._runStructuredTask({
         run, step, mirror, eventContext, signal: controller.signal, startedAt,
+        extra: repair ? { collaborativeRepair: repair } : {},
         validate: (execution) => step.input?.patchSource && step.input.modificationScope?.kind !== 'whole'
           ? applyTextPatches(step.input.patchSource.text, execution.structuredOutput || {}, {
               digest: step.input.patchSource.digest, scope: step.input.modificationScope, protections: step.input.patchSource.protections })
@@ -346,6 +350,7 @@ export class AgentRuntime {
         sourceDigest,
         payload,
         evidence: {
+          ...(repair ? { parentCandidateId: repair.original.id, reviewIssueIds: step.input.reviewIssueIds } : {}),
           executionBackend: result.backend || result.execution || 'app_model',
           sessionId: result.sessionId || '',
           fallbackReason: result.fallbackReason || '',
@@ -396,14 +401,14 @@ export class AgentRuntime {
     if (this.runIndependentReview) this.repository.updateStep(step.id, { status: 'running', attemptCount: Number(step.attemptCount || 0) + 1, startedAt })
     try {
       const { result, payload: review } = this.runIndependentReview
-        ? await this.runIndependentReview({ run, step, sourceCandidate, eventContext, signal: controller.signal })
+        ? await this.runIndependentReview({ run: collaborativeExecution(run, step), step, sourceCandidate, eventContext, signal: controller.signal })
         : await this._runStructuredTask({
         run, step, mirror, eventContext, signal: controller.signal, startedAt,
         extra: { sourceCandidate },
         validate: (execution) => validateCandidate('quality_review', candidatePayload('quality_review', execution)),
       })
       const qualityReportId = result.qualityReportId || await this.persistQualityReview({
-        run,
+        run: collaborativeExecution(run, step),
         step,
         sourceCandidate,
         result,
@@ -480,11 +485,13 @@ export class AgentRuntime {
   }
 
   async _executeTask({ run, step, mirror, eventContext, signal, extra = {} }) {
+    run = collaborativeExecution(run, step)
     if (run.executionMode !== 'codex') {
       const result=await this.runAppModel({ run, step, eventContext, signal, extra })
       if (signal.aborted || result?.cancelled) throw new CodexCancelledError()
       return result
     }
+    if (!mirror) mirror = await this.refreshMirror(run)
     const prepared = await this.prepareCodexPrompt({ run, step, mirror, extra })
     try {
       const result = await this.codexGateway.prompt({
@@ -504,6 +511,7 @@ export class AgentRuntime {
           stepLabel: step.key,
           displayTitle: prepared.displayTitle || '',
           agentProvider: prepared.agentProvider || run.modelRoutes?.agentProvider || 'codex',
+          collaborativeStage: run.modelRoutes?.activeStage || '',
           model: prepared.model || '',
           reasoningEffort: prepared.reasoningEffort || '',
           fastMode: Boolean(prepared.fastMode),
@@ -528,6 +536,33 @@ export class AgentRuntime {
     }
   }
 
+  async continueCollaborativeReview(input, eventContext = null) {
+    const run = this.repository.getRun(input.runId)
+    const checkpoint = run?.steps.find(s => s.id === run.currentStepId)
+    if (run?.workflowId !== COLLABORATIVE_WORKFLOW_ID || run.status !== 'waiting_confirmation'
+      || checkpoint?.key !== 'choose-repairs' || checkpoint.status !== 'waiting_confirmation') throw new Error('当前运行未处于审稿确认阶段')
+    const original = run.candidates.find(c => c.stepId === run.steps.find(s => s.key === 'chapter-draft')?.id && c.status === 'pending')
+    if (!original) throw new Error('原稿候选已处理，请新建运行')
+    const valid = new Set(reviewedIssues(run).map(i => i.selectionId))
+    const ids = [...new Set((Array.isArray(input.issueIds) ? input.issueIds : []).map(String))]
+    if (ids.some(id => !valid.has(id))) throw new Error('所选审稿问题不属于本次报告')
+    if (!input.skipRepair && !ids.length) throw new Error('请选择需要修订的问题，或保留原稿')
+    this.repository.updateRun(run.id, { status: 'running' })
+    try {
+      if (original.sourceDigest !== await this.currentSourceDigest({ ...run, currentStepId: original.stepId })) throw new Error('正式内容已变化，请重新生成并审稿')
+      const repair = run.steps.find(s => s.key === 'repair-draft')
+      this.repository.updateStep(repair.id, { input: { reviewIssueIds: ids, sourceCandidateId: original.id },
+        ...(input.skipRepair ? { status: 'completed', output: { skipped: true, reason: '作者保留原稿' } } : {}) })
+      this.repository.updateStep(checkpoint.id, { status: 'completed', output: { issueIds: ids, skipRepair: Boolean(input.skipRepair) } })
+      this._emit(run.id, 'review_selection_confirmed', { issueIds: ids, skipRepair: Boolean(input.skipRepair) })
+      void this.advance(run.id, eventContext).catch(error => this._failRun(run.id, error))
+      return this.repository.getRun(run.id)
+    } catch (error) {
+      this.repository.updateRun(run.id, { status: 'paused', error: error.message })
+      throw error
+    }
+  }
+
   async confirmCandidate(input, eventContext = null) {
     const run = this.repository.getRun(input.runId)
     if (!run) throw new Error('AgentRun 不存在')
@@ -538,6 +573,8 @@ export class AgentRuntime {
       ? candidate?.status === 'pending' || editingAcceptedChapterCard
       : ['pending', 'stale'].includes(candidate?.status)
     if (!candidate || !candidateCanResolve) throw new Error('候选不存在或已经处理')
+    if (run.workflowId === COLLABORATIVE_WORKFLOW_ID && candidate.artifactType === 'manuscript'
+      && (run.status !== 'waiting_confirmation' || run.steps.find(s => s.id === run.currentStepId)?.key !== 'confirm-draft')) throw new Error('请先确认审稿问题，待修稿完成后再确认正文')
     const sourceStep = run.steps.find((item) => item.id === candidate.stepId)
     const editedPayload = hasAuthorEdit ? candidate.artifactType === 'chapter_card'
       ? normalizeChapterCardAuthorEdit(input.editedPayload, candidate.payload)
@@ -614,6 +651,11 @@ export class AgentRuntime {
       evidence: resolvedEvidence,
       ...(hasAuthorEdit ? { payload: effectiveCandidate.payload } : {}),
     })
+    if (input.accept && run.workflowId === COLLABORATIVE_WORKFLOW_ID && candidate.artifactType === 'manuscript') {
+      for (const other of run.candidates.filter(c => c.artifactType === 'manuscript' && c.status === 'pending' && c.id !== candidate.id)) {
+        this.repository.retireManuscriptCandidate({ id: other.id, acceptedCandidateId: candidate.id })
+      }
+    }
     const refreshed = this.repository.getRun(run.id)
     const refreshedSourceStep = refreshed.steps.find((item) => item.id === candidate.stepId)
     const checkpoint = refreshed.steps.find((item) => item.position > refreshedSourceStep.position && item.action === 'checkpoint' && item.status === 'waiting_confirmation')

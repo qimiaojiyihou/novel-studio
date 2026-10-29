@@ -42,8 +42,8 @@ let serial = 0
 async function mountPicker(t, { provider = 'claude', cached = [], selected = 'saved-custom' } = {}) {
   const reads = [], requests = [], id = `claude-picker-${++serial}`
   const service = {
-    getCodexStatus: async () => ({ settings: { agentProvider: provider, claudeModel: selected, claudeCliPath: '', claudeAuthMethod: 'cli' },
-      runtime: {}, claudeRuntime: { configOptions: cached, modelCatalog: { cached: true, refreshedAt: '2026-10-24T00:00:00Z' } } }),
+    getCodexStatus: async () => ({ settings: { agentProvider: provider, grokModel: selected, grokCliPath: '', claudeModel: selected, claudeCliPath: '', claudeAuthMethod: 'cli' },
+      runtime: {}, grokRuntime: { configOptions: cached }, claudeRuntime: { configOptions: cached, modelCatalog: { cached: true, refreshedAt: '2026-10-24T00:00:00Z' } } }),
     getCodexModels: input => { reads.push(input); const request = deferred(); requests.push(request); return request.promise },
   }
   globalThis[id] = service
@@ -144,4 +144,26 @@ test('changing the CLI path drops stale choices and late results from the old so
   await refresh
   assert.equal(f.state.claudeModelOptions[0].value, 'new-source')
   assert.equal(f.state.codexDraft.claudeModel, 'saved-custom')
+})
+
+test('Grok ACP model discovery uses local login settings and preserves the chosen model across failures', async t => {
+  const f = await mountPicker(t, { provider: 'grok', selected: 'grok-chosen' })
+  assert.equal(f.reads.length, 1); assert.equal(f.reads[0].agentProvider,'grok'); assert.equal(f.reads[0].model,'grok-chosen')
+  assert.equal(f.reads[0].reasoningEffort,'')
+  f.requests[0].resolve({ status: { configOptions: [
+    { id:'model',type:'select',currentValue:'grok-chosen',options:[{value:'grok-chosen',name:'Grok Chosen'}] },
+    { id:'reasoning_effort',type:'select',currentValue:'high',options:[{value:'low',name:'Low'},{value:'high',name:'High'}] },
+  ], runtime:{} }, message:'目录读取成功' })
+  await flush()
+  assert.deepEqual(f.state.grokModelOptions.map(o=>o.value),['grok-chosen'])
+  assert.deepEqual(f.state.grokEffortOptions.map(o=>o.value),['low','high'])
+  const pending=f.state.refreshGrokModels(); await flush(); f.requests[1].reject(new Error('登录过期')); await pending
+  assert.equal(f.state.codexDraft.grokModel,'grok-chosen'); assert.equal(f.state.grokModelOptions[0].value,'grok-chosen')
+})
+
+test('a late Grok directory response cannot replace another executor state', async t => {
+  const f = await mountPicker(t, { provider:'grok' })
+  f.state.codexDraft.agentProvider='qoder'; await flush()
+  f.requests[0].resolve({ status:{configOptions:[{id:'model',options:[{value:'stale',name:'Stale'}]}],runtime:{}},message:'stale' }); await flush()
+  assert.equal(f.state.codexDraft.agentProvider,'qoder'); assert.deepEqual(f.state.grokModelOptions,[])
 })

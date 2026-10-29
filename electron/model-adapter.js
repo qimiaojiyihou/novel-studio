@@ -171,6 +171,10 @@ function isMiMoProfile(modelProfile = {}) {
 function parametersFor(task, modelProfile) {
   const provider = modelProfile?.provider || 'mock'
   const settings = modelProfile?.settings || {}
+  if (provider === 'grok') return {
+    max_tokens: Math.round(finiteNumber(settings.maxTokens, 1, 131072) || (task === 'connection_test' ? 64 : 16384)),
+    ...(STRUCTURED_TASKS.has(task) && settings.responseFormat !== 'text' ? { response_format: { type: 'json_object' } } : {}),
+  }
   const taskTemperature = task === 'rewrite' ? 0.55
     : task === 'planning_field' ? 0.68
       : task === 'connection_test' ? 0
@@ -244,6 +248,7 @@ export function prepareModelTask(input) {
   const provider = modelProfile?.provider || 'mock'
   const needsKey = provider !== 'local' && provider !== 'mock'
   const missingConfiguration = !modelProfile?.baseUrl || !modelProfile?.model || (needsKey && !apiKey)
+  if (provider === 'grok' && missingConfiguration) throw new Error('Grok 配置尚未完成，请填写 xAI API Key、Base URL 和模型名称')
   if (task === 'connection_test' && missingConfiguration) {
     if (!modelProfile?.baseUrl) throw new Error('请先填写模型 Base URL')
     if (!modelProfile?.model) throw new Error('请先填写模型名称')

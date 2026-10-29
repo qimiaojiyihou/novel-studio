@@ -1,5 +1,5 @@
 <template>
-  <div ref="root" class="inline-manuscript-diff" aria-label="当前正文与 Codex 候选差异"></div>
+  <div ref="root" class="inline-manuscript-diff" aria-label="原稿与候选正文差异"></div>
 </template>
 
 <script setup>

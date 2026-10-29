@@ -446,7 +446,7 @@ test('ACP resume follows resume then load then recreate', async () => {
   })
   try {
     const session = await gateway.resumeSession({
-      agentRunId: 'run-resume', mirrorRoot: root, persistedSession: { sessionId: 'old-session' },
+      agentRunId: 'run-resume', mirrorRoot: root, persistedSession: { sessionId: 'old-session', backend: 'codex_acp' },
     })
     assert.deepEqual(calls, ['resume', 'load'])
     assert.equal(session.sessionId, 'new-1')

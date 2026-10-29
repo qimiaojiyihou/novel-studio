@@ -1,16 +1,18 @@
 export function normalizeAgentProvider(value) {
-  return ['qoder', 'claude'].includes(value) ? value : 'codex'
+  return ['qoder', 'claude', 'grok'].includes(value) ? value : 'codex'
 }
 
 export function agentProviderLabel(value) {
-  return { codex: 'Codex', qoder: 'Qoder', claude: 'Claude Code' }[normalizeAgentProvider(value)]
+  return { codex: 'Codex', qoder: 'Qoder', claude: 'Claude Code', grok: 'Grok Build' }[normalizeAgentProvider(value)]
 }
 
 export function agentProviderModel(settings = {}, provider = settings.agentProvider) {
+  if (provider === 'grok') return settings.grokModel || ''
   return provider === 'claude' ? settings.claudeModel || '' : provider === 'qoder' ? settings.qoderModel || 'auto' : settings.model || ''
 }
 
 export function agentProviderReasoningEffort(settings = {}, provider = settings.agentProvider) {
+  if (provider === 'grok') return settings.grokReasoningEffort || ''
   return provider === 'claude' ? settings.claudeReasoningEffort || '' : settings.reasoningEffort ?? 'high'
 }
 
@@ -18,10 +20,20 @@ export function agentProviderBackend(provider) {
   return normalizeAgentProvider(provider) === 'claude' ? 'claude_sdk' : `${normalizeAgentProvider(provider)}_acp`
 }
 
+export function agentRunSettings(defaults, input = {}, provider = defaults.agentProvider) {
+  provider = normalizeAgentProvider(provider)
+  const modelKey = { claude: 'claudeModel', qoder: 'qoderModel', grok: 'grokModel', codex: 'codexModel' }[provider]
+  const effortKey = { claude: 'claudeReasoningEffort', grok: 'grokReasoningEffort' }[provider] || 'codexReasoningEffort'
+  return { agentProvider: provider, codexModel: input[modelKey] ?? agentProviderModel(defaults, provider),
+    codexReasoningEffort: input[effortKey] ?? agentProviderReasoningEffort(defaults, provider),
+    codexFastMode: provider === 'codex' && (input.codexFastMode ?? Boolean(defaults.fastMode)),
+    codexAuthMethod: provider === 'grok' ? 'cached_token' : provider === 'claude' ? defaults.claudeAuthMethod || 'cli' : input.codexAuthMethod ?? defaults.authMethod ?? 'chatgpt' }
+}
+
 export class AgentGatewayRouter {
-  constructor({ repository, codex, qoder, claude }) {
+  constructor({ repository, codex, qoder, claude, grok }) {
     this.repository = repository
-    this.gateways = { codex, qoder, claude }
+    this.gateways = { codex, qoder, claude, grok }
   }
 
   gateway(provider) {
@@ -37,17 +49,24 @@ export class AgentGatewayRouter {
     return normalizeAgentProvider(run?.modelRoutes?.agentProvider)
   }
 
-  prompt(input) {
+  async prompt(input) {
     const provider = normalizeAgentProvider(input?.settings?.agentProvider || this.providerForRun(input?.agentRunId))
+    for (const [owner, gateway] of Object.entries(this.gateways)) {
+      if (owner !== provider && gateway?.sessions?.has(input.agentRunId)) await gateway.closeSession(input.agentRunId)
+    }
     return this.gateway(provider).prompt(input)
   }
 
   cancelTurn(agentRunId) {
-    return this.gateway(this.providerForRun(agentRunId)).cancelTurn(agentRunId)
+    // Collaborative runs can own both Codex and Grok sessions. Cancel only
+    // sessions actually owned by a gateway, independent of the root provider.
+    const owners = Object.values(this.gateways).filter(g => g?.sessions?.has(agentRunId))
+    return owners.length ? Promise.all(owners.map(g => g.cancelTurn(agentRunId))) : this.gateway(this.providerForRun(agentRunId)).cancelTurn(agentRunId)
   }
 
   closeSession(agentRunId) {
-    return this.gateway(this.providerForRun(agentRunId)).closeSession(agentRunId)
+    const owners = Object.values(this.gateways).filter(g => g?.sessions?.has(agentRunId))
+    return owners.length ? Promise.all(owners.map(g => g.closeSession(agentRunId))) : this.gateway(this.providerForRun(agentRunId)).closeSession(agentRunId)
   }
 
   resolveApproval(input) {

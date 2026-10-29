@@ -23,14 +23,19 @@
               {{ selectedAgentRuntime?.available ? '运行时已检测' : '运行时待检查' }}
             </span>
           </div>
-          <p class="codex-agent-intro">作为独立执行方式运行创作工作流。{{ codexDraft.agentProvider === 'claude' ? 'Claude Code 通过官方 Agent SDK 调用本机 CLI，支持流式输出和会话续接；只读取任务镜像，生成候选后由你确认写入。' : codexDraft.agentProvider === 'qoder' ? 'Qoder 通过本机 qoder / qodercn 的 --acp 模式建立长会话，复用 CLI 登录状态。' : 'Codex 优先使用 ACP 长会话；启动失败且尚未产生输出时，自动进入只读 exec 兼容模式。' }}</p>
+          <p class="codex-agent-intro">作为独立执行方式运行创作工作流。{{ codexDraft.agentProvider === 'claude' ? 'Claude Code 通过官方 Agent SDK 调用本机 CLI，支持流式输出和会话续接；只读取任务镜像，生成候选后由你确认写入。' : codexDraft.agentProvider === 'grok' ? 'Grok Build 通过本机 ACP 长会话工作，复用 grok login 登录态；每本书独立目录，候选确认后才写入。' : codexDraft.agentProvider === 'qoder' ? 'Qoder 通过本机 qoder / qodercn 的 --acp 模式建立长会话，复用 CLI 登录状态。' : 'Codex 优先使用 ACP 长会话；启动失败且尚未产生输出时，自动进入只读 exec 兼容模式。' }}</p>
           <div class="codex-proof-grid">
             <article><span>{{ codexDraft.agentProvider === 'claude' ? 'Agent SDK' : 'ACP' }}</span><strong>{{ selectedAgentRuntime?.adapterVersion || '—' }}</strong><small>{{ integrityLabel }}</small></article>
             <article><span>CLI</span><strong>{{ selectedAgentRuntime?.cliVersion || (selectedAgentRuntime?.available ? '已检测' : '—') }}</strong><small>{{ codexDraft.agentProvider !== 'codex' ? (selectedAgentRuntime?.executablePath || '等待填写 CLI 路径') : (codexStatus.runtime?.source === 'managed' ? '独立更新组件' : '应用内置组件') }}</small></article>
             <article><span>认证</span><strong>{{ agentAuthLabel }}</strong><small>{{ agentAuthDetail }}</small></article>
           </div>
           <div class="codex-settings-grid">
-            <label><span>Agent 提供方</span><select v-model="codexDraft.agentProvider"><option value="codex">Codex</option><option value="qoder">Qoder</option><option value="claude">Claude Code</option></select></label>
+            <label><span>Agent 提供方</span><select v-model="codexDraft.agentProvider"><option value="codex">Codex</option><option value="qoder">Qoder</option><option value="claude">Claude Code</option><option value="grok">Grok Build</option></select></label>
+            <template v-if="codexDraft.agentProvider === 'grok'">
+              <label class="wide"><span>Grok Build CLI 路径</span><input v-model.trim="codexDraft.grokCliPath" @change="refreshGrokModels(true)" placeholder="留空自动检测，例如 ~/.grok/bin/grok" /><small>先在终端运行 grok login。应用只复用本机登录态，不读取、显示或保存令牌；Grok API 配置保留在下方模型列表。</small></label>
+              <label><span>Grok Build 默认模型</span><select v-model="codexDraft.grokModel" aria-label="Grok Build 默认模型" @change="refreshGrokModels(true)"><option value="">CLI 默认{{ grokDefaultModel ? ` · ${grokDefaultModel}` : '' }}</option><option v-for="option in grokModelOptions" :key="option.value" :value="option.value">{{ option.name }}</option><option v-if="codexDraft.grokModel && !grokModelOptions.some(o => o.value === codexDraft.grokModel)" :value="codexDraft.grokModel">{{ codexDraft.grokModel }} · 待验证</option></select></label>
+              <label><span>Grok Build 思考强度</span><select v-model="codexDraft.grokReasoningEffort" aria-label="Grok Build 思考强度"><option value="">模型默认</option><option v-for="option in grokEffortOptions" :key="option.value" :value="option.value">{{ option.name }} · {{ option.value }}</option><option v-if="codexDraft.grokReasoningEffort && !grokEffortOptions.some(o => o.value === codexDraft.grokReasoningEffort)" :value="codexDraft.grokReasoningEffort">{{ codexDraft.grokReasoningEffort }} · 待验证</option></select><small>模型与强度从当前 ACP 会话读取，调用前回读验证；新任务使用这里保存的选择。</small></label>
+            </template>
             <template v-if="codexDraft.agentProvider === 'claude'">
               <label><span>Claude Code 认证</span><select v-model="codexDraft.claudeAuthMethod" @change="refreshClaudeModels(true)"><option value="cli">本机 Claude Code 登录</option><option value="environment">环境 API Key</option></select></label>
               <label class="wide"><span>Claude Code CLI 路径</span><input v-model.trim="codexDraft.claudeCliPath" @change="refreshClaudeModels(true)" placeholder="留空自动检测，例如 ~/.local/bin/claude" /><small>先在终端执行 claude auth login。API Key 模式读取应用进程的 ANTHROPIC_API_KEY，应用不保存或显示凭据。</small></label>
@@ -78,6 +83,7 @@
             <button v-if="codexDraft.agentProvider === 'codex'" class="outline-button" :disabled="codexBusy" @click="authenticateCodex">{{ codexDraft.authMethod === 'environment' ? '使用环境变量认证' : '登录 ChatGPT' }}</button>
             <button class="test-button" :disabled="codexBusy" @click="testCodex">测试 {{ agentName }} {{ codexDraft.agentProvider === 'claude' ? 'SDK / 刷新模型' : 'ACP' }}</button>
             <button v-if="codexDraft.agentProvider === 'codex'" class="outline-button" :disabled="codexBusy" @click="refreshCodexModels()">刷新模型列表</button>
+            <button v-if="codexDraft.agentProvider === 'grok'" class="outline-button" :disabled="codexBusy" @click="refreshGrokModels()">刷新 Grok 模型列表</button>
             <button v-if="codexDraft.agentProvider === 'claude'" class="outline-button" :disabled="codexBusy || claudeModelsLoading" @click="refreshClaudeModels()">{{ claudeModelsLoading ? '正在刷新模型…' : '刷新 Claude 模型列表' }}</button>
             <button class="primary-button" :disabled="codexBusy" @click="saveCodex">保存 Agent 设置</button>
           </div>
@@ -162,6 +168,7 @@
                   <option value="deepseek">DeepSeek</option>
                   <option value="mimo">小米 MiMo</option>
                   <option value="openai">GPT / OpenAI</option>
+                  <option value="grok">Grok / xAI</option>
                   <option value="kimi">Kimi</option>
                   <option value="custom">其他 OpenAI 兼容</option>
                 </select>
@@ -176,12 +183,17 @@
               </label>
               <label>
                 <span>模型名称</span>
-                <input v-model.trim="draft.model" placeholder="填写服务商提供的模型名" />
+                <input v-model.trim="draft.model" :list="draft.provider === 'grok' ? 'grok-model-options' : undefined" placeholder="填写服务商提供的模型名" />
+                <datalist v-if="draft.provider === 'grok'" id="grok-model-options"><option v-for="id in grokModels" :key="id" :value="id" /></datalist>
               </label>
               <label>
                 <span>API Key</span>
                 <input v-model="draft.apiKey" type="password" autocomplete="new-password" placeholder="留空表示保持现有密钥" />
               </label>
+            </div>
+            <div v-if="draft.provider === 'grok'" class="grok-profile-note">
+              <p>使用 xAI API Key；Grok 网页订阅与 API 额度独立。可通过下方“测试连接”读取账号可用模型，自定义兼容接口也可填写。</p>
+              <label><span>最大输出 Token</span><input v-model.number="draft.settings.maxTokens" type="number" min="1" max="131072" step="256" /></label>
             </div>
             <details v-if="draft.provider === 'deepseek' || isMiMoDraft()" class="advanced-cabinet" open>
               <summary><span><b>{{ isMiMoDraft() ? '小米 MiMo 高级参数' : 'DeepSeek 高级参数' }}</b><small>思考、采样和输出预算</small></span><i>⌄</i></summary>
@@ -296,6 +308,7 @@ import { appService } from '../services/app-service.js'
 import StorageSettings from './StorageSettings.vue'
 import ReaderSettings from './ReaderSettings.vue'
 import { modelDirectory } from '../../electron/codex-models.js'
+import { grokChoices } from '../../electron/grok-config.js'
 import { claudeModelDirectory } from '../utils/claude-models.js'
 import {
   normalizeRequestConfig,
@@ -324,16 +337,28 @@ const taskDefinitions = [
 
 const editingId = ref(null)
 const draft = reactive(emptyDraft())
+const grokModels = computed(() => [...new Set([draft.model || 'grok-4.7', ...(draft.capabilities?.modelList?.models || [])])])
+watch(() => draft.provider, provider => {
+  if (provider === 'grok' && !draft.id) {
+    draft.name ||= 'Grok / xAI'
+    draft.baseUrl ||= 'https://api.x.ai/v1'
+    draft.model ||= 'grok-4.7'
+  }
+})
 const connectionTest = reactive({ state: 'idle', message: '' })
 const requestConfigText = ref('')
 const jsonValidation = reactive({ state: 'idle', message: '保存或测试前会自动校验' })
 const enabledProfiles = computed(() => props.settings.profiles.filter((profile) => profile.enabled))
-const codexStatus = reactive({ runtime: {}, qoderRuntime: {}, claudeRuntime: {}, settings: {}, components: {}, modelCatalog: {} })
-const codexDraft = reactive({ enabled: true, preferredBackend: 'codex_acp', agentProvider: 'codex', qoderCliPath: '', qoderModel: 'auto', claudeCliPath: '', claudeModel: '', claudeAuthMethod: 'cli', claudeReasoningEffort: '', model: '', reasoningEffort: 'high', fastMode: false, authMethod: 'chatgpt' })
+const codexStatus = reactive({ runtime: {}, qoderRuntime: {}, claudeRuntime: {}, grokRuntime: {}, settings: {}, components: {}, modelCatalog: {} })
+const codexDraft = reactive({ enabled: true, preferredBackend: 'codex_acp', agentProvider: 'codex', qoderCliPath: '', qoderModel: 'auto', claudeCliPath: '', claudeModel: '', claudeAuthMethod: 'cli', claudeReasoningEffort: '', grokCliPath: '', grokModel: '', grokReasoningEffort: '', model: '', reasoningEffort: 'high', fastMode: false, authMethod: 'chatgpt' })
 const codexMessage = reactive({ state: 'idle', text: '' })
 const codexBusy = ref(false)
-const agentName = computed(() => ({ codex: 'Codex', qoder: 'Qoder', claude: 'Claude Code' }[codexDraft.agentProvider] || 'Codex'))
-const selectedAgentRuntime = computed(() => codexDraft.agentProvider === 'claude' ? codexStatus.claudeRuntime : codexDraft.agentProvider === 'qoder' ? codexStatus.qoderRuntime : codexStatus.runtime)
+const agentName = computed(() => ({ codex: 'Codex', qoder: 'Qoder', claude: 'Claude Code', grok: 'Grok Build' }[codexDraft.agentProvider] || 'Codex'))
+const selectedAgentRuntime = computed(() => codexDraft.agentProvider === 'grok' ? codexStatus.grokRuntime : codexDraft.agentProvider === 'claude' ? codexStatus.claudeRuntime : codexDraft.agentProvider === 'qoder' ? codexStatus.qoderRuntime : codexStatus.runtime)
+const grokModelOptions = computed(() => grokChoices(codexStatus.grokRuntime?.configOptions || [], 'model'))
+const grokEffortOptions = computed(() => grokChoices(codexStatus.grokRuntime?.configOptions || [], 'reasoning_effort'))
+const grokDefaultModel = computed(() => codexStatus.grokRuntime?.configOptions?.find(o => o.id === 'model')?.currentValue || '')
+let grokDirectorySequence = 0
 const claudeModelOptions = computed(() => claudeModelDirectory(codexStatus.claudeRuntime?.configOptions || []))
 const claudeSelectedModel = computed(() => claudeModelOptions.value.find(option => option.value === (codexDraft.claudeModel || 'default') || option.resolvedModel === codexDraft.claudeModel))
 const claudeDefaultModelLabel = computed(() => {
@@ -355,11 +380,12 @@ const claudeEffortOptions = computed(() => {
   return levels.map(value => ({ value, name: `${labels[value] || value} · ${value}` }))
 })
 const integrityLabel = computed(() => ({ verified: '摘要校验通过', development: '开发环境校验', external: '本机外部运行时', invalid: '摘要或版本不匹配', missing: '资源缺失' }[selectedAgentRuntime.value?.integrity] || '等待诊断'))
-const agentAuthLabel = computed(() => codexDraft.agentProvider === 'qoder'
+const agentAuthLabel = computed(() => codexDraft.agentProvider === 'grok' ? 'Grok 本机登录态' : codexDraft.agentProvider === 'qoder'
   ? (selectedAgentRuntime.value?.environmentAuthAvailable ? 'Qoder PAT' : 'Qoder 登录态')
   : codexDraft.agentProvider === 'claude' ? (codexDraft.claudeAuthMethod === 'environment' ? '环境 API Key' : 'Claude Code 登录态')
   : (codexDraft.authMethod === 'environment' ? '环境变量' : 'ChatGPT'))
 const agentAuthDetail = computed(() => {
+  if (codexDraft.agentProvider === 'grok') return codexStatus.grokRuntime?.authenticatedMethod === 'cached_token' ? '已验证本机登录态，未保存凭据' : '运行 grok login 后测试 ACP'
   if (codexDraft.agentProvider === 'claude') return selectedAgentRuntime.value?.authenticatedMethod ? '诊断已完成；未保存凭据' : '由官方 CLI 管理，点击测试检查'
   if (codexDraft.agentProvider === 'qoder') {
     return selectedAgentRuntime.value?.environmentAuthAvailable
@@ -404,19 +430,20 @@ const qoderModelOptions = computed(() => {
 
 watch(() => props.visible, (visible) => {
   clearInterval(componentPoll); componentPoll = null
-  if (!visible) { cancelEdit(); refreshSequence++; claudeDirectorySequence++; claudeModelsLoading.value = false }
+  if (!visible) { grokDirectorySequence++; cancelEdit(); refreshSequence++; claudeDirectorySequence++; claudeModelsLoading.value = false }
   else {
     void loadCodex()
     componentPoll = setInterval(() => { void pollComponents() }, 2000)
   }
 })
-onUnmounted(() => { clearInterval(componentPoll); refreshSequence++; claudeDirectorySequence++ })
+onUnmounted(() => { grokDirectorySequence++; clearInterval(componentPoll); refreshSequence++; claudeDirectorySequence++ })
 watch(() => codexDraft.agentProvider, provider => {
   if (applyingCodexStatus) return
-  refreshSequence++; claudeDirectorySequence++; codexBusy.value = false; claudeModelsLoading.value = false
+  grokDirectorySequence++; refreshSequence++; claudeDirectorySequence++; codexBusy.value = false; claudeModelsLoading.value = false
   if (!props.visible) return
   if (provider === 'codex') void refreshCodexModels(false, true)
   if (provider === 'claude') void refreshClaudeModels(true)
+  if (provider === 'grok') void refreshGrokModels(true)
 })
 watch(() => [codexDraft.claudeCliPath, codexDraft.claudeAuthMethod], () => {
   if (applyingCodexStatus) return
@@ -437,6 +464,7 @@ async function loadCodex() {
     if (!loaded.runtime?.configOptions?.length && loaded.modelCatalog?.cached) codexStatus.runtime.configOptions = loaded.modelCatalog.configOptions
     if (props.visible && codexDraft.agentProvider === 'codex') await refreshCodexModels(false, true)
     if (props.visible && codexDraft.agentProvider === 'claude') await refreshClaudeModels(true)
+    if (props.visible && codexDraft.agentProvider === 'grok') await refreshGrokModels(true)
   } catch (error) {
     Object.assign(codexMessage, { state: 'error', text: `Codex 状态读取失败：${error.message}` })
   } finally { applyingCodexStatus = false }
@@ -502,6 +530,7 @@ async function authenticateCodex() {
 
 async function testCodex() {
   if (codexDraft.agentProvider === 'claude') return refreshClaudeModels()
+  if (codexDraft.agentProvider === 'grok') return refreshGrokModels(false, true)
   codexBusy.value = true
   Object.assign(codexMessage, { state: 'testing', text: `正在校验 ${agentName.value} 执行器与模型目录…` })
   try {
@@ -517,6 +546,24 @@ async function testCodex() {
   } catch (error) {
     Object.assign(codexMessage, { state: 'error', text: `测试失败：${error.message}` })
   } finally { codexBusy.value = false }
+}
+
+async function refreshGrokModels(automatic = false, verify = false) {
+  await nextTick()
+  if (!props.visible || codexDraft.agentProvider !== 'grok') return
+  const sequence = ++grokDirectorySequence
+  const model = codexDraft.grokModel, configuredPath = codexDraft.grokCliPath.trim()
+  codexBusy.value = true
+  try {
+    const payload = { agentProvider: 'grok', grokCliPath: configuredPath, model,
+      reasoningEffort: verify ? codexDraft.grokReasoningEffort : '', automatic }
+    const result = await (verify ? appService.testCodex(payload) : appService.getCodexModels(payload))
+    if (sequence !== grokDirectorySequence || !props.visible || codexDraft.agentProvider !== 'grok' || codexDraft.grokModel !== model || codexDraft.grokCliPath.trim() !== configuredPath || result.skipped) return
+    codexStatus.grokRuntime = { ...codexStatus.grokRuntime, ...result.status.runtime, configOptions: result.status.configOptions }
+    Object.assign(codexMessage, { state: 'success', text: result.message })
+  } catch (error) {
+    if (sequence === grokDirectorySequence && props.visible && codexDraft.agentProvider === 'grok') Object.assign(codexMessage, { state: 'error', text: error.message })
+  } finally { if (sequence === grokDirectorySequence) codexBusy.value = false }
 }
 
 async function refreshClaudeModels(automatic = false) {
@@ -591,6 +638,7 @@ function providerLabel(provider) {
     deepseek: 'DeepSeek',
     mimo: '小米 MiMo',
     openai: 'GPT / OpenAI',
+    grok: 'Grok / xAI',
     kimi: 'Kimi',
     custom: 'OpenAI 兼容',
   }[provider] || '自定义'
@@ -603,7 +651,7 @@ function isMiMoDraft() {
 }
 
 function isBuiltIn(profile) {
-  return ['local-default', 'deepseek-default', 'openai-default', 'kimi-default'].includes(profile.id)
+  return ['local-default', 'deepseek-default', 'openai-default', 'kimi-default', 'grok-default'].includes(profile.id)
 }
 
 function capabilityOverallLabel(value) {

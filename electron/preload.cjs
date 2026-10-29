@@ -49,6 +49,7 @@ contextBridge.exposeInMainWorld('novelStudio', {
     return () => ipcRenderer.removeListener('zhuque:keys-changed', listener)
   },
   detectChapterWithZhuque: (payload) => ipcRenderer.invoke('zhuque:detect', payload),
+  exportZhuqueDetection: (payload) => ipcRenderer.invoke('zhuque:export', payload),
   reorderChapters: (input) => ipcRenderer.invoke('chapters:reorder', input),
   duplicateChapter: (chapterId) => ipcRenderer.invoke('chapter:duplicate', chapterId),
   deleteChapter: (chapterId) => ipcRenderer.invoke('chapter:delete', chapterId),
@@ -126,6 +127,7 @@ contextBridge.exposeInMainWorld('novelStudio', {
   restartCodexAdapter: () => ipcRenderer.invoke('codex:restart-adapter'),
   openCodexProject: (projectId) => ipcRenderer.invoke('codex:open-project', projectId),
   openClaudeProject: (projectId) => ipcRenderer.invoke('claude:open-project', projectId),
+  openGrokProject: (projectId) => ipcRenderer.invoke('grok:open-project', projectId),
   getWorkDesignSync: (projectId) => ipcRenderer.invoke('work-design:state', projectId),
   bindWorkDesignSync: (payload) => ipcRenderer.invoke('work-design:bind', payload),
   getWorkDesignPrompt: (payload) => ipcRenderer.invoke('work-design:prompt', payload),
@@ -134,6 +136,7 @@ contextBridge.exposeInMainWorld('novelStudio', {
   getSessionModelApproval: (projectId) => ipcRenderer.invoke('approvals:session-model-policy', { projectId }),
   setSessionModelApproval: (payload) => ipcRenderer.invoke('approvals:session-model-policy', payload),
   startAgent: (payload) => ipcRenderer.invoke('agent:start', payload),
+  continueCollaborativeReview: (payload) => ipcRenderer.invoke('agent:collaborative-review', payload),
   startInlineAgent: (payload) => ipcRenderer.invoke('agent:start-inline', payload),
   continueInlineAgent: (payload) => ipcRenderer.invoke('agent:continue-inline', payload),
   finishInlineAgent: (runId) => ipcRenderer.invoke('agent:finish-inline', runId),

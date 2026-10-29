@@ -220,6 +220,11 @@ function seedModelProfiles() {
     }
   }
 
+  database.prepare(`INSERT OR IGNORE INTO model_profiles
+    (id,provider,name,base_url,model,api_key_cipher,enabled,created_at,updated_at,settings_json)
+    VALUES ('grok-default','grok','Grok / xAI','https://api.x.ai/v1','grok-4.7','',1,?,?,'{"maxTokens":16384,"responseFormat":"auto"}')`)
+    .run(timestamp(), timestamp())
+
   database.prepare(`
     UPDATE model_profiles
     SET base_url = 'https://api.deepseek.com', updated_at = ?
@@ -747,6 +752,10 @@ export function saveAgentDiscussion(input) {
 
 export function resolveAgentCandidate(input) {
   return codexStore().resolveCandidate(input)
+}
+
+export function retireAgentManuscriptCandidate(input) {
+  return codexStore().retireManuscriptCandidate(input)
 }
 
 export function markAgentCandidateStale(id, reason) {

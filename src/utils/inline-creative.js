@@ -31,7 +31,7 @@ export function creativeRoutePresentation({ project = {}, agentProvider = 'codex
     return {
       mode: 'codex',
       name: creativeAgentLabel(agentProvider),
-      detail: agentProvider === 'claude' ? 'Agent · Claude Code SDK' : agentProvider === 'qoder' ? 'Agent · Qoder ACP' : 'Agent · ACP 优先 · exec 回退',
+      detail: agentProvider === 'claude' ? 'Agent · Claude Code SDK' : agentProvider === 'grok' ? 'Agent · Grok Build ACP' : agentProvider === 'qoder' ? 'Agent · Qoder ACP' : 'Agent · ACP 优先 · exec 回退',
       fallbackName: String(taskModelName || '任务模型'),
     }
   }

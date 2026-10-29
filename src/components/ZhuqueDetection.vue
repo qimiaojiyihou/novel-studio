@@ -27,9 +27,10 @@
           </div>
           <div class="zhuque-toolbar">
             <span>{{ configured ? '检测只在点击按钮后开始；重新检测会覆盖本章上次结果，不保留历史。' : '请先保存并选择一把密钥，再检测本章。' }}</span>
-            <button type="button" :disabled="busy || !configured" @click="detect">{{ busy ? '处理中…' : result ? '重新检测本章' : '检测本章' }}</button>
+            <button type="button" :disabled="busy || exporting || !configured" @click="detect">{{ busy ? '处理中…' : result ? '重新检测本章' : '检测本章' }}</button>
           </div>
           <p v-if="error" class="zhuque-error" role="alert">{{ error }}</p>
+          <p v-if="exportMessage" class="zhuque-notice" role="status">{{ exportMessage }}</p>
           <p v-if="busy" class="zhuque-notice" role="status">正在检测本章正文，请稍候…</p>
           <template v-if="result">
             <div v-if="result.stale" class="zhuque-stale" role="status">正文在这次检测后已修改，以下是旧稿结果。请重新检测本章。</div>
@@ -58,7 +59,16 @@
           </template>
         </template>
       </main>
-      <footer><a href="https://cloud.tencent.com/document/product/1552/137539" target="_blank" rel="noreferrer">查看腾讯云接口说明</a><button type="button" @click="$emit('close')">关闭</button></footer>
+      <footer>
+        <a href="https://cloud.tencent.com/document/product/1552/137539" target="_blank" rel="noreferrer">查看腾讯云接口说明</a>
+        <div class="zhuque-export-actions">
+          <template v-if="result">
+            <select v-model="exportFormat" aria-label="检测结果导出格式" :disabled="busy || exporting"><option value="txt">TXT 检测报告</option><option value="json">JSON 检测结果</option></select>
+            <button type="button" :disabled="busy || exporting" @click="exportResult">{{ exporting ? '正在导出…' : '导出检测结果' }}</button>
+          </template>
+          <button type="button" @click="$emit('close')">关闭</button>
+        </div>
+      </footer>
     </section>
   </div>
 </template>
@@ -76,6 +86,7 @@ const props = defineProps({
 })
 defineEmits(['close', 'repair'])
 const loading = ref(true), busy = ref(false), configured = ref(false), result = ref(null), error = ref(''), apiKey = ref(''), keyLabel = ref(''), keys = ref([]), selectedKeyId = ref(null)
+const exporting = ref(false), exportFormat = ref('txt'), exportMessage = ref('')
 let stopKeyEvents
 const target = () => ({ projectId: props.projectId, chapterId: props.chapterId })
 const percent = (value) => value === null || value === undefined ? '—' : `${(value * 100).toFixed(1)}%`
@@ -83,12 +94,25 @@ const label = (value) => ({ 0: '人类', 1: 'AI', 2: '疑似 AI' })[value] || '�
 const formatDate = (value) => value ? new Date(value).toLocaleString('zh-CN') : ''
 
 async function detect() {
-  if (busy.value || !configured.value) return
+  if (busy.value || exporting.value || !configured.value) return
   busy.value = true
   error.value = ''
+  exportMessage.value = ''
   try { result.value = await appService.detectChapterWithZhuque(target()) }
   catch (cause) { error.value = cause.message || String(cause) }
   finally { busy.value = false }
+}
+
+async function exportResult() {
+  if (!result.value || busy.value || exporting.value) return
+  exporting.value = true
+  error.value = ''; exportMessage.value = ''
+  try {
+    const saved = await appService.exportZhuqueDetection({ ...target(), format: exportFormat.value,
+      expectedDigest: result.value.manuscriptDigest, expectedCheckedAt: result.value.checkedAt })
+    if (!saved.cancelled) exportMessage.value = `检测结果已导出${saved.stale ? '（旧稿检测结果）' : ''}：${saved.filePath}`
+  } catch (cause) { error.value = `导出失败：${cause.message || String(cause)}` }
+  finally { exporting.value = false }
 }
 
 function applyKeyStatus(status) {
@@ -145,6 +169,7 @@ onUnmounted(() => stopKeyEvents?.())
 .zhuque-dialog header,.zhuque-dialog footer{display:flex;justify-content:space-between;align-items:flex-start;gap:20px;padding:22px 28px;background:#f0f8fa}
 .zhuque-dialog header{border-bottom:1px solid #d5e5e9}.zhuque-dialog header h2{font-size:25px;margin:2px 0 6px}.zhuque-dialog header p{margin:0;color:#61767e;font-size:13px}.zhuque-kicker{font-size:11px;letter-spacing:.15em;color:#507970}.zhuque-close{font-size:27px;line-height:1;min-width:38px}
 .zhuque-dialog main{padding:24px 28px;overflow:auto;min-height:130px}.zhuque-dialog footer{align-items:center;border-top:1px solid #d5e5e9;padding:14px 28px}.zhuque-dialog footer a{color:#396c72;font-size:13px}
+.zhuque-dialog footer{flex-wrap:wrap}.zhuque-export-actions{display:flex;align-items:center;justify-content:flex-end;gap:10px;flex-wrap:wrap}.zhuque-export-actions select{flex:0 1 auto;min-width:150px;max-width:220px}.zhuque-export-actions button{white-space:nowrap}
 .zhuque-dialog button{border:1px solid #bcd4db;border-radius:9px;background:#fff;color:#264a50;padding:10px 15px;cursor:pointer}.zhuque-dialog button:disabled{opacity:.55;cursor:default}.zhuque-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;background:#eaf5f4;padding:13px 16px;border-radius:10px;font-size:13px}.zhuque-toolbar button,.zhuque-key-box button{background:#37695f;color:white;border-color:#37695f}
 .zhuque-key-box{border:1px solid #d1e3e6;background:white;border-radius:12px;padding:20px;margin-bottom:12px}.zhuque-key-box h3{margin:0 0 8px}.zhuque-key-box h3 small{font-size:12px;color:#5a8077;font-weight:normal}.zhuque-key-box p,.zhuque-hint{font-size:13px;color:#687e85}.zhuque-key-box form,.zhuque-key-picker{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:12px}.zhuque-key-picker label{font-size:13px}.zhuque-dialog input,.zhuque-dialog select{flex:1;min-width:180px;padding:10px 12px;border:1px solid #bcd4db;border-radius:8px;font:inherit;background:white;color:#263b44}
 .zhuque-error,.zhuque-stale,.zhuque-notice{padding:12px 15px;border-radius:8px;margin:14px 0}.zhuque-error{background:#fff1ed;color:#a13f2c}.zhuque-stale{background:#fff6df;color:#76591d}.zhuque-notice{background:#e8f3f6;color:#365b68}.zhuque-result-heading{display:flex;align-items:baseline;justify-content:space-between;margin-top:20px}.zhuque-result-heading h3{margin:0 0 12px}.zhuque-result-heading span{font-size:12px;color:#687e85}

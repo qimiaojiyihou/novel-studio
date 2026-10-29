@@ -58,6 +58,7 @@ export const appService = {
   removeZhuqueApiKey(id) { return electronApi.removeZhuqueApiKey(id) },
   onZhuqueKeysChanged(callback) { return electronApi.onZhuqueKeysChanged(callback) },
   detectChapterWithZhuque(payload) { return electronApi.detectChapterWithZhuque(payload) },
+  exportZhuqueDetection(payload) { return electronApi.exportZhuqueDetection(toIpcPayload(payload, '朱雀检测结果导出')) },
   reorderChapters(input) {
     return electronApi.reorderChapters(input)
   },
@@ -267,6 +268,7 @@ export const appService = {
     return electronApi.openCodexProject(projectId)
   },
   openClaudeProject(projectId) { return electronApi.openClaudeProject(projectId) },
+  openGrokProject(projectId) { return electronApi.openGrokProject(projectId) },
   getWorkDesignSync(projectId) { return electronApi.getWorkDesignSync(projectId) },
   bindWorkDesignSync(payload) { return electronApi.bindWorkDesignSync(payload) },
   getWorkDesignPrompt(payload) { return electronApi.getWorkDesignPrompt(payload) },
@@ -279,8 +281,9 @@ export const appService = {
     return electronApi.setSessionModelApproval(payload)
   },
   startAgent(payload) {
-    return electronApi.startAgent(payload)
+    return electronApi.startAgent(toIpcPayload(payload, '创作流程'))
   },
+  continueCollaborativeReview(payload) { return electronApi.continueCollaborativeReview(toIpcPayload(payload, '协作审稿确认')) },
   startInlineAgent(payload) {
     return electronApi.startInlineAgent(toIpcPayload(payload, 'Codex 就地创作任务'))
   },

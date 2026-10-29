@@ -34,7 +34,7 @@
         <div><span>模型</span><strong>{{ modelLabel }}</strong></div>
         <div><span>后端</span><strong>{{ backendLabel }}</strong></div>
         <div><span>状态</span><strong :class="`state-${run.status}`">{{ statusLabel(run.status) }}</strong></div>
-        <div><span>推理</span><strong>{{ run.modelRoutes?.codexReasoningEffort || (run.modelRoutes?.agentProvider === 'claude' ? '模型默认' : 'high') }}</strong></div>
+        <div><span>推理</span><strong>{{ run.modelRoutes?.codexReasoningEffort || (['claude','grok'].includes(run.modelRoutes?.agentProvider) ? '模型默认' : 'high') }}</strong></div>
       </section>
 
       <div v-if="run.actualBackend === 'codex_exec'" class="inline-panel-notice">ACP 在首个输出前中断，本次使用只读 exec 兼容模式。</div>
