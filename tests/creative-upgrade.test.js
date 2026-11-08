@@ -35,7 +35,7 @@ test('v21→v38 preserves pinned historical packs, runs sequentially and cascade
   runMigrations(db, { targetVersion: 21 })
   const before = db.prepare('SELECT version,digest FROM creative_pack_versions ORDER BY version').all()
   runMigrations(db)
-  assert.deepEqual(db.prepare('SELECT version FROM schema_migrations WHERE version>=22 ORDER BY version').all().map(r=>r.version), [22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38])
+  assert.deepEqual(db.prepare('SELECT version FROM schema_migrations WHERE version>=22 ORDER BY version').all().map(r=>r.version), [22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39])
   assert.deepEqual(db.prepare("SELECT version,digest FROM creative_pack_versions WHERE version!='1.3.0' ORDER BY version").all(), before)
   runMigrations(db)
   assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(), [])

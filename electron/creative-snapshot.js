@@ -15,6 +15,7 @@ export function readCreativeSnapshot(db, projectId) {
   const contextProfile = db.prepare('SELECT * FROM context_profiles WHERE project_id=?').get(projectId) || {
     project_id:projectId,
     max_context_chars:PROFILE_DEFAULTS.maxContextChars,
+    context_budget_unlimited:Number(PROFILE_DEFAULTS.contextBudgetUnlimited),
     recent_chapter_count:PROFILE_DEFAULTS.recentChapterCount,
     relevant_chapter_count:PROFILE_DEFAULTS.relevantChapterCount,
     knowledge_limit:PROFILE_DEFAULTS.knowledgeLimit,

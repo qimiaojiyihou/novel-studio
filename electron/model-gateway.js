@@ -6,6 +6,9 @@ import {
 } from './model-adapter.js'
 
 class GoServiceUnavailableError extends Error {}
+class GoTaskTooLargeError extends Error {}
+// Keep the Go service's request-body guard; larger prompts can go directly to the model.
+const GO_TASK_BODY_LIMIT = 2 * 1024 * 1024
 
 function now() {
   return new Date().toISOString()
@@ -64,26 +67,30 @@ async function startGoTask(prepared, providerTaskId, outwardTaskId, runtime, con
     Authorization: 'Bearer ' + runtime.authToken,
     'Content-Type': 'application/json',
   }
+  const body = JSON.stringify({
+    taskId: providerTaskId,
+    task: prepared.task,
+    endpoint: prepared.endpoint,
+    apiKey: prepared.apiKey,
+    model: prepared.model,
+    messages: prepared.messages,
+    temperature: prepared.temperature,
+    parameters: prepared.parameters,
+    endpointPath: prepared.requestConfig.endpointPath,
+    requestHeaders: prepared.requestHeaders,
+    stream: prepared.stream,
+    mockContent: prepared.mockContent,
+    mockDelayMs: prepared.mockDelayMs,
+  })
+  if (Buffer.byteLength(body) > GO_TASK_BODY_LIMIT) {
+    throw new GoTaskTooLargeError('请求超过本地服务传输上限，将直接提交给模型')
+  }
   let accepted
   try {
     accepted = await fetch(runtime.baseUrl + '/api/v1/tasks', {
       method: 'POST',
       headers,
-      body: JSON.stringify({
-        taskId: providerTaskId,
-        task: prepared.task,
-        endpoint: prepared.endpoint,
-        apiKey: prepared.apiKey,
-        model: prepared.model,
-        messages: prepared.messages,
-        temperature: prepared.temperature,
-        parameters: prepared.parameters,
-        endpointPath: prepared.requestConfig.endpointPath,
-        requestHeaders: prepared.requestHeaders,
-        stream: prepared.stream,
-        mockContent: prepared.mockContent,
-        mockDelayMs: prepared.mockDelayMs,
-      }),
+      body,
     })
   } catch (error) {
     throw new GoServiceUnavailableError(error.message)
@@ -163,8 +170,8 @@ export function createModelGateway({ getGoRuntime, onGoUnavailable = () => {} })
               try {
                 result = await startGoTask(prepared, control.providerTaskId, taskId, runtime, control, forwardEvent)
               } catch (error) {
-                if (!(error instanceof GoServiceUnavailableError)) throw error
-                onGoUnavailable(error)
+                if (!(error instanceof GoServiceUnavailableError || error instanceof GoTaskTooLargeError)) throw error
+                if (error instanceof GoServiceUnavailableError) onGoUnavailable(error)
                 control.useGo = false
                 activeTasks.get(taskId).mode = 'embedded'
                 forwardEvent({ type: 'gateway-fallback', error: error.message, gateway: 'embedded', createdAt: now(), taskId })

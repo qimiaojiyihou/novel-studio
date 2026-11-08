@@ -411,7 +411,7 @@ export class CreativeInterface {
       if (operation === 'knowledge.item.update') return call('knowledge:item-update', pick(input, ['id','title','content','status','effectiveFromChapter','effectiveToChapter','knowledgeScope']))
       if (operation === 'knowledge.items.reorder') return call('knowledge:items-reorder', { projectId, ...pick(input, ['kind','itemIds']) })
       if (operation === 'knowledge.check.resolve') return call('knowledge:check-resolve', pick(input, ['id','status']))
-      if (operation === 'context.update') return call('context:update', { projectId, ...pick(input, ['maxContextChars','recentChapterCount','relevantChapterCount','knowledgeLimit','chapterSummaryChars']) })
+      if (operation === 'context.update') return call('context:update', { projectId, ...pick(input, ['maxContextChars','contextBudgetUnlimited','recentChapterCount','relevantChapterCount','knowledgeLimit','chapterSummaryChars']) })
       if (operation === 'prompt.style.save') return call('prompts:style-save', { projectId, ...pick(input, ['scopeType','scopeId','text','style']) })
       if (operation === 'authoring.sample.save') return call('authoring:save-sample', { projectId, ...pick(input, ['id','chapterId','candidateId','text','reason','active','action']), ...(input.manuscriptDigest ? { sourceDigest:input.manuscriptDigest } : {}) })
       if (operation === 'authoring.protection.save') return call('authoring:protect', { projectId, ...pick(input, ['id','chapterId','candidateId','from','to','action']), ...(input.manuscriptDigest ? { sourceDigest:input.manuscriptDigest } : {}) })

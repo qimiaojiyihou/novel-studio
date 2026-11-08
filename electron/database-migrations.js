@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url'
 import { validateCreativePack } from './creative-pack.js'
 import { creativeUpgradeMigrations } from './creative-upgrade-migrations.js'
 
-export const LATEST_SCHEMA_VERSION = 38
+export const LATEST_SCHEMA_VERSION = 39
 
 function bundledOfficialPack(version = '1.2.0') {
   const directory = version === '1.3.0' ? 'dist' : 'historical'
@@ -1659,6 +1659,31 @@ migrations.push({ version: 38, name: 'chapter-chinese-count', up(database) {
       UPDATE chapter_statistics SET project_id=NEW.project_id,
         character_count=length(NEW.manuscript),chinese_count=NULL WHERE chapter_id=NEW.id;
     END;
+  `)
+} })
+
+migrations.push({ version: 39, name: 'optional-context-budget', up(database) {
+  database.exec(`
+    CREATE TABLE context_profiles_v39 (
+      project_id TEXT PRIMARY KEY,
+      max_context_chars INTEGER NOT NULL DEFAULT 32000 CHECK(max_context_chars >= 8000),
+      recent_chapter_count INTEGER NOT NULL DEFAULT 3 CHECK(recent_chapter_count BETWEEN 0 AND 20),
+      relevant_chapter_count INTEGER NOT NULL DEFAULT 4 CHECK(relevant_chapter_count BETWEEN 0 AND 20),
+      knowledge_limit INTEGER NOT NULL DEFAULT 16 CHECK(knowledge_limit BETWEEN 0 AND 100),
+      chapter_summary_chars INTEGER NOT NULL DEFAULT 1200 CHECK(chapter_summary_chars BETWEEN 200 AND 4000),
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      context_budget_unlimited INTEGER NOT NULL DEFAULT 0 CHECK(context_budget_unlimited IN (0, 1)),
+      FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+    );
+    INSERT INTO context_profiles_v39 (
+      project_id, max_context_chars, recent_chapter_count, relevant_chapter_count,
+      knowledge_limit, chapter_summary_chars, created_at, updated_at
+    )
+    SELECT project_id, max_context_chars, recent_chapter_count, relevant_chapter_count,
+      knowledge_limit, chapter_summary_chars, created_at, updated_at FROM context_profiles;
+    DROP TABLE context_profiles;
+    ALTER TABLE context_profiles_v39 RENAME TO context_profiles;
   `)
 } })
 

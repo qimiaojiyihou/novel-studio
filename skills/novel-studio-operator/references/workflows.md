@@ -55,7 +55,7 @@ snapshot 的规划条目可能含 `content_json`、`data_json`；解析后阅读
 | 已有知识条目 | `knowledge.item.update` | `id`, `title?`, `content?`, `status?`, `effectiveFromChapter?`, `effectiveToChapter?`, `knowledgeScope?` |
 | 知识条目排序 | `knowledge.items.reorder` | `kind:"fact"|"timeline"|"foreshadow"`, `itemIds`；提交同 kind 全部 ID 的目标顺序 |
 | 连续性检查处理 | `knowledge.check.resolve` | `id`, `expectedStatus`, `status`；`expectedStatus` 必须是刚读取值 |
-| 上下文预算 | `context.update` | `maxContextChars?` 8000—200000，`recentChapterCount?` 0—20，`relevantChapterCount?` 0—20，`knowledgeLimit?` 0—100，`chapterSummaryChars?` 200—4000 |
+| 上下文预算 | `context.update` | `contextBudgetUnlimited?` 布尔值；开启时不按字符裁剪召回结果，仍受模型容量限制。`maxContextChars?` 至少 8000，关闭“不设预算”后继续使用该值。`recentChapterCount?` 0—20，`relevantChapterCount?` 0—20，`knowledgeLimit?` 0—100，`chapterSummaryChars?` 200—4000 |
 | 分层文风 | `prompt.style.save` | `scopeType:"project"|"volume"|"chapter"`, `scopeId`, `text?`, `style?`；scopeId 必须是本项目、分卷或章节的实际 ID |
 | 认可片段 | `authoring.sample.save` | 新增：`chapterId` 或正文候选的 `candidateId`、`text`、`manuscriptDigest`，可带 `reason`,`active`；更新：`id` 加可改字段；删除：`id`,`action:"delete"` |
 | 正文保护范围 | `authoring.protection.save` | 新增：`chapterId` 或 `candidateId`、`from`,`to`,`manuscriptDigest`；移除：`id`,`action:"remove"` |

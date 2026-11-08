@@ -1,14 +1,17 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { DatabaseSync } from 'node:sqlite'
+import { createServer } from 'node:http'
+import { once } from 'node:events'
 import { runMigrations } from '../electron/database-migrations.js'
 import { createContextRepository } from '../electron/context-repository.js'
+import { createModelGateway } from '../electron/model-gateway.js'
 
-function setup() {
+function setup(targetVersion) {
   const database = new DatabaseSync(':memory:')
   let tick = 0
   const now = () => `2026-08-22T10:${String(tick++).padStart(2, '0')}:00.000Z`
-  runMigrations(database, { now })
+  runMigrations(database, { now, targetVersion })
   database.prepare(`
     INSERT INTO projects (id, title, genre, idea, style, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -112,4 +115,81 @@ test('context budget is enforced and project deletion cascades profiles and memo
   assert.equal(database.prepare('SELECT COUNT(*) AS count FROM context_profiles').get().count, 0)
   assert.equal(database.prepare('SELECT COUNT(*) AS count FROM chapter_memories').get().count, 0)
   database.close()
+})
+
+test('upgrading v38 preserves the current context profile, chapters, planning, knowledge and memories', (t) => {
+  const { database, repository, now } = setup(38)
+  t.after(() => database.close())
+  repository.loadContextManager('project-1')
+  database.exec("UPDATE context_profiles SET max_context_chars=180000, recent_chapter_count=5, knowledge_limit=22")
+  const readRows = (table) => database.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all().map((row) => ({ ...row }))
+  const originalProfiles = readRows('context_profiles')
+  const tables = ['projects', 'chapters', 'planning_documents', 'knowledge_items', 'chapter_memories']
+  const existing = tables.map(readRows)
+
+  assert.equal(runMigrations(database, { now }), 39)
+  assert.deepEqual(readRows('context_profiles'), originalProfiles.map((profile) => ({ ...profile, context_budget_unlimited: 0 })))
+  assert.deepEqual(tables.map(readRows), existing)
+
+  let updated = repository.updateContextProfile({ projectId: 'project-1', maxContextChars: 260000, contextBudgetUnlimited: true })
+  assert.equal(updated.profile.contextBudgetUnlimited, true)
+  updated = repository.updateContextProfile({ projectId: 'project-1', contextBudgetUnlimited: false })
+  assert.equal(updated.profile.maxContextChars, 260000)
+  assert.equal(updated.profile.contextBudgetUnlimited, false)
+  assert.equal(updated.profile.knowledgeLimit, 22)
+  assert.deepEqual(tables.map(readRows), existing)
+})
+
+test('unlimited context reaches generation intact and model capacity errors still surface', async (t) => {
+  const { database, repository } = setup()
+  t.after(() => database.close())
+  const foundation = '星'.repeat(720000) + '完整资料末尾'
+  database.prepare("UPDATE planning_documents SET content_json = ? WHERE kind = 'foundation'").run(JSON.stringify({ premise: foundation }))
+  const input = { projectId: 'project-1', chapterId: 'chapter-5', instruction: '蓝色钥匙', creativePackVersion: '1.3.0' }
+  repository.updateContextProfile({ projectId: input.projectId, maxContextChars: 260000 })
+  assert.throws(() => repository.buildGenerationContext(input), /必需事实超出上下文预算（260000字符）/)
+  repository.updateContextProfile({ projectId: input.projectId, contextBudgetUnlimited: true })
+  for (const creativePackVersion of ['1.2.0', '1.3.0']) {
+    const context = repository.buildGenerationContext({ ...input, creativePackVersion })
+    assert.ok(context.text.includes(foundation))
+    assert.equal(context.diagnostics.budgetChars, null)
+    assert.equal(context.diagnostics.usedChars, context.text.length)
+    assert.equal(context.diagnostics.truncated, false)
+  }
+
+  const received = []
+  let exceeded = false
+  const provider = createServer(async (request, response) => {
+    const chunks = []
+    for await (const chunk of request) chunks.push(chunk)
+    received.push({ path: request.url, body: JSON.parse(Buffer.concat(chunks).toString()) })
+    response.writeHead(exceeded ? 400 : 200, { 'Content-Type': 'application/json' })
+    response.end(JSON.stringify(exceeded
+      ? { error: { code: 'context_length_exceeded', message: 'Maximum model context exceeded' } }
+      : { choices: [{ message: { content: '主角收起了蓝色钥匙。' } }] }))
+  }).listen(0, '127.0.0.1')
+  t.after(() => new Promise((resolve, reject) => provider.close((error) => error ? reject(error) : resolve())))
+  await once(provider, 'listening')
+  const baseUrl = `http://127.0.0.1:${provider.address().port}`
+  const gateway = createModelGateway({
+    getGoRuntime: () => ({ status: 'ready', baseUrl, authToken: 'test-local-service' }),
+    onGoUnavailable: () => assert.fail('large requests should not mark the Go service unavailable'),
+  })
+  const generate = (taskId) => gateway.generate({
+    task: 'chapter',
+    project: { title: '钥匙与旧车站', genre: '悬疑' },
+    chapter: { title: '午夜门锁', chapter_no: 5, card: {} },
+    modelProfile: { provider: 'local', model: 'fixture-model', baseUrl },
+    longContext: repository.buildGenerationContext(input),
+  }, { taskId })
+  const result = await generate('unlimited-ok')
+  assert.equal(result.manuscript, '主角收起了蓝色钥匙。')
+  assert.equal(result.execution, 'remote')
+  exceeded = true
+  await assert.rejects(generate('unlimited-over-capacity'), /context_length_exceeded/)
+  assert.equal(received.length, 2)
+  for (const { path, body } of received) {
+    assert.equal(path, '/chat/completions')
+    assert.ok(body.messages.some(({ content }) => content.includes(foundation)))
+  }
 })

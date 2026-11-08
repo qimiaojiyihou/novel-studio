@@ -3,6 +3,7 @@ import { COMPACT_HANDOFF_MODE } from './chapter-handoff.js'
 
 const PROFILE_DEFAULTS = Object.freeze({
   maxContextChars: 32000,
+  contextBudgetUnlimited: false,
   recentChapterCount: 3,
   relevantChapterCount: 4,
   knowledgeLimit: 16,
@@ -31,6 +32,7 @@ function profileFrom(row) {
   return {
     projectId: row.project_id,
     maxContextChars: Number(row.max_context_chars),
+    contextBudgetUnlimited: Boolean(row.context_budget_unlimited),
     recentChapterCount: Number(row.recent_chapter_count),
     relevantChapterCount: Number(row.relevant_chapter_count),
     knowledgeLimit: Number(row.knowledge_limit),
@@ -111,9 +113,13 @@ function overlapScore(queryTerms, candidateTerms) {
 }
 
 function appendWithinBudget(sections, label, content, budget) {
-  const body = cleanText(content)
+  const body = budget === null ? String(content ?? '').trim() : cleanText(content)
   if (!body) return { used: 0, truncated: false }
   const prefix = `${sections.length ? '\n\n' : ''}## ${label}\n`
+  if (budget === null) {
+    sections.push(prefix + body)
+    return { used: prefix.length + body.length, truncated: false }
+  }
   const remaining = budget - sections.join('').length
   if (remaining <= prefix.length + 12) return { used: 0, truncated: true }
   const allowed = remaining - prefix.length
@@ -225,8 +231,11 @@ export function createContextRepository(database, { now = () => new Date().toISO
   function updateContextProfile(input = {}) {
     const projectId = String(input.projectId || '')
     const current = ensureProfile(projectId)
+    const requestedBudget = Math.round(Number(input.maxContextChars))
     const next = {
-      maxContextChars: clampInteger(input.maxContextChars, 8000, 200000, current.maxContextChars),
+      maxContextChars: input.maxContextChars == null || input.maxContextChars === '' || !Number.isSafeInteger(requestedBudget)
+        ? current.maxContextChars : Math.max(8000, requestedBudget),
+      contextBudgetUnlimited: typeof input.contextBudgetUnlimited === 'boolean' ? input.contextBudgetUnlimited : current.contextBudgetUnlimited,
       recentChapterCount: clampInteger(input.recentChapterCount, 0, 20, current.recentChapterCount),
       relevantChapterCount: clampInteger(input.relevantChapterCount, 0, 20, current.relevantChapterCount),
       knowledgeLimit: clampInteger(input.knowledgeLimit, 0, 100, current.knowledgeLimit),
@@ -234,11 +243,12 @@ export function createContextRepository(database, { now = () => new Date().toISO
     }
     database.prepare(`
       UPDATE context_profiles SET
-        max_context_chars = ?, recent_chapter_count = ?, relevant_chapter_count = ?,
+        max_context_chars = ?, context_budget_unlimited = ?, recent_chapter_count = ?, relevant_chapter_count = ?,
         knowledge_limit = ?, chapter_summary_chars = ?, updated_at = ?
       WHERE project_id = ?
     `).run(
       next.maxContextChars,
+      Number(next.contextBudgetUnlimited),
       next.recentChapterCount,
       next.relevantChapterCount,
       next.knowledgeLimit,
@@ -317,8 +327,9 @@ export function createContextRepository(database, { now = () => new Date().toISO
     const projectId = String(input.projectId || '')
     const project = assertProject(projectId)
     const profile = ensureProfile(projectId)
+    const budget = profile.contextBudgetUnlimited ? null : profile.maxContextChars
     const pack = database.prepare('SELECT pack_version FROM project_pack_bindings WHERE project_id = ?').get(projectId)
-    if (input.creativePackVersion === '1.3.0' || (!input.creativePackVersion && pack?.pack_version === '1.3.0')) return buildCreativeContext(database, { ...input, budget: profile.maxContextChars })
+    if (input.creativePackVersion === '1.3.0' || (!input.creativePackVersion && pack?.pack_version === '1.3.0')) return buildCreativeContext(database, { ...input, budget })
     const memories = syncChapterMemories(projectId)
     const chapters = database.prepare('SELECT * FROM chapters WHERE project_id = ? ORDER BY chapter_no').all(projectId)
     const chapter = chapters.find((item) => item.id === input.chapterId) || chapters[0]
@@ -351,12 +362,12 @@ export function createContextRepository(database, { now = () => new Date().toISO
       entities: planningEntities.map((item) => ({ kind: item.kind, title: item.title, ...parseJson(item.data_json, {}) })),
     }
     const planningJson = JSON.stringify(planning)
-    const planningExcerpt = excerpt(planningJson, Math.max(1200, Math.floor(profile.maxContextChars * 0.25)))
+    const planningExcerpt = budget === null ? planningJson : excerpt(planningJson, Math.max(1200, Math.floor(budget * 0.25)))
 
     const sections = []
     let truncated = planningExcerpt.length < planningJson.length
     const append = (label, content) => {
-      const result = appendWithinBudget(sections, label, content, profile.maxContextChars)
+      const result = appendWithinBudget(sections, label, content, budget)
       truncated ||= result.truncated
     }
     append('当前创作任务', [
@@ -366,7 +377,8 @@ export function createContextRepository(database, { now = () => new Date().toISO
       `当前章节：第 ${chapter.chapter_no} 章《${chapter.title}》`,
       `章节卡：${JSON.stringify(card)}`,
       `场景计划：${chapter.scene_plan || '暂无'}`,
-      cleanText(chapter.manuscript) ? `当前正文尾部：${excerpt(chapter.manuscript, Math.min(5000, Math.floor(profile.maxContextChars * 0.18)))}` : '',
+      cleanText(chapter.manuscript) ? budget === null ? `当前正文：${chapter.manuscript}`
+        : `当前正文尾部：${excerpt(chapter.manuscript, Math.min(5000, Math.floor(budget * 0.18)))}` : '',
     ].filter(Boolean).join('\n'))
     append('已确认故事规划', planningExcerpt)
     if (stateSnapshots.length) {
@@ -391,7 +403,7 @@ export function createContextRepository(database, { now = () => new Date().toISO
     return {
       text,
       diagnostics: {
-        budgetChars: profile.maxContextChars,
+        budgetChars: budget,
         usedChars: text.length,
         recentChapterIds: recent.map((memory) => memory.chapterId),
         relevantChapterIds: relevant.map((memory) => memory.chapterId),

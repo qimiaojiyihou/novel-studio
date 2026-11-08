@@ -41,14 +41,16 @@ export function buildCreativeContext(db, input = {}) {
   const chapterNo = chapter?.chapter_no || 1
   const query = terms([input.instruction, chapter?.title, chapter?.card_json, project.idea].join('\n'))
   const parts = [], sources = [], items = [], omitted = []
-  const budget = Math.max(2000, Number(input.budget || 24000))
+  const budget = input.budget === null ? null : Math.max(2000, Number(input.budget || 24000))
+  let usedChars = 0
   function add(key, label, value, required = false, dependencyValue = value) {
     const text = `【${label}】\n${typeof value === 'string' ? value : JSON.stringify(value)}\n`
-    if (parts.join('').length + text.length > budget) {
+    if (budget !== null && usedChars + text.length > budget) {
       if (required) throw new Error(`必需事实超出上下文预算（${budget}字符），请缩小当前创作范围：${label}`)
       omitted.push({ targetKey: key, reason: '上下文预算不足' }); return
     }
     const source = { targetKey: key, digest: hash(dependencyValue), required }
+    usedChars += text.length
     parts.push(text); sources.push(source); items.push({ ...source, label, text })
   }
   add(`project:${project.id}:identity`, '任务与作品（作者设定）', { title: project.title, genre: project.genre, idea: project.idea }, true)
@@ -88,7 +90,7 @@ export function buildCreativeContext(db, input = {}) {
   const samples = db.prepare('SELECT * FROM author_style_samples WHERE project_id = ? AND active = 1 ORDER BY updated_at DESC').all(project.id)
     .sort((a, b) => score(b.reason + b.text, query) - score(a.reason + a.text, query)).slice(0, 3)
   for (const sample of samples) add(`style_sample:${sample.id}:text`, '认可片段：只参考表达与取舍，不继承人物/事件/事实', { text: sample.text, reason: sample.reason })
-  return { text: parts.join(''), sources, items, diagnostics: { budgetChars: budget, usedChars: parts.join('').length, omitted, truncated: omitted.length > 0, retrieval: 'local-entity-paragraph', globalDependencies: sources.filter(item => item.required).map(item => item.targetKey) } }
+  return { text: parts.join(''), sources, items, diagnostics: { budgetChars: budget, usedChars, omitted, truncated: omitted.length > 0, retrieval: 'local-entity-paragraph', globalDependencies: sources.filter(item => item.required).map(item => item.targetKey) } }
 }
 
 export function contextDependencyDigest(context) { return hash(context.sources.map(item => [item.targetKey, item.digest])) }

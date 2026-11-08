@@ -188,9 +188,12 @@
           </div>
           <div v-if="contextManager" class="context-workbench">
             <section class="context-profile-card">
-              <div class="context-card-heading"><span>CONTEXT BUDGET</span><strong>{{ formatNumber(contextManager.profile.maxContextChars) }} 字符</strong></div>
+              <div class="context-card-heading"><span>CONTEXT BUDGET</span><strong>{{ contextManager.profile.contextBudgetUnlimited ? '不设预算' : `${formatNumber(contextManager.profile.maxContextChars)} 字符` }}</strong></div>
               <div class="context-fields">
-                <label><span><strong>单次上下文预算</strong><small>越大信息越完整，调用成本和首字延迟也越高</small></span><input v-model.number="contextManager.profile.maxContextChars" type="number" min="8000" max="200000" step="1000" /></label>
+                <label><span><strong>单次上下文预算</strong><small>不设预算时按现有规则召回资料，仍受所选模型的实际容量限制。</small></span>
+                  <select v-model="contextManager.profile.contextBudgetUnlimited"><option :value="false">自定义字符预算</option><option :value="true">不设预算</option></select>
+                </label>
+                <label v-if="!contextManager.profile.contextBudgetUnlimited"><span><strong>预算字符数</strong><small>越大信息越完整，调用成本和首字延迟也越高。</small></span><input v-model.number="contextManager.profile.maxContextChars" type="number" min="8000" step="1" /></label>
                 <label><span><strong>最近章节</strong><small>固定携带当前章之前的章节数</small></span><input v-model.number="contextManager.profile.recentChapterCount" type="number" min="0" max="20" /></label>
                 <label><span><strong>相关旧章</strong><small>根据本次任务关键词动态召回</small></span><input v-model.number="contextManager.profile.relevantChapterCount" type="number" min="0" max="20" /></label>
                 <label><span><strong>知识记录上限</strong><small>事实、时间线、伏笔和检查的合计上限</small></span><input v-model.number="contextManager.profile.knowledgeLimit" type="number" min="0" max="100" /></label>
@@ -712,5 +715,6 @@ defineExpose({ flushSaves, reload: loadCenter })
 .knowledge-cascade { flex: 0 0 auto; padding: 5px 7px; color: #786b60; border: 1px solid #d5c8b8; background: transparent; font: 8px var(--font-ui); }
 .knowledge-cascade:hover { color: var(--copper); border-color: #d9b7a6; }
 @keyframes knowledge-pulse { 50% { opacity: .35; transform: scale(.75); } }
+.context-fields select { min-width: 0; height: 37px; padding: 7px 9px; color: #51483f; border: 1px solid #d5c8b9; background: var(--paper-soft); font: 11px var(--font-ui); }
 @media (max-width: 1240px) { .knowledge-layout { grid-template-columns: 180px minmax(430px, 1fr) 250px; }.knowledge-canvas { padding-right: 18px; padding-left: 18px; }.knowledge-item-layout { grid-template-columns: minmax(155px, .34fr) minmax(300px, 1fr); }.context-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 </style>
