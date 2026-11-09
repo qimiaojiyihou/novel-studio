@@ -20,7 +20,7 @@ try {
   const a = await page.evaluate(()=>window.novelStudio.createProject({title:'阅读设置模拟甲书'})), b = await page.evaluate(()=>window.novelStudio.createProject({title:'阅读设置模拟乙书'}))
   await app.evaluate(({ipcMain},input)=>{
     let state={origin:'https://reader.invalid',configured:false,busy:false,projects:[{id:input.a,title:'阅读设置模拟甲书'},{id:input.b,title:'阅读设置模拟乙书'}]}
-    let cloud={protocolVersion:1,requireLogin:true,accounts:[],books:[]}
+    let cloud={protocolVersion:1,requireLogin:true,accounts:[],books:[{id:'cloud-only',title:'另一台电脑发布的书',chapterCount:2}]}
     const handlers={
       'reader:status':()=>state,
       'reader:save':(_e,v)=>{state={...state,origin:v.origin,configured:true};return state},
@@ -28,8 +28,8 @@ try {
       'reader:access':(_e,v)=>{cloud.requireLogin=v;return cloud},
       'reader:account':(_e,v)=>{cloud.accounts=cloud.accounts.filter(a=>a.username!==v.username);if(!v.remove)cloud.accounts.push({username:v.username,disabled:!!v.disabled});return cloud},
       'reader:book-save':(_e,v)=>{state.projects=state.projects.map(p=>p.id===v.projectId?{...p,...v}:p);return state},
-      'reader:publish':(_e,id)=>{state.projects=state.projects.map(p=>p.id===id?{...p,published:true,chapterCount:1,syncedAt:new Date().toISOString()}:p);return{chapterCount:1}},
-      'reader:unpublish':(_e,id)=>{state.projects=state.projects.map(p=>p.id===id?{...p,published:false,auto:false}:p);return state},
+      'reader:publish':(_e,id)=>{state.projects=state.projects.map(p=>p.id===id?{...p,published:true,chapterCount:1,syncedAt:new Date().toISOString()}:p);cloud.books.push({id,title:state.projects.find(p=>p.id===id).title,chapterCount:1});return{chapterCount:1}},
+      'reader:unpublish':(_e,id)=>{cloud.books=cloud.books.filter(book=>book.id!==id);state.projects=state.projects.map(p=>p.id===id?{...p,published:false,auto:false}:p);return state},
     }
     for(const [channel,handler]of Object.entries(handlers)){ipcMain.removeHandler(channel);ipcMain.handle(channel,handler)}
     ipcMain.removeHandler('codex:models');ipcMain.handle('codex:models',()=>({message:'模拟目录，未调用模型',status:{configOptions:[]}}))
@@ -39,6 +39,8 @@ try {
   await panel.getByPlaceholder('https://txt.zhijianku.com').fill('https://reader.invalid')
   await panel.locator('input[type=password]').first().fill('1'.repeat(64))
   await panel.getByRole('button',{name:'保存连接',exact:true}).click()
+  const cloudOnly = panel.getByRole('button',{name:'下架《另一台电脑发布的书》',exact:true})
+  await cloudOnly.click(); await cloudOnly.waitFor({state:'hidden'})
   await panel.getByRole('button',{name:'检查阅读站',exact:true}).click(); await panel.getByText('阅读站连接正常。',{exact:true}).waitFor()
   await panel.getByPlaceholder('由作者设置，不开放读者注册').fill('模拟读者')
   await panel.getByPlaceholder('至少 10 位；修改已有账号时可留空').fill('fixture-password-123')
@@ -51,7 +53,9 @@ try {
   await panel.locator('select').first().selectOption(b.project.id); assert.equal(await panel.getByLabel('此书保存后自动同步').isChecked(),false)
   await panel.locator('select').first().selectOption(a.project.id); assert.equal(await panel.getByLabel('此书保存后自动同步').isChecked(),true)
   await panel.scrollIntoViewIfNeeded(); await page.screenshot({path:path.join(directory,'desktop-reader-settings.png')})
-  await panel.getByRole('button',{name:'下架此书',exact:true}).click(); await panel.getByText('书籍已下架，自动同步已关闭。本机稿件保持不变。',{exact:true}).waitFor()
+  await panel.getByRole('button',{name:'下架《阅读设置模拟甲书》',exact:true}).click()
+  await panel.getByText('书籍已从线上作者书架移除，本机自动同步已关闭。',{exact:true}).waitFor()
+  assert.equal(await panel.getByLabel('此书保存后自动同步').isChecked(),false)
   assert.deepEqual(errors,[])
   console.log(JSON.stringify({ok:true,fixtureDirectory:directory,cloud:'Mock only; production site not contacted'},null,2))
 }finally{await app?.close()}

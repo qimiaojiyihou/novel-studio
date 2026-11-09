@@ -183,8 +183,15 @@ test('desktop publisher binds one book, incrementally syncs drafts, blocks stale
     await publisher.publish(a.project.id)
     assert.equal(remote.store.chapter(a.project.id, a.chapters[0].id).body, '上传中又修改')
     assert.equal(repo.getChapter({ projectId:b.project.id,chapterId:b.chapters[0].id }).manuscript, '乙书私稿')
+    publish(remote.store, manifest({ bookId:'cloud-only', publicationId:'cloud-release' }))
+    assert.equal(publisher.status().projects.some(p => p.id === 'cloud-only'), false)
+    await assert.rejects(publisher.unpublish('cloud-only', { origin:remote.origin, revision:'stale-revision' }), /发布状态已变化/)
+    await publisher.unpublish('cloud-only', { origin:remote.origin, revision:'cloud-release' })
+    assert.deepEqual(remote.store.books().map(book => book.id), [a.project.id])
+    assert.throws(() => remote.store.chapter('cloud-only', 'chapter-1'), /章节不存在/)
     await publisher.unpublish(a.project.id); assert.equal(publisher.status().projects.find(p => p.id === a.project.id).auto, false)
     await publisher.tick(); assert.equal(remote.store.books().length, 0)
+    assert.equal(repo.getChapter({ projectId:a.project.id,chapterId:a.chapters[0].id }).manuscript, '上传中又修改')
   } finally { publisher.stop(); await remote.close(); db.close(); f.cleanup() }
 })
 

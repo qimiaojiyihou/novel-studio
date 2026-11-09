@@ -168,10 +168,22 @@ export function createReaderPublisher(db, { encrypt, decrypt, allowLocal = false
   return { status, save, saveBook, publish, remote, tick, isBusy: () => busy,
     access: requireLogin => exclusive(() => request('/manage/access', 'PUT', { requireLogin })),
     account: input => exclusive(() => request('/manage/account', input.remove ? 'DELETE' : 'PUT', input)),
-    unpublish: projectId => exclusive(async () => {
-      if (!config().books[projectId]?.published) throw new Error('此书尚未由当前客户端发布')
+    unpublish: (projectId, confirmation) => exclusive(async () => {
+      const c = config()
+      if (confirmation && confirmation.origin !== c.origin) throw new Error('阅读站地址已变更，请刷新已发布书籍后重试')
+      const { books } = await remote()
+      const published = books.find(book => book.id === projectId)
+      if (!published || (confirmation && published.revision !== confirmation.revision)) {
+        throw new Error('此书的发布状态已变化，请刷新已发布书籍后重试')
+      }
       await request(`/manage/books/${projectId}`, 'DELETE', {})
-      const c = config(); c.books[projectId] = { ...c.books[projectId], auto: false, published: false, lastRevision: '', error: '' }; persist(c); metadataSeen.delete(projectId); progress.delete(projectId); return status()
+      if (c.books[projectId]) {
+        c.books[projectId] = { ...c.books[projectId], auto: false, published: false, lastRevision: '', syncedAt: '', chapterCount: 0, retryAt: 0, failures: 0, error: '' }
+        persist(c)
+      }
+      metadataSeen.delete(projectId)
+      progress.delete(projectId)
+      return status()
     }),
     stop() { stopped = true; for (const controller of controllers) controller.abort() },
   }

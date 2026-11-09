@@ -2814,12 +2814,15 @@ function registerIpc() {
   })
   ipcMain.handle('reader:account', (_event, payload) => readerPublication().account(payload))
   ipcMain.handle('reader:unpublish', async (_event, projectId) => {
-    const book = readerPublication().status().projects.find(p => p.id === projectId)
-    if (!book) throw new Error('书籍不存在')
+    const publisher = readerPublication(), { origin } = publisher.status()
+    const { books } = await publisher.remote()
+    const book = books.find(item => item.id === projectId)
+    if (!book) throw new Error('此书已下架，请刷新已发布书籍')
     const choice = await dialogOptions('showMessageBox', { type: 'warning', title: '下架书籍', message: `从阅读站撤下《${book.title}》？`,
-      detail: '同时关闭此书自动同步；本机正文保持不变。', buttons: ['取消', '确认下架'], defaultId: 0, cancelId: 0 })
+      detail: `目标：${origin}\n下架会从线上作者书架移除此书和已发布的章节，并关闭本机对此书的自动同步。之后可从本机重新发布。`,
+      buttons: ['取消', '确认下架'], defaultId: 0, cancelId: 0 })
     if (choice.response !== 1) return { cancelled: true }
-    return readerPublication().unpublish(projectId)
+    return publisher.unpublish(projectId, { origin, revision: book.revision })
   })
   const storageStatus = () => ({ ...readStorageConfig(app.getPath('userData')),
     directory: getLibraryDirectory(), databasePath: getDatabaseInfo().path,
