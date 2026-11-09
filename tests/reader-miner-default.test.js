@@ -38,7 +38,7 @@ test('miner initializes existing and future accounts once, preserving existing d
     await lib.handle('beta',`/sources/${oldSources[0].id}`,'DELETE',{})
     const custom={...oldSources[1],name:'用户自定义',version:'custom-version'}
     store.db.prepare('UPDATE network_sources SET name=?,version=?,config=? WHERE owner=? AND id=?').run(custom.name,custom.version,JSON.stringify(custom),'gamma',custom.id)
-    store.db.prepare('INSERT INTO network_books VALUES(?,?,?,?,?,?,?,?,?,?,?)').run('alpha','fixture-book',s.id,'模拟收藏','模拟作者','模拟简介',s.url+'/5947/',s.url+'/5947/','[]','rev','2026-10-17')
+    store.db.prepare('INSERT INTO network_books(owner,id,source_id,title,author,description,url,toc_url,chapters,revision,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)').run('alpha','fixture-book',s.id,'模拟收藏','模拟作者','模拟简介',s.url+'/5947/',s.url+'/5947/','[]','rev','2026-10-17')
     const before=store.db.prepare('SELECT * FROM network_sources ORDER BY owner,id').all(),books=store.db.prepare('SELECT * FROM network_books').all()
     const cookieBefore=(await lib.handle('alpha',`/sources/${s.id}/auth`,'GET',{})).hasCookie
     lib=createNetworkLibrary(store.db,{defaultSources:catalog,authKey:'fixture-key'})

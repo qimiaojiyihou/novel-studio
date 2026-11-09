@@ -24,7 +24,7 @@ test('global catalog fills every existing/new account once, preserves custom rul
     await lib.handle('gamma',`/sources/${second.id}`,'DELETE',{})
     const custom={...first,name:'我的自定义配置',version:'custom-version'}
     store.db.prepare('UPDATE network_sources SET name=?,config=?,version=? WHERE owner=? AND id=?').run(custom.name,JSON.stringify(custom),custom.version,'beta',first.id)
-    store.db.prepare('INSERT INTO network_books VALUES(?,?,?,?,?,?,?,?,?,?,?)').run('alpha','fixture-book',first.id,'收藏书','作者','简介',first.url+'/book',first.url+'/toc','[]','rev','2026-10-15')
+    store.db.prepare('INSERT INTO network_books(owner,id,source_id,title,author,description,url,toc_url,chapters,revision,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)').run('alpha','fixture-book',first.id,'收藏书','作者','简介',first.url+'/book',first.url+'/toc','[]','rev','2026-10-15')
     const before=JSON.stringify(store.db.prepare('SELECT * FROM network_books').all()),accountsBefore=JSON.stringify(store.db.prepare('SELECT * FROM accounts').all())
     const raw=[{...sampleSource,bookSourceName:'新版规则',ruleContent:{content:'#newcontent@text'},header:{Cookie:'never-share-this-secret'}},otherRaw,{...sampleSource,bookSourceName:'需兼容',bookSourceUrl:'https://pending.example.org',ruleContent:{content:'@js:java.readFile("private")'}},{...sampleSource,bookSourceName:'FQWeb模板',bookSourceUrl:'在此填写你的服务器地址'}]
     const pack=buildDefaultCatalog([raw],old)

@@ -37,6 +37,12 @@ export function openReaderStore(file, { now = () => Date.now() } = {}) {
     CREATE INDEX IF NOT EXISTS chapter_order ON chapters(book_id,no);
     CREATE TABLE IF NOT EXISTS publications(id TEXT PRIMARY KEY,book_id TEXT NOT NULL,base_revision TEXT NOT NULL,manifest TEXT NOT NULL,created INTEGER NOT NULL,committed INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE IF NOT EXISTS uploads(publication_id TEXT NOT NULL REFERENCES publications(id) ON DELETE CASCADE,chapter_id TEXT NOT NULL,body TEXT NOT NULL,PRIMARY KEY(publication_id,chapter_id));`)
+  if (!db.prepare('PRAGMA table_info(books)').all().some(column => column.name === 'added_at')) {
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      db.exec("ALTER TABLE books ADD COLUMN added_at TEXT NOT NULL DEFAULT ''; UPDATE books SET added_at=updated_at; COMMIT;")
+    } catch (error) { db.exec('ROLLBACK'); throw error }
+  }
   const one = (sql, ...args) => db.prepare(sql).get(...args)
   const all = (sql, ...args) => db.prepare(sql).all(...args)
   const run = (sql, ...args) => db.prepare(sql).run(...args)
@@ -142,7 +148,8 @@ export function openReaderStore(file, { now = () => Date.now() } = {}) {
         if (!row || digest(row.body) !== c.hash) fail(409, '部分章节尚未上传，旧版保持可读')
         return { ...c, body: row.body }
       })
-      run('INSERT INTO books VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET title=excluded.title,description=excluded.description,genre=excluded.genre,revision=excluded.revision,updated_at=excluded.updated_at', p.book_id, m.title, m.description, m.genre, p.id, new Date(now()).toISOString())
+      const publishedAt = new Date(now()).toISOString()
+      run('INSERT INTO books(id,title,description,genre,revision,updated_at,added_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET title=excluded.title,description=excluded.description,genre=excluded.genre,revision=excluded.revision,updated_at=excluded.updated_at', p.book_id, m.title, m.description, m.genre, p.id, publishedAt, publishedAt)
       const retained = new Set(chapters.map(c => c.id))
       for (const row of all('SELECT id FROM chapters WHERE book_id=?', p.book_id)) if (!retained.has(row.id)) run('DELETE FROM chapters WHERE book_id=? AND id=?', p.book_id, row.id)
       for (const c of chapters) run('INSERT INTO chapters VALUES(?,?,?,?,?,?) ON CONFLICT(book_id,id) DO UPDATE SET no=excluded.no,title=excluded.title,hash=excluded.hash,body=excluded.body WHERE chapters.hash<>excluded.hash OR chapters.no<>excluded.no OR chapters.title<>excluded.title', p.book_id, c.id, c.no, c.title, c.hash, c.body)

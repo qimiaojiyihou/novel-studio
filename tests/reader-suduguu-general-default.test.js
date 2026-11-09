@@ -60,7 +60,7 @@ test('existing and future accounts receive general source once without altering 
     await lib.handle('beta',`/sources/${priorSources[0].id}`,'DELETE',{})
     const custom={...priorSources[1],name:'用户通用配置',version:'fixture-custom'}
     store.db.prepare('UPDATE network_sources SET name=?,version=?,config=? WHERE owner=? AND id=?').run(custom.name,custom.version,JSON.stringify(custom),'gamma',custom.id)
-    store.db.prepare('INSERT INTO network_books VALUES(?,?,?,?,?,?,?,?,?,?,?)').run('alpha','fixture-book','487bc7703870e80ff275fe935370a76e','原专用源收藏','模拟作者','模拟简介',source.url+'/5947/',source.url+'/5947/','[]','rev','2026-10-17')
+    store.db.prepare('INSERT INTO network_books(owner,id,source_id,title,author,description,url,toc_url,chapters,revision,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)').run('alpha','fixture-book','487bc7703870e80ff275fe935370a76e','原专用源收藏','模拟作者','模拟简介',source.url+'/5947/',source.url+'/5947/','[]','rev','2026-10-17')
     const before=store.db.prepare('SELECT * FROM network_sources ORDER BY owner,id').all(),books=store.db.prepare('SELECT * FROM network_books').all()
     lib=createNetworkLibrary(store.db,{defaultSources:catalog,fetchPage:noFetch,authKey:'fixture-key'})
     for(const row of before)assert.deepEqual(store.db.prepare('SELECT * FROM network_sources WHERE owner=? AND id=?').get(row.owner,row.id),row)

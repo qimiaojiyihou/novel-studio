@@ -91,7 +91,7 @@ test('Biquge TW initializes all existing and new accounts, preserving books, pri
   await lib.handle('beta',`/sources/${prior.sources[0].id}`,'DELETE',{})
   const custom={...prior.sources[1],name:'用户规则',version:'fixture-custom'}
   store.db.prepare('UPDATE network_sources SET name=?,version=?,config=? WHERE owner=? AND id=?').run(custom.name,custom.version,JSON.stringify(custom),'custom',custom.id)
-  store.db.prepare('INSERT INTO network_books VALUES(?,?,?,?,?,?,?,?,?,?,?)').run('alpha','fixture-book',source.id,'模拟旧收藏','模拟作者','原创简介',source.url+'/book/1.html',source.url+'/book/1/','[]','rev','2026-10-21')
+  store.db.prepare('INSERT INTO network_books(owner,id,source_id,title,author,description,url,toc_url,chapters,revision,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)').run('alpha','fixture-book',source.id,'模拟旧收藏','模拟作者','原创简介',source.url+'/book/1.html',source.url+'/book/1/','[]','rev','2026-10-21')
   const protectedTables=store.db.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('network_sources','network_source_initializations') ORDER BY name").all().map(r=>r.name)
   const snapshot=()=>protectedTables.map(name=>[name,store.db.prepare('SELECT * FROM '+name+' ORDER BY rowid').all()])
   const before=snapshot(),oldSources=store.db.prepare('SELECT * FROM network_sources ORDER BY owner,id').all()

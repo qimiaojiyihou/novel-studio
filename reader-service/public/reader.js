@@ -1,9 +1,11 @@
 import { setupNetwork, createDirectoryCompletion } from './network.js'
+import { sortShelfBooks } from './shelf-order.js'
 const $ = id => document.getElementById(id)
 const routePage=()=>location.hash==='#find'?'search':location.hash==='#sources'?'sources':'shelf'
 let workspacePage=routePage(),workspaceSerial=0,libraryMode=workspacePage==='shelf'?'author':'network',readerId=''
 const bookAPI = id => `/api/${libraryMode === 'network' ? 'network/' : ''}books${id ? `/${id}` : ''}`
 const positionKey = id => libraryMode === 'network' ? `reader:network-position:${readerId}:${id}` : `reader:position:${id}`
+const shelfSortKey = () => `reader:shelf-sort:${readerId || 'public'}:${libraryMode}`
 const state = { book: null, chapter: null, page: 0, count: 1, stride: 0, serial: 0, tocPage: 0, tocDescending: false, pending: null }
 let shelfBooks = []
 const directoryJobs=createDirectoryCompletion({
@@ -161,12 +163,17 @@ async function shelf() {
   $('author-library').setAttribute('aria-pressed',String(libraryMode === 'author')); $('network-library').setAttribute('aria-pressed',String(libraryMode === 'network'))
   $('book-search').placeholder = libraryMode === 'network' ? '筛选收藏书名或作者' : '搜索书名或题材'
   const books = await api(bookAPI()); if (serial !== state.serial) return
-  shelfBooks = books; renderShelf()
+  shelfBooks = books
+  const sort = readLocal(shelfSortKey(), 'recent')
+  $('book-sort').value = ['recent', 'added', 'updated', 'title'].includes(sort) ? sort : 'recent'
+  renderShelf()
   await workspace(workspacePage,false)
 }
 function renderShelf() {
   const search = $('book-search').value.trim().toLocaleLowerCase()
-  const books = shelfBooks.filter(b => !search || `${b.title} ${b.genre}`.toLocaleLowerCase().includes(search)).sort((a,b) => $('book-sort').value === 'title' ? a.title.localeCompare(b.title,'zh-CN') : b.updated_at.localeCompare(a.updated_at))
+  const matching = shelfBooks.filter(b => !search || `${b.title} ${b.genre}`.toLocaleLowerCase().includes(search))
+  const readingTimes = new Map(matching.map(book => [book.id, readLocal(positionKey(book.id), null)?.readAt || 0]))
+  const books = sortShelfBooks(matching, $('book-sort').value, book => readingTimes.get(book.id))
   $('books').replaceChildren()
   $('shelf-summary').textContent = search ? `找到 ${books.length} 本书` : `${books.length} 本书 · ${libraryMode === 'network' ? '我的网络收藏' : '稿件随作者发布更新'}`
   if (!books.length) { const p = document.createElement('p'); p.className = 'shelf-empty'; p.textContent = search ? '没有找到这本书，试试其他关键词。' : libraryMode === 'network' ? '网络书架还空着，在上方搜索并加入书籍。' : '书架还空着，作者发布后会显示在这里。'; $('books').append(p) }
@@ -263,7 +270,7 @@ function position() {
   const content = $('pages').textContent, offset = currentOffset()
   return { chapterId: state.chapter?.id, chapterNo: state.chapter?.no, offset, anchor: content.slice(offset, offset + 40), length: content.length, hash: state.chapter?.hash }
 }
-function savePosition() { if (state.book && state.chapter) saveLocal(positionKey(state.book.id), position()) }
+function savePosition() { if (state.book && state.chapter) saveLocal(positionKey(state.book.id), { ...position(), readAt: Date.now() }) }
 function paginate(saved = null, lastPage = false) {
   if (!state.chapter || $('reader').hidden) return
   clearTimeout(resizeTimer)
@@ -427,7 +434,8 @@ $('toc-number').onkeydown = event => { if (event.key === 'Enter') { event.preven
 $('toc-number').oninput = () => { $('toc-error').hidden = true }
 $('toc-range').onchange = () => { state.tocPage = Number($('toc-range').value); directory() }
 $('toc-search').oninput = () => { state.tocPage = 0; directory() }
-$('book-search').oninput = renderShelf; $('book-sort').onchange = renderShelf
+$('book-search').oninput = renderShelf
+$('book-sort').onchange = () => { saveLocal(shelfSortKey(), $('book-sort').value); renderShelf() }
 function changePreferences(values) { cancelMotion(); const saved = position(); Object.assign(preferences, values); applyPreferences(); saveLocal('reader:preferences', preferences); paginate(saved) }
 for (const [control, field] of [['font-size', 'size'], ['line-height', 'line'], ['font-family', 'font'], ['theme', 'theme'], ['page-effect','effect']]) $(control).oninput = () => changePreferences({ [field]:$(control).value })
 bind('font-smaller', () => changePreferences({ size:preferences.size - 1 })); bind('font-larger', () => changePreferences({ size:preferences.size + 1 }))

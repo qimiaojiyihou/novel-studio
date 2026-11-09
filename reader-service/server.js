@@ -92,7 +92,7 @@ export async function startReaderServer({ databasePath, adminToken, origin, host
         if (match) return json(store.chapter(match[1], match[2]))
         fail(404, '阅读接口不存在')
       }
-      const files = { '/': ['index.html', 'text/html'], '/source-auth-callback':['source-auth-callback.html','text/html'], '/source-auth-callback.js':['source-auth-callback.js','text/javascript'], '/source-auth-receipt.js':['source-auth-receipt.js','text/javascript'], '/reader.js': ['reader.js', 'text/javascript'], '/network.js': ['network.js', 'text/javascript'], '/reader.css': ['reader.css', 'text/css'], '/manifest.webmanifest': ['manifest.webmanifest', 'application/manifest+json'], '/icon.svg': ['icon.svg', 'image/svg+xml'] }
+      const files = { '/': ['index.html', 'text/html'], '/source-auth-callback':['source-auth-callback.html','text/html'], '/source-auth-callback.js':['source-auth-callback.js','text/javascript'], '/source-auth-receipt.js':['source-auth-receipt.js','text/javascript'], '/reader.js': ['reader.js', 'text/javascript'], '/shelf-order.js': ['shelf-order.js', 'text/javascript'], '/network.js': ['network.js', 'text/javascript'], '/reader.css': ['reader.css', 'text/css'], '/manifest.webmanifest': ['manifest.webmanifest', 'application/manifest+json'], '/icon.svg': ['icon.svg', 'image/svg+xml'] }
       if (!['GET', 'HEAD'].includes(req.method) || !files[route]) fail(404, '页面不存在')
       const [file, mime] = files[route]
       if(route.startsWith('/source-auth-callback'))res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")

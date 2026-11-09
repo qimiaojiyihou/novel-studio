@@ -18,6 +18,12 @@ export function createNetworkLibrary(db, { fetchPage = createSourceFetcher(), no
     CREATE TABLE IF NOT EXISTS network_books(owner TEXT NOT NULL,id TEXT NOT NULL,source_id TEXT NOT NULL,title TEXT NOT NULL,author TEXT NOT NULL,description TEXT NOT NULL,url TEXT NOT NULL,toc_url TEXT NOT NULL,chapters TEXT NOT NULL DEFAULT '[]',revision TEXT NOT NULL DEFAULT '',updated_at TEXT NOT NULL,PRIMARY KEY(owner,id),FOREIGN KEY(owner,source_id) REFERENCES network_sources(owner,id) ON DELETE CASCADE);
     CREATE TABLE IF NOT EXISTS network_source_initializations(owner TEXT PRIMARY KEY REFERENCES accounts(username) ON DELETE CASCADE,version TEXT NOT NULL,report TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS network_source_health(owner TEXT NOT NULL,id TEXT NOT NULL,version TEXT NOT NULL,result TEXT NOT NULL,PRIMARY KEY(owner,id),FOREIGN KEY(owner,id) REFERENCES network_sources(owner,id) ON DELETE CASCADE);`)
+  if (!db.prepare('PRAGMA table_info(network_books)').all().some(column => column.name === 'added_at')) {
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      db.exec("ALTER TABLE network_books ADD COLUMN added_at TEXT NOT NULL DEFAULT ''; UPDATE network_books SET added_at=updated_at; COMMIT;")
+    } catch (error) { db.exec('ROLLBACK'); throw error }
+  }
   const get = (sql,...args)=>db.prepare(sql).get(...args), all=(sql,...args)=>db.prepare(sql).all(...args), run=(sql,...args)=>db.prepare(sql).run(...args)
   const storageKey=authKey||randomBytes(32),auth=createSourceAuth(db,storageKey),bookState=createSourceState(db,storageKey),scope=new AsyncLocalStorage()
   const authorization=createSourceAuthorization({resolve:(owner,id)=>source(owner,id),profile:auth.profile,now})
@@ -224,7 +230,7 @@ export function createNetworkLibrary(db, { fetchPage = createSourceFetcher(), no
       }catch(error){db.exec('ROLLBACK');throw error}
       return {removed,skipped}
     }
-    if(route==='/books' && method==='GET') return all('SELECT b.id,b.title,b.author,b.description,b.author AS genre,b.revision,b.updated_at,s.name AS sourceName,json_array_length(b.chapters) AS chapterCount FROM network_books b JOIN network_sources s ON s.owner=b.owner AND s.id=b.source_id WHERE b.owner=? ORDER BY b.updated_at DESC',owner).map(b=>({...b,network:true}))
+    if(route==='/books' && method==='GET') return all('SELECT b.id,b.title,b.author,b.description,b.author AS genre,b.revision,b.updated_at,b.added_at,s.name AS sourceName,json_array_length(b.chapters) AS chapterCount FROM network_books b JOIN network_sources s ON s.owner=b.owner AND s.id=b.source_id WHERE b.owner=? ORDER BY b.added_at DESC',owner).map(b=>({...b,network:true}))
     const originMatch=route.match(/^\/sources\/([a-f0-9]{32})\/origins$/)
     if(originMatch&&method==='PUT'){
       const s=source(owner,originMatch[1],true),health=get('SELECT result,version FROM network_source_health WHERE owner=? AND id=?',owner,s.id),origin=sourceOrigins([input.origin])[0]
@@ -338,7 +344,10 @@ export function createNetworkLibrary(db, { fetchPage = createSourceFetcher(), no
         try{
           let changed
           if(existing){changed=run('UPDATE network_books SET title=?,author=?,description=?,toc_url=?,chapters=?,revision=?,updated_at=? WHERE owner=? AND id=? AND revision=?',title,author,description,tocURL,JSON.stringify(chapters),digest(JSON.stringify(chapters)),new Date(now()).toISOString(),owner,bookId,existing.revision).changes;if(!changed)fail(409,'收藏或目录已变化，请重试')}
-          else changed=run('INSERT OR IGNORE INTO network_books(owner,id,source_id,title,author,description,url,toc_url,chapters,revision,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)',owner,bookId,s.id,title,author,description,result.url,tocURL,JSON.stringify(chapters),digest(JSON.stringify(chapters)),new Date(now()).toISOString()).changes
+          else {
+            const addedAt = new Date(now()).toISOString()
+            changed=run('INSERT OR IGNORE INTO network_books(owner,id,source_id,title,author,description,url,toc_url,chapters,revision,updated_at,added_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',owner,bookId,s.id,title,author,description,result.url,tocURL,JSON.stringify(chapters),digest(JSON.stringify(chapters)),addedAt,addedAt).changes
+          }
           if(changed)bookState.save(owner,bookId,s.version,bookState.empty(),session(s).state());db.exec('COMMIT')
         }catch(error){db.exec('ROLLBACK');throw error}
         return present(book(owner,bookId))

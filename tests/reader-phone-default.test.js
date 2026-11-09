@@ -44,7 +44,7 @@ test('phone defaults upgrade every account once preserving custom/deleted/disabl
   const custom={...phone,name:'用户规则',version:'fixture-custom'}
   store.db.prepare('UPDATE network_sources SET name=?,version=?,config=? WHERE owner=? AND id=?').run(custom.name,custom.version,JSON.stringify(custom),'custom',target)
   await lib.handle('deleted',`/sources/${target}`,'DELETE',{})
-  store.db.prepare('INSERT INTO network_books VALUES(?,?,?,?,?,?,?,?,?,?,?)').run('alpha','fixture-book',target,'模拟收藏','模拟作者','模拟简介',phone.url+'/book/',phone.url+'/book/','[]','rev','2026-10-17')
+  store.db.prepare('INSERT INTO network_books(owner,id,source_id,title,author,description,url,toc_url,chapters,revision,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)').run('alpha','fixture-book',target,'模拟收藏','模拟作者','模拟简介',phone.url+'/book/',phone.url+'/book/','[]','rev','2026-10-17')
   const tables=store.db.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('network_sources','network_source_initializations') ORDER BY name").all().map(r=>r.name)
   const snapshot=()=>tables.map(name=>[name,store.db.prepare('SELECT * FROM '+name).all()])
   const before=snapshot(),sources=store.db.prepare('SELECT * FROM network_sources ORDER BY owner,id').all()
