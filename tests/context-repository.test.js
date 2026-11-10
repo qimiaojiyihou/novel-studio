@@ -6,6 +6,10 @@ import { once } from 'node:events'
 import { runMigrations } from '../electron/database-migrations.js'
 import { createContextRepository } from '../electron/context-repository.js'
 import { createModelGateway } from '../electron/model-gateway.js'
+import { inlineRevisionMessages } from '../electron/manuscript-patches.js'
+import { buildContextDelta } from '../electron/context-reuse.js'
+import { compilePrompt } from '../electron/prompt-compiler.js'
+import { dependencyDigest } from '../electron/creative-context.js'
 
 function setup(targetVersion) {
   const database = new DatabaseSync(':memory:')
@@ -192,4 +196,115 @@ test('unlimited context reaches generation intact and model capacity errors stil
     assert.equal(path, '/chat/completions')
     assert.ok(body.messages.some(({ content }) => content.includes(foundation)))
   }
+})
+
+test('local revision sends only scoped reference text once, even with no project budget', (t) => {
+  const { database, repository, now } = setup()
+  t.after(() => database.close())
+  const insert = database.prepare('INSERT INTO planning_entities (id,project_id,kind,title,position,data_json,created_at,updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+  insert.run('volume', 'project-1', 'volume', '蓝色钥匙全卷规划', 1, JSON.stringify({ summary: '无关卷纲'.repeat(60000) }), now(), now())
+  insert.run('hero', 'project-1', 'character', '周宁（主角）', 2, JSON.stringify({ voice: '说话简短', repairRevision: '旧修订历史'.repeat(20000) }), now(), now())
+  database.prepare("INSERT INTO planning_documents (project_id,kind,content_json,created_at,updated_at) VALUES ('project-1','world',?,?,?)")
+    .run(JSON.stringify({ hardRules: '蓝色钥匙只能在午夜使用' }), now(), now())
+  database.prepare("UPDATE knowledge_items SET knowledge_scope_json=? WHERE id='knowledge-key'").run('{"author":true}')
+  repository.updateContextProfile({ projectId: 'project-1', contextBudgetUnlimited: true })
+
+  const manuscript = '周宁摸到外套里的蓝色钥匙。'
+  const input = { projectId: 'project-1', chapterId: 'chapter-5', instruction: '修顺周宁这句话，蓝色钥匙，保留原有规则。' }
+  const normal = repository.buildGenerationContext({ ...input, creativePackVersion: '1.3.0' })
+  assert.ok(normal.text.length > 200000)
+  const scope = { kind: 'selection', from: 0, to: manuscript.length }
+  const scoped = repository.buildGenerationContext({ ...input, localRevision: { scope, text: manuscript } })
+  const action = { instruction: input.instruction, modificationScope: scope,
+    patchSource: { text: manuscript, digest: 'original-digest', protections: [{ start_offset: 2, end_offset: 4, text: '保护正文' }] } }
+  const [, message] = inlineRevisionMessages({ action, context: scoped })
+  assert.equal(scoped.diagnostics.retrieval, 'local-revision')
+  assert.ok(message.content.length < 12000)
+  assert.equal(message.content.split('蓝色钥匙只能在午夜使用').length, 2)
+  assert.equal(message.content.split(manuscript).length, 2)
+  assert.match(message.content, /说话简短/u)
+  assert.match(message.content, /前一章结尾/u)
+  assert.match(message.content, /sourceDigest：original-digest/u)
+  assert.match(message.content, /保护范围：\[\{"from":2,"to":4\}\]/u)
+  assert.doesNotMatch(message.content, /无关卷纲|旧修订历史|保护正文|"items"|"targetKey"/u)
+  const delta = buildContextDelta({ currentContext: scoped, conversationScopeKey: 'same',
+    previousSnapshot: { conversationScopeKey: 'same', contextSources: normal.sources } })
+  assert.match(inlineRevisionMessages({ action, context: delta, isDelta: true })[1].content, /世界硬规则摘录/u)
+  assert.equal(database.prepare("SELECT length(data_json) AS size FROM planning_entities WHERE id='volume'").get().size > 150000, true)
+})
+
+test('new chapter drafts deduplicate exact planning facts without losing scope or source tracking', (t) => {
+  const { database, repository, now } = setup()
+  t.after(() => database.close())
+  database.exec("UPDATE chapters SET manuscript='' WHERE id='chapter-5'")
+  const rule = '蓝色钥匙只能在午夜使用'
+  const character = '周宁专门修理旧车站的机械钟'
+  const stationRule = '旧车站的北门只在钟响后开启'
+  const originalPlan = JSON.stringify({ hardRules: rule, costs: '开门后只能停留三分钟' })
+  database.prepare("INSERT INTO planning_documents (project_id,kind,content_json,created_at,updated_at) VALUES ('project-1','world',?,?,?)").run(originalPlan, now(), now())
+  database.prepare("INSERT INTO planning_entities (id,project_id,kind,title,position,data_json,created_at,updated_at) VALUES ('person','project-1','character','周宁',1,?,?,?)")
+    .run(JSON.stringify({ role: character, voice: '短句为主' }), now(), now())
+  database.prepare("INSERT INTO planning_entities (id,project_id,kind,title,position,data_json,created_at,updated_at) VALUES ('station','project-1','world','旧车站',2,?,?,?)")
+    .run(JSON.stringify({ rules: stationRule, summary: '北门上有一面机械钟' }), now(), now())
+  const insert = database.prepare(`INSERT INTO knowledge_items (id,project_id,kind,title,content_json,source_type,source_id,status,
+    position,created_at,updated_at,knowledge_scope_json,effective_from_chapter) VALUES (?,'project-1','fact',?,?,?,?,'open',2,?,?,?,?)`)
+  const add = (id, title, content, type = 'manual', sourceId = '', scope = { author: true }, from = null) => {
+    insert.run(id, title, JSON.stringify(content), type, sourceId, now(), now(), JSON.stringify(scope), from)
+  }
+  add('world-copy', '蓝色钥匙规划投影', { statement: rule, category: 'world', scope: '全书已确认规划' }, 'planning', 'document:world:hardRules')
+  add('character-copy', '人物：周宁', { statement: character, category: 'character', scope: '规划卡片' }, 'planning', 'entity:person')
+  add('station-copy', '旧车站北门', { statement: stationRule, category: '规则' })
+  add('scoped', '蓝色钥匙知情限制', { statement: rule }, 'manual', '', { author: true, characters: ['周宁'] })
+  add('timed', '蓝色钥匙时效限制', { statement: rule }, 'manual', '', { author: true }, 5)
+  add('hypothesis', '蓝色钥匙待核实内容', { statement: rule, certainty: '待核实' })
+  add('qualified-projection', '蓝色钥匙引用但限制知情',
+    { statement: rule, category: 'world', scope: '仅周宁知道', designVersion: '作者补充版本' }, 'manual', 'document:world:hardRules',
+    { author: true, characters: ['周宁'] }, 5)
+  add('different', '蓝色钥匙例外', { statement: '蓝色钥匙在日出前可以紧急使用' })
+  const stored = database.prepare('SELECT id,content_json,knowledge_scope_json FROM knowledge_items ORDER BY id').all()
+  repository.updateContextProfile({ projectId: 'project-1', contextBudgetUnlimited: true })
+  const draft = { task: 'chapter', intent: 'draft', projectId: 'project-1', chapterId: 'chapter-5', instruction: '蓝色钥匙。周宁。旧车站。' }
+  const modern = repository.buildGenerationContext({ ...draft, creativePackVersion: '1.3.0' })
+  const legacy = repository.buildGenerationContext({ ...draft, creativePackVersion: '1.2.0' })
+  repository.updateContextProfile({ projectId: 'project-1', contextBudgetUnlimited: false, maxContextChars: 24000 })
+  const bounded = repository.buildGenerationContext({ ...draft, creativePackVersion: '1.3.0' })
+  for (const context of [modern, legacy, bounded]) {
+    const prompt = compilePrompt({ ...draft, project: { id: 'project-1' }, chapter: { id: 'chapter-5' }, longContext: context })
+      .messages.map(({ content }) => content).join('\n')
+    assert.equal(prompt.split(rule).length - 1, 4, 'world rule plus scoped, timed and uncertain copies')
+    assert.equal(prompt.split(character).length - 1, 1)
+    assert.equal(prompt.split(stationRule).length - 1, 1)
+    assert.match(prompt, /北门上有一面机械钟/u)
+    assert.match(prompt, /短句为主/u)
+    assert.match(prompt, /待核实/u)
+    assert.match(prompt, /"characters":\["周宁"\]/u)
+    assert.match(prompt, /world\.hardRules/u)
+    assert.match(prompt, /作者补充版本/u)
+    assert.match(prompt, /仅周宁知道/u)
+    assert.match(prompt, /蓝色钥匙在日出前可以紧急使用/u)
+    assert.ok(context.diagnostics.deduplicated.includes('knowledge_item:world-copy:content'))
+    assert.ok(context.diagnostics.deduplicated.includes('knowledge_item:knowledge-key:content'))
+    assert.equal(context.diagnostics.truncated, false)
+  }
+  const alias = modern.sources.find(({ targetKey }) => targetKey === 'knowledge_item:world-copy:content')
+  assert.equal(alias.digest, dependencyDigest(database, alias.targetKey))
+  assert.ok(!modern.items.some(item => item.targetKey === alias.targetKey))
+  const rewrite = repository.buildGenerationContext({ ...draft, intent: 'rewrite', creativePackVersion: '1.3.0' })
+  assert.equal(rewrite.diagnostics.deduplicated, undefined)
+  assert.ok(rewrite.text.split(rule).length > modern.text.split(rule).length)
+  assert.equal(database.prepare("SELECT content_json FROM planning_documents WHERE kind='world'").get().content_json, originalPlan)
+  assert.deepEqual(database.prepare('SELECT id,content_json,knowledge_scope_json FROM knowledge_items ORDER BY id').all(), stored)
+})
+
+test('legacy drafts retain a knowledge fact if the canonical planning block was clipped', (t) => {
+  const { database, repository } = setup()
+  t.after(() => database.close())
+  database.prepare("UPDATE planning_documents SET content_json=? WHERE kind='foundation'").run(JSON.stringify({ premise: '设定'.repeat(6000) }))
+  database.prepare("INSERT INTO planning_documents (project_id,kind,content_json,created_at,updated_at) VALUES ('project-1','world',?,'a','a')")
+    .run(JSON.stringify({ hardRules: '蓝色钥匙只能在午夜使用', history: '历史'.repeat(6000) }))
+  repository.updateContextProfile({ projectId: 'project-1', maxContextChars: 12000 })
+  const context = repository.buildGenerationContext({ task: 'chapter', intent: 'draft', projectId: 'project-1', chapterId: 'chapter-5', creativePackVersion: '1.2.0' })
+  assert.equal(context.diagnostics.truncated, true)
+  assert.ok(context.diagnostics.knowledgeItemIds.includes('knowledge-key'))
+  assert.match(context.text, /蓝色钥匙只能在午夜使用/u)
 })

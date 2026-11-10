@@ -1,7 +1,7 @@
 function sourceMap(sources = []) {
   return new Map((Array.isArray(sources) ? sources : [])
     .filter((source) => source?.targetKey)
-    .map((source) => [source.targetKey, source.digest || '']))
+    .map((source) => [source.targetKey, source.promptDigest || source.digest || '']))
 }
 
 export function buildContextDelta({ currentContext, previousSnapshot, conversationScopeKey, previousStepId = '' } = {}) {
@@ -10,7 +10,7 @@ export function buildContextDelta({ currentContext, previousSnapshot, conversati
   if (!conversationScopeKey || previousSnapshot?.conversationScopeKey !== conversationScopeKey || !items.length || !previousSources.length) return null
 
   const previous = sourceMap(previousSources)
-  const changed = items.filter((item) => previous.get(item.targetKey) !== item.digest)
+  const changed = items.filter((item) => previous.get(item.targetKey) !== (item.promptDigest || item.digest))
   const unchangedCount = items.length - changed.length
   const text = changed.length
     ? [

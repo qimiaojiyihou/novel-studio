@@ -104,6 +104,15 @@ function contentText(content, keys = []) {
   return keys.map((key) => cleanText(content?.[key])).filter(Boolean).join('；')
 }
 
+export function planningEntityFactFields(kind) {
+  return kind === 'character' ? ['role', 'identity', 'desire', 'secret']
+    : kind === 'world' ? ['summary', 'rules', 'storyUse'] : ['goal', 'conflict', 'arc', 'ending']
+}
+
+export function planningEntityFactText(entity, data) {
+  return contentText(data, planningEntityFactFields(entity.kind))
+}
+
 export function createKnowledgeRepository(database, {
   now = () => new Date().toISOString(),
   createId = (prefix) => `${prefix}-${randomUUID()}`,
@@ -334,11 +343,7 @@ export function createKnowledgeRepository(database, {
     const entities = database.prepare('SELECT id, kind, title, data_json FROM planning_entities WHERE project_id = ? ORDER BY kind, position').all(projectId)
     for (const entity of entities) {
       const data = parseJson(entity.data_json)
-      const statement = contentText(data, entity.kind === 'character'
-        ? ['role', 'identity', 'desire', 'secret']
-        : entity.kind === 'world'
-          ? ['summary', 'rules', 'storyUse']
-          : ['goal', 'conflict', 'arc', 'ending'])
+      const statement = planningEntityFactText(entity, data)
       if (!statement && !cleanText(entity.title)) continue
       records.push({
         kind: 'fact',

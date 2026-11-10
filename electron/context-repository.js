@@ -1,4 +1,5 @@
-import { buildCreativeContext } from './creative-context.js'
+import { buildCreativeContext, knowledgeValue } from './creative-context.js'
+import { createDraftContextDeduper, isChapterFirstDraft } from './draft-context-dedupe.js'
 import { COMPACT_HANDOFF_MODE } from './chapter-handoff.js'
 
 const PROFILE_DEFAULTS = Object.freeze({
@@ -262,7 +263,8 @@ export function createContextRepository(database, { now = () => new Date().toISO
 
   function knowledgeCandidates(projectId, queryTerms) {
     const items = database.prepare(`
-      SELECT id, kind, title, content_json, source_type, position, updated_at
+      SELECT id, kind, title, content_json, source_type, source_id, status, position, updated_at,
+             effective_from_chapter, effective_to_chapter, knowledge_scope_json, evidence_json, source_digest
       FROM knowledge_items
       WHERE project_id = ? AND status = 'open'
       ORDER BY updated_at DESC, position
@@ -274,6 +276,7 @@ export function createContextRepository(database, { now = () => new Date().toISO
         kind: row.kind,
         title: row.title,
         text: cleanText(text),
+        row,
         score: overlapScore(queryTerms, termsFor(text)) + (row.kind === 'fact' ? 1 : 0),
       }
     })
@@ -329,11 +332,13 @@ export function createContextRepository(database, { now = () => new Date().toISO
     const profile = ensureProfile(projectId)
     const budget = profile.contextBudgetUnlimited ? null : profile.maxContextChars
     const pack = database.prepare('SELECT pack_version FROM project_pack_bindings WHERE project_id = ?').get(projectId)
-    if (input.creativePackVersion === '1.3.0' || (!input.creativePackVersion && pack?.pack_version === '1.3.0')) return buildCreativeContext(database, { ...input, budget })
+    if (input.localRevision || input.creativePackVersion === '1.3.0' || (!input.creativePackVersion && pack?.pack_version === '1.3.0')) return buildCreativeContext(database, { ...input, budget })
     const memories = syncChapterMemories(projectId)
     const chapters = database.prepare('SELECT * FROM chapters WHERE project_id = ? ORDER BY chapter_no').all(projectId)
     const chapter = chapters.find((item) => item.id === input.chapterId) || chapters[0]
     if (!chapter) throw new Error('项目中还没有章节')
+    const deduper = isChapterFirstDraft(input, chapter) ? createDraftContextDeduper() : null
+    const deduplicated = []
     const card = parseJson(chapter.card_json, {})
     const queryText = [project.title, project.genre, project.idea, chapter.title, JSON.stringify(card), chapter.scene_plan, input.styleText, input.instruction].join(' ')
     const queryTerms = termsFor(queryText)
@@ -346,9 +351,7 @@ export function createContextRepository(database, { now = () => new Date().toISO
       .filter((memory) => memory.score > 0)
       .sort((left, right) => right.score - left.score || right.chapterNo - left.chapterNo)
       .slice(0, profile.relevantChapterCount)
-    const knowledge = knowledgeCandidates(projectId, queryTerms)
-      .sort((left, right) => right.score - left.score)
-      .slice(0, profile.knowledgeLimit)
+    const rankedKnowledge = knowledgeCandidates(projectId, queryTerms).sort((left, right) => right.score - left.score)
     const stateSnapshots = acceptedStateSnapshots(
       projectId,
       Number(chapter.chapter_no),
@@ -356,7 +359,7 @@ export function createContextRepository(database, { now = () => new Date().toISO
     )
 
     const planningDocuments = database.prepare('SELECT kind, content_json FROM planning_documents WHERE project_id = ? ORDER BY kind').all(projectId)
-    const planningEntities = database.prepare('SELECT kind, title, data_json FROM planning_entities WHERE project_id = ? ORDER BY kind, position').all(projectId)
+    const planningEntities = database.prepare('SELECT id, kind, title, data_json FROM planning_entities WHERE project_id = ? ORDER BY kind, position').all(projectId)
     const planning = {
       documents: Object.fromEntries(planningDocuments.map((item) => [item.kind, parseJson(item.content_json, {})])),
       entities: planningEntities.map((item) => ({ kind: item.kind, title: item.title, ...parseJson(item.data_json, {}) })),
@@ -369,6 +372,7 @@ export function createContextRepository(database, { now = () => new Date().toISO
     const append = (label, content) => {
       const result = appendWithinBudget(sections, label, content, budget)
       truncated ||= result.truncated
+      return result
     }
     append('当前创作任务', [
       `项目：${project.title}`,
@@ -380,7 +384,11 @@ export function createContextRepository(database, { now = () => new Date().toISO
       cleanText(chapter.manuscript) ? budget === null ? `当前正文：${chapter.manuscript}`
         : `当前正文尾部：${excerpt(chapter.manuscript, Math.min(5000, Math.floor(budget * 0.18)))}` : '',
     ].filter(Boolean).join('\n'))
-    append('已确认故事规划', planningExcerpt)
+    const includedPlanning = append('已确认故事规划', planningExcerpt)
+    if (deduper && planningExcerpt === planningJson && includedPlanning.used && !includedPlanning.truncated) {
+      for (const [kind, data] of Object.entries(planning.documents)) deduper.addDocument(kind, data)
+      planningEntities.forEach((entity) => deduper.addEntity(entity, parseJson(entity.data_json, {})))
+    }
     if (stateSnapshots.length) {
       const snapshotLimit = Math.max(800, Math.floor(profile.chapterSummaryChars * 1.5))
       append('已确认章后状态', stateSnapshots.map((snapshot) => (
@@ -397,6 +405,22 @@ export function createContextRepository(database, { now = () => new Date().toISO
     }
     if (recent.length) append('最近章节记忆', recent.map((memory) => memory.summary).join('\n\n'))
     if (relevant.length) append('相关旧章召回', relevant.map((memory) => memory.summary).join('\n\n'))
+    const knowledge = []
+    for (const item of rankedKnowledge) {
+      if (knowledge.length >= profile.knowledgeLimit) break
+      const value = deduper && item.row ? knowledgeValue(item.row) : null
+      if (value && deduper.duplicate(item.row, value)) {
+        deduplicated.push(`knowledge_item:${item.id}:content`)
+        continue
+      }
+      const rendered = value ? deduper.compactLinkedFact(item.row, value) : value
+      if (value) deduper.addFact(item.row, value)
+      if (rendered !== value) deduplicated.push(`knowledge_item:${item.id}:content`)
+      const body = rendered !== value ? cleanText(`${item.title} ${Object.values(rendered.content).join(' ')}`) : item.text
+      const scoped = value && (value.effectiveFrom != null || value.effectiveTo != null
+        || value.scope?.author !== true || Object.keys(value.scope).length !== 1)
+      knowledge.push({ ...item, text: scoped ? `${body}（知情范围：${JSON.stringify(value.scope)}；生效：${value.effectiveFrom ?? '不限'} 至 ${value.effectiveTo ?? '不限'}）` : body })
+    }
     if (knowledge.length) append('相关知识与连续性', knowledge.map((item) => `[${item.kind}] ${item.text}`).join('\n'))
 
     const text = sections.join('')
@@ -410,6 +434,7 @@ export function createContextRepository(database, { now = () => new Date().toISO
         knowledgeItemIds: knowledge.map((item) => item.id),
         stateCandidateIds: stateSnapshots.map((snapshot) => snapshot.id),
         memoryCount: memories.length,
+        ...(deduper ? { deduplicated } : {}),
         truncated,
       },
     }

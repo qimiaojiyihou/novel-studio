@@ -34,3 +34,32 @@ export const TEXT_PATCH_SCHEMA = { type: 'object', additionalProperties: false, 
   sourceDigest: { type: 'string' }, patches: { type: 'array', minItems: 1, items: { type: 'object', additionalProperties: false,
     required: ['from', 'to', 'before', 'after'], properties: { from: { type: 'integer' }, to: { type: 'integer' }, before: { type: 'string' }, after: { type: 'string' } } } },
 } }
+
+// Keep dependency/delta bookkeeping out of the text sent to the model.
+export function inlineRevisionMessages({ action, context, candidate, isDelta = false, repairInstruction = '' }) {
+  const reference = context?.text || ''
+  if (action?.conversationMode === 'discuss') {
+    const discussion = candidate?.payload?.manuscript ?? JSON.stringify(candidate?.payload || {})
+    return [
+      { role: 'system', content: '本轮只讨论、解释或提出方案，不生成替换候选。材料仅供讨论，未确认内容不是正式事实。返回 JSON {"text":"答复"}。' },
+      { role: 'user', content: [
+        `正式上下文${isDelta ? '增量' : ''}：\n${reference}`,
+        isDelta ? '沿用同一对话中的上一候选。' : `讨论材料：\n${discussion}`,
+        `问题：${action.instruction}`, repairInstruction,
+      ].filter(Boolean).join('\n') },
+    ]
+  }
+  if (!action?.patchSource || action.modificationScope?.kind === 'whole') return null
+  const { digest, protections = [], text } = action.patchSource
+  const protectedRanges = protections.filter(item => item.active !== 0)
+    .map(({ start_offset, end_offset }) => ({ from: start_offset, to: end_offset }))
+  return [
+    { role: 'system', content: `只修改作者要求涉及的局部，其他原文逐字保留。from/to 使用 UTF-16 偏移，before 必须与原文一致。以本轮原文和局部约束为准，不沿用其他章节的修订要求。遵守选区与保护段落；不扩大到整章。返回结构：${JSON.stringify(TEXT_PATCH_SCHEMA)}` },
+    { role: 'user', content: [
+      `作者要求：${action.instruction}`,
+      `正式约束${isDelta ? '增量' : ''}：\n${reference}`,
+      `范围：${JSON.stringify(action.modificationScope)}`, `sourceDigest：${digest}`,
+      `保护范围：${JSON.stringify(protectedRanges)}`, `原文：\n${text}`, repairInstruction,
+    ].filter(Boolean).join('\n') },
+  ]
+}

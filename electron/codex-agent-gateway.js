@@ -11,7 +11,17 @@ import { AgentEventBuffer } from './agent-event-buffer.js'
 const ADAPTER_VERSION = '1.6.2'
 const MAX_EXEC_OUTPUT = 8 * 1024 * 1024
 const DESKTOP_PROJECT_MARKER = '.novel-studio-codex-registered'
-const FALLBACK_BLOCKED = /(auth|login|permission|approval|cancel|reject|denied|schema|invalid request|provider|rate.?limit|quota|认证|登录|审批|权限|拒绝|取消|凭据|密钥)/i
+const FALLBACK_BLOCKED = /(auth|login|permission|approval|cancel|reject|denied|schema|invalid request|provider|rate.?limit|quota|input_too_large|input exceeds the maximum length|认证|登录|审批|权限|拒绝|取消|凭据|密钥)/i
+// Codex turn/start input limit, separate from the model's token window.
+const CODEX_PROMPT_MAX_CHARS = 1_048_576
+
+function assertCodexPromptLength(prompt) {
+  if (prompt.length <= CODEX_PROMPT_MAX_CHARS) return
+  let chars = 0
+  for (const _character of prompt) chars++
+  if (chars <= CODEX_PROMPT_MAX_CHARS) return
+  throw new Error(`Codex 请求共 ${chars.toLocaleString('zh-CN')} 字符，超过接口上限 ${CODEX_PROMPT_MAX_CHARS.toLocaleString('zh-CN')} 字符。请缩小修订范围或调低本书上下文预算；原正文未修改。`)
+}
 const PUBLIC_CONFIG_OPTION_IDS = new Set(['model', 'reasoning_effort', 'fast-mode', 'mode'])
 
 function publicConfigOptions(options = []) {
@@ -613,12 +623,13 @@ export class CodexAgentGateway {
       displayTitle: settings.displayTitle,
       mirrorRoot: settings.mirrorRoot,
     })
-    const promptText = codexPromptText({
-      messages: useContextDelta ? continuationMessages : messages,
+    const promptText = useContextDelta ? codexPromptText({
+      messages: continuationMessages,
       outputSchema,
       displayTitle: settings.displayTitle,
       mirrorRoot: settings.mirrorRoot,
-    })
+    }) : fullPromptText
+    if (this.acpBackend === 'codex_acp') assertCodexPromptLength(promptText)
     let approval = null
     try {
       approval = await this._requestApproval({
@@ -745,6 +756,7 @@ export class CodexAgentGateway {
   }
 
   async _runExecFallback({ agentRunId, agentStepId, prompt, outputSchema, signal, onEvent = () => {}, mirrorRoot, workspaceRoot = mirrorRoot, model = '', reasoningEffort = '', fastMode = false, fallbackReason = '' }) {
+    assertCodexPromptLength(prompt)
     const runtime = this.runtime || this.resolveRuntime()
     if (!runtime.cliAvailable || !mirrorRoot) throw new Error('Codex exec 兼容模式运行时不完整')
     const execDirectory = path.join(mirrorRoot, '.codex', 'exec')

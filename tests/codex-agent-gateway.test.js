@@ -94,6 +94,24 @@ test('requested model readback mismatch stops before prompt and never falls back
   } finally { await gateway.shutdown() }
 })
 
+test('Codex rejects oversized final input before approval, session creation or exec fallback', async () => {
+  const { gateway, getNewSessionCount, getPromptRequests } = createFakeGateway()
+  let approvals = 0
+  gateway._requestApproval = async () => { approvals++; throw new Error('unexpected approval') }
+  gateway.runExecFallback = async () => assert.fail('oversized input should not fall back')
+  const messages = [{ role: 'user', content: '文'.repeat(1_048_576) }]
+  try {
+    await assert.rejects(gateway.prompt({
+      agentRunId: 'oversized', agentStepId: 'step', messages, outputSchema: { type: 'object' },
+      settings: { displayTitle: '局部修订', mirrorRoot: os.tmpdir() },
+    }), /超过接口上限 1,048,576 字符/)
+    assert.equal(approvals, 0)
+    assert.equal(getNewSessionCount(), 0)
+    assert.equal(getPromptRequests().length, 0)
+    assert.equal(gateway._canFallback(new Error('Input exceeds the maximum length of 1048576 characters'), false), false)
+  } finally { await gateway.shutdown() }
+})
+
 test('ACP gateway reuses one session for all steps in an AgentRun', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'novel-studio-acp-test-'))
   const { gateway, getNewSessionCount } = createFakeGateway()

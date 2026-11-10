@@ -28,7 +28,7 @@ import { contextDependencyDigest, recordCreativeDependencies, invalidateCreative
 import { buildContextDelta } from './context-reuse.js'
 import { AgentEventBuffer } from './agent-event-buffer.js'
 import { createAuthoringRepository } from './authoring-repository.js'
-import { TEXT_PATCH_SCHEMA, assertProtectedText } from './manuscript-patches.js'
+import { TEXT_PATCH_SCHEMA, assertProtectedText, inlineRevisionMessages } from './manuscript-patches.js'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import {
   archiveProject,
@@ -528,6 +528,11 @@ async function prepareCodexPrompt({ run, step, extra = {} }) {
   })
   const lockedPack = getAgentRunPack(run.id)
   if (lockedPack) promptContext.creativePack = { ...run.creativePack, prompt: lockedPack.prompts?.[step.task], manifest: lockedPack.manifest }
+  const inlineAction = run.workflowId === 'inline-action' ? step.input || {} : null
+  const intent = extra.collaborativeRepair ? 'repair' : inlineAction?.intent || (step.task === 'quality_review' ? 'analysis' : 'draft')
+  const localRevision = inlineAction?.patchSource && inlineAction.modificationScope?.kind !== 'whole'
+    ? { text: inlineAction.patchSource.text, scope: inlineAction.modificationScope }
+    : undefined
   const longContext = buildGenerationContext({
     projectId: run.projectId,
     chapterId: run.chapterId,
@@ -536,6 +541,8 @@ async function prepareCodexPrompt({ run, step, extra = {} }) {
     instruction: step.input?.instruction || '',
     styleText: promptContext?.style?.mergedText,
     task: step.task,
+    intent,
+    localRevision,
   })
   const codexSettings = loadCodexSettings()
   const agentProvider = normalizeAgentProvider(run.modelRoutes?.agentProvider ?? codexSettings?.agentProvider)
@@ -547,13 +554,11 @@ async function prepareCodexPrompt({ run, step, extra = {} }) {
     authMethod: agentProvider === 'grok' ? 'cached_token' : run.modelRoutes?.codexAuthMethod ?? (agentProvider === 'claude' ? codexSettings?.claudeAuthMethod || 'cli' : codexSettings?.authMethod || 'chatgpt'),
   }
   const agentLabel = agentProviderLabel(codexRunSettings.agentProvider)
-  const inlineAction = run.workflowId === 'inline-action' ? step.input || {} : null
   const inlineRevision = inlineAction?.revision || null
   const revisionCandidate = inlineRevision?.parentCandidateId
     ? run.candidates?.find((candidate) => candidate.id === inlineRevision.parentCandidateId)
     : null
   if (inlineRevision && !revisionCandidate) throw new Error('Codex 修改步骤缺少上一版候选')
-  const intent = extra.collaborativeRepair ? 'repair' : inlineAction?.intent || (step.task === 'quality_review' ? 'analysis' : 'draft')
   const target = inlineAction?.target || null
   const planningBundleSchemaValue = ['planning_document_bundle', 'planning_entity_bundle', 'planning_chapter_bundle'].includes(step.candidateType)
     ? outputSchemaForTask(getAgentRunPack(run.id), step.task, step.candidateType, target)
@@ -725,20 +730,10 @@ async function prepareCodexPrompt({ run, step, extra = {} }) {
     run,
     step,
   })
-  const executionMessages = inlineAction?.conversationMode === 'discuss' ? [
-    { role: 'system', content: '本轮只讨论、解释或提出方案，不生成替换候选。材料仅供讨论，未确认内容不是正式事实。返回 JSON {"text":"答复"}。' },
-    { role: 'user', content: `正式上下文：${JSON.stringify(effectiveLongContext)}\n讨论材料：${JSON.stringify(revisionCandidate?.payload || {})}\n问题：${inlineAction.instruction}` },
-  ] : inlineAction?.patchSource && inlineAction.modificationScope?.kind !== 'whole' ? [
-    { role: 'system', content: `只修改作者要求涉及的局部，其他原文逐字保留。from/to 使用 UTF-16 偏移，before 必须与原文一致。遵守选区与保护段落；不扩大到整章。返回结构：${JSON.stringify(TEXT_PATCH_SCHEMA)}` },
-    { role: 'user', content: `作者要求：${inlineAction.instruction}\n正式约束：${JSON.stringify(effectiveLongContext)}\n范围：${JSON.stringify(inlineAction.modificationScope)}\nsourceDigest：${inlineAction.patchSource.digest}\n保护范围：${JSON.stringify(inlineAction.patchSource.protections)}\n原文：\n${inlineAction.patchSource.text}` },
-  ] : compiled.messages
-  const continuationMessages = !deltaContext ? null : inlineAction?.conversationMode === 'discuss' ? [
-    { role: 'system', content: '本轮只讨论、解释或提出方案，不生成替换候选。沿用当前会话中的上一候选和未变化正式事实。返回 JSON {"text":"答复"}。' },
-    { role: 'user', content: `正式上下文增量：${JSON.stringify(deltaContext)}\n问题：${inlineAction.instruction}` },
-  ] : inlineAction?.patchSource && inlineAction.modificationScope?.kind !== 'whole' ? [
-    { role: 'system', content: `只修改作者要求涉及的局部，其他原文逐字保留。from/to 使用 UTF-16 偏移，before 必须与原文一致。遵守选区与保护段落；不扩大到整章。返回结构：${JSON.stringify(TEXT_PATCH_SCHEMA)}` },
-    { role: 'user', content: `作者要求：${inlineAction.instruction}\n正式约束增量：${JSON.stringify(deltaContext)}\n范围：${JSON.stringify(inlineAction.modificationScope)}\nsourceDigest：${inlineAction.patchSource.digest}\n保护范围：${JSON.stringify(inlineAction.patchSource.protections)}\n原文：\n${inlineAction.patchSource.text}` },
-  ] : continuationCompiled?.messages || null
+  const executionMessages = inlineRevisionMessages({ action: inlineAction, context: effectiveLongContext, candidate: revisionCandidate, repairInstruction }) || compiled.messages
+  const continuationMessages = deltaContext
+    ? inlineRevisionMessages({ action: inlineAction, context: deltaContext, isDelta: true, repairInstruction }) || continuationCompiled?.messages || null
+    : null
   compiled.snapshot.messages = executionMessages
   compiled.snapshot.promptHash = createHash('sha256').update(JSON.stringify(executionMessages)).digest('hex')
   compiled.snapshot.modificationScope = inlineAction?.modificationScope || null
@@ -1293,7 +1288,7 @@ async function initializeCodexIntegration() {
       if (run.creativePack?.version !== '1.3.0') return mirrorForRun(run).sourceDigest
       const step = run.steps?.find(item => item.id === run.currentStepId) || run.steps?.at(-1)
       const context = buildGenerationContext({ projectId: run.projectId, chapterId: run.chapterId, instruction: step?.input?.instruction || '', creativePackVersion: run.creativePack.version,
-        task: step?.task, chapterStateMode: run.modelRoutes?.chapterStateMode })
+        task: step?.task, intent: (run.workflowId === 'inline-action' ? step?.input?.intent : '') || 'draft', chapterStateMode: run.modelRoutes?.chapterStateMode })
       // The current manuscript/target is a required dependency even if no paragraph matched retrieval.
       const workspace = loadWorkspaceSnapshot(run.projectId)
       const chapter = workspace.chapters.find(item => item.id === run.chapterId)
@@ -1554,12 +1549,18 @@ async function runGenerationTask(event, payload = {}, { retryOfId = '' } = {}) {
     volumeId: promptVolumeId,
     task: payload.task,
   }) : null)
+  const allowedIntents = new Set(['draft', 'continue', 'rewrite', 'repair', 'analysis'])
+  const defaultIntent = payload.task === 'chapter'
+    ? (chapter?.manuscript?.trim() ? 'rewrite' : 'draft')
+    : payload.task === 'quality_review' ? 'analysis' : 'draft'
+  const intent = allowedIntents.has(payload.intent) ? payload.intent : defaultIntent
   const longContext = workspace.project ? buildGenerationContext({
     projectId: workspace.project.id,
     chapterId: chapter?.id,
     instruction: payload.instruction,
     styleText: promptContext?.style?.mergedText,
     task: payload.task,
+    intent,
     creativePackVersion: frozenRun?.creativePack?.version,
     chapterStateMode: frozenRun?.modelRoutes?.chapterStateMode,
   }) : null
@@ -1573,11 +1574,6 @@ async function runGenerationTask(event, payload = {}, { retryOfId = '' } = {}) {
   const modelProfile = lockedProfile || requestedProfile || modelSettings.profiles.find((profile) => profile.id === routedModelProfileId)
   const apiKey = getModelApiKey(lockedProfile?.id || modelProfileId)
   if (lockedProfile && !['local', 'mock'].includes(lockedProfile.provider) && !apiKey) throw new Error('本次运行所选模型缺少 API Key，请补全配置后重试')
-  const allowedIntents = new Set(['draft', 'continue', 'rewrite', 'repair', 'analysis'])
-  const defaultIntent = payload.task === 'chapter'
-    ? (chapter?.manuscript?.trim() ? 'rewrite' : 'draft')
-    : payload.task === 'quality_review' ? 'analysis' : 'draft'
-  const intent = allowedIntents.has(payload.intent) ? payload.intent : defaultIntent
   const manuscript = String(chapter?.manuscript || '')
   const zhuqueRepair = payload.zhuqueDigest
     ? zhuqueRepairContext(zhuqueDetection().requireFreshResult({
@@ -2185,6 +2181,7 @@ function compilePromptPreview(payload = {}) {
     instruction: payload.instruction,
     styleText: promptContext.style?.mergedText,
     task: payload.task || 'chapter',
+    intent: payload.intent,
   })
   return compilePrompt({
     ...payload,
