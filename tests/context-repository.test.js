@@ -263,7 +263,7 @@ test('new chapter drafts deduplicate exact planning facts without losing scope o
   add('different', '蓝色钥匙例外', { statement: '蓝色钥匙在日出前可以紧急使用' })
   const stored = database.prepare('SELECT id,content_json,knowledge_scope_json FROM knowledge_items ORDER BY id').all()
   repository.updateContextProfile({ projectId: 'project-1', contextBudgetUnlimited: true })
-  const draft = { task: 'chapter', intent: 'draft', projectId: 'project-1', chapterId: 'chapter-5', instruction: '蓝色钥匙。周宁。旧车站。' }
+  const draft = { task: 'chapter', intent: 'draft', projectId: 'project-1', chapterId: 'chapter-5', instruction: '蓝色钥匙。钥匙规则。周宁。旧车站。' }
   const modern = repository.buildGenerationContext({ ...draft, creativePackVersion: '1.3.0' })
   const legacy = repository.buildGenerationContext({ ...draft, creativePackVersion: '1.2.0' })
   repository.updateContextProfile({ projectId: 'project-1', contextBudgetUnlimited: false, maxContextChars: 24000 })
@@ -296,15 +296,54 @@ test('new chapter drafts deduplicate exact planning facts without losing scope o
   assert.deepEqual(database.prepare('SELECT id,content_json,knowledge_scope_json FROM knowledge_items ORDER BY id').all(), stored)
 })
 
-test('legacy drafts retain a knowledge fact if the canonical planning block was clipped', (t) => {
+test('legacy drafts use the same focused retrieval before applying a finite budget', (t) => {
   const { database, repository } = setup()
   t.after(() => database.close())
-  database.prepare("UPDATE planning_documents SET content_json=? WHERE kind='foundation'").run(JSON.stringify({ premise: '设定'.repeat(6000) }))
+  database.prepare("UPDATE planning_documents SET content_json=? WHERE kind='foundation'").run(JSON.stringify({ premise: '开门验证钥匙', designReviewHistory: '历史审校记录'.repeat(6000) }))
   database.prepare("INSERT INTO planning_documents (project_id,kind,content_json,created_at,updated_at) VALUES ('project-1','world',?,'a','a')")
     .run(JSON.stringify({ hardRules: '蓝色钥匙只能在午夜使用', history: '历史'.repeat(6000) }))
   repository.updateContextProfile({ projectId: 'project-1', maxContextChars: 12000 })
   const context = repository.buildGenerationContext({ task: 'chapter', intent: 'draft', projectId: 'project-1', chapterId: 'chapter-5', creativePackVersion: '1.2.0' })
-  assert.equal(context.diagnostics.truncated, true)
-  assert.ok(context.diagnostics.knowledgeItemIds.includes('knowledge-key'))
+  assert.equal(context.diagnostics.retrieval, 'chapter-first-draft')
+  assert.equal(context.diagnostics.truncated, false)
+  assert.ok(context.text.length < 12000)
   assert.match(context.text, /蓝色钥匙只能在午夜使用/u)
+  assert.doesNotMatch(context.text, /历史审校记录/u)
+})
+
+test('first draft prioritizes explicit scene links, current facts and real continuity over unrelated archives', (t) => {
+  const { database, repository, now } = setup()
+  t.after(() => database.close())
+  const card = { goal: '穿过北门', ending: '停在钟楼下', volumeId: 'active-volume', characterEntityRefs: ['linked-hero'] }
+  const scenes = { schemaVersion: 1, scenes: [{ title: '北门试探', actionBeats: ['听见钟声才伸手'], worldEntityRefs: ['linked-rule'] }] }
+  database.prepare("UPDATE chapters SET card_json=?,scene_plan_json=?,manuscript='' WHERE id='chapter-5'").run(JSON.stringify(card), JSON.stringify(scenes))
+  database.prepare("UPDATE chapters SET manuscript='',card_json=? WHERE id='chapter-4'").run(JSON.stringify({ goal: '前章规划待写', ending: '取到蓝色钥匙' }))
+  database.prepare("UPDATE chapters SET manuscript=? WHERE id='chapter-3'").run('不需要的早段。\n\n最后确认门后没有人。')
+  const entities = database.prepare('INSERT INTO planning_entities (id,project_id,kind,title,position,data_json,created_at,updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+  let position = 0
+  const entity = (id, kind, title, data) => entities.run(id, 'project-1', kind, title, ++position, JSON.stringify(data), now(), now())
+  entity('linked-hero', 'character', '从未写在标题里的角色', { role: '锁匠有听力障碍', designReview: '淘汰稿记录'.repeat(40000) })
+  entity('linked-rule', 'world', '隐藏规则卡', { triggerAndTarget: '钟声响起后北门可开', authority: '作者已确认' })
+  entity('active-volume', 'volume', '当前卷', { goal: '调查钟楼', chapterOutline: '本卷所有远章安排'.repeat(50000) })
+  entity('old-volume', 'volume', '过往卷北门', { goal: '别发送过往卷目标', summary: '历史卷纲'.repeat(60000) })
+  const insert = database.prepare(`INSERT INTO knowledge_items (id,project_id,kind,title,content_json,source_type,source_id,status,
+    position,created_at,updated_at,effective_from_chapter) VALUES (?,'project-1',?,?,?,'manual',?,'open',2,?,?,?)`)
+  const knowledge = (id, kind, title, content, from = null) => insert.run(id, kind, title, JSON.stringify(content), `manual:${id}`, now(), now(), from)
+  knowledge('current-fact', 'fact', '标题不匹配的必需约束', { chapterId: 'chapter-5', statement: '北门只有锁匠可以碰', historicalSources: '过期佐证记录'.repeat(10000) })
+  knowledge('due-payoff', 'foreshadow', '不通过词面匹配的伏笔', { payoffChapterNo: 5, payoff: '归还工牌时发现号码被调换' })
+  knowledge('distant', 'timeline', '远章北门事件', { chapterNo: 1, event: '远章不相关的取证材料'.repeat(10000) })
+  knowledge('future', 'fact', '北门未来情报', { statement: '未来事实勿泄露' }, 6)
+  repository.updateContextProfile({ projectId: 'project-1', contextBudgetUnlimited: true, knowledgeLimit: 0 })
+  const context = repository.buildGenerationContext({ task: 'chapter', intent: 'draft', projectId: 'project-1', chapterId: 'chapter-5', creativePackVersion: '1.3.0' })
+  assert.equal(context.diagnostics.budgetChars, null)
+  assert.equal(context.diagnostics.truncated, false)
+  assert.ok(context.text.length < 12000)
+  for (const required of ['停在钟楼下', '听见钟声才伸手', '锁匠有听力障碍', '钟声响起后北门可开', '调查钟楼',
+    '北门只有锁匠可以碰', '归还工牌时发现号码被调换', '尚无正文，不是已发生事实', '前章规划待写', '最后确认门后没有人。']) {
+    assert.ok(context.text.includes(required), `missing ${required}`)
+  }
+  assert.doesNotMatch(context.text, /淘汰稿记录|本卷所有远章安排|别发送过往卷目标|过期佐证记录|远章不相关的取证材料|未来事实勿泄露/u)
+  for (const item of context.sources) assert.equal(dependencyDigest(database, item.targetKey), item.digest)
+  assert.ok(database.prepare("SELECT length(data_json) AS size FROM planning_entities WHERE id='active-volume'").get().size > 300000)
+  assert.equal(database.prepare("SELECT manuscript FROM chapters WHERE id='chapter-5'").get().manuscript, '')
 })

@@ -196,7 +196,7 @@
                 <label v-if="!contextManager.profile.contextBudgetUnlimited"><span><strong>预算字符数</strong><small>越大信息越完整，调用成本和首字延迟也越高。</small></span><input v-model.number="contextManager.profile.maxContextChars" type="number" min="8000" step="1" /></label>
                 <label><span><strong>最近章节</strong><small>固定携带当前章之前的章节数</small></span><input v-model.number="contextManager.profile.recentChapterCount" type="number" min="0" max="20" /></label>
                 <label><span><strong>相关旧章</strong><small>根据本次任务关键词动态召回</small></span><input v-model.number="contextManager.profile.relevantChapterCount" type="number" min="0" max="20" /></label>
-                <label><span><strong>知识记录上限</strong><small>事实、时间线、伏笔和检查的合计上限</small></span><input v-model.number="contextManager.profile.knowledgeLimit" type="number" min="0" max="100" /></label>
+                <label><span><strong>知识记录上限</strong><small>首稿只限制可选召回；明确关联本章的记录不占名额。</small></span><input v-model.number="contextManager.profile.knowledgeLimit" type="number" min="0" max="100" /></label>
                 <label><span><strong>单章记忆长度</strong><small>章节合同、场景推进与正文首尾的摘要容量</small></span><input v-model.number="contextManager.profile.chapterSummaryChars" type="number" min="200" max="4000" step="100" /></label>
               </div>
               <div class="context-profile-actions"><p>修改记忆长度后会自动重建全部章节摘要。</p><button @click="saveContextProfile" :disabled="contextSaving">保存上下文设置</button></div>

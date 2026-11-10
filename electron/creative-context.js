@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { COMPACT_HANDOFF_MODE } from './chapter-handoff.js'
 import { shortStoryGuidance } from './work-format.js'
 import { createDraftContextDeduper, isChapterFirstDraft } from './draft-context-dedupe.js'
+import { createDraftScope, draftChapterPlanning, draftEntityData, draftFoundation, draftKnowledgeView } from './draft-context-scope.js'
 const parse = (text, fallback = {}) => { try { return JSON.parse(text) } catch { return fallback } }
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 const terms = text => [...new Set(String(text || '').match(/[\u3400-\u9fff]{2,4}|[a-z0-9_]{3,}/gi) || [])]
@@ -129,6 +130,84 @@ function buildLocalRevisionContext(db, project, chapter, { instruction, localRev
   return { text, items, sources, diagnostics: { retrieval: 'local-revision', scoped: true, usedChars: text.length, omitted: [], truncated: false } }
 }
 
+function addDraftContinuity(db, project, chapter, planning, add) {
+  const previous = db.prepare('SELECT * FROM chapters WHERE project_id=? AND chapter_no=?').get(project.id, chapter.chapter_no - 1)
+  if (previous && !previous.manuscript.trim()) {
+    const priorPlan = draftChapterPlanning(previous)
+    const { goal, ending, exitState } = priorPlan.card
+    add(`chapter:${previous.id}:draft-planning`, `第 ${previous.chapter_no} 章规划衔接（尚无正文，不是已发生事实）`,
+      { title: priorPlan.title, goal, ending, exitState }, true, priorPlan)
+  }
+  const linked = planning.card.entrySourceChapterId && db.prepare("SELECT * FROM chapters WHERE project_id=? AND id=? AND chapter_no<? AND length(trim(manuscript))>0")
+    .get(project.id, planning.card.entrySourceChapterId, chapter.chapter_no)
+  const written = previous?.manuscript.trim() ? previous : linked || db.prepare("SELECT * FROM chapters WHERE project_id=? AND chapter_no<? AND length(trim(manuscript))>0 ORDER BY chapter_no DESC LIMIT 1")
+    .get(project.id, chapter.chapter_no)
+  if (!written) return
+  const memory = db.prepare('SELECT * FROM chapter_memories WHERE chapter_id=? AND project_id=? AND confirmed=1 AND needs_review=0').get(written.id, project.id)
+  if (memory) {
+    add(`chapter_memory:${written.id}:handoff`, `第 ${written.chapter_no} 章已确认交接`, memoryValue(memory), true)
+    return
+  }
+  const paragraphs = written.manuscript.split(/\n\s*\n/).map((text, index) => ({ text, index })).filter(({ text }) => text.trim())
+  for (const { text, index } of paragraphs.slice(-6)) {
+    add(`chapter:${written.id}:paragraph-${index}`, `第 ${written.chapter_no} 章已写正文结尾（衔接参考，不等于定稿）`, text, true)
+  }
+}
+
+function addDraftSources(db, project, chapter, planning, input, { add, deduper, budget, deduplicated, sources }) {
+  const scope = createDraftScope(chapter, planning, input.instruction)
+  addDraftContinuity(db, project, chapter, planning, add)
+  const candidates = db.prepare('SELECT * FROM planning_entities WHERE project_id=? ORDER BY position,id').all(project.id)
+    .map(row => ({ row, relevance: scope.entity(row) })).filter(({ relevance }) => relevance > 0)
+    .map(({ row, relevance }) => {
+      const data = parse(row.data_json)
+      return { row, relevance, data, view: draftEntityData(row, data) }
+    })
+  const explicit = candidates.filter(({ relevance }) => relevance === 2)
+  const named = candidates.filter(({ relevance }) => relevance === 1)
+  const entityIds = new Set([...explicit, ...named].map(({ row }) => row.id))
+  const addEntity = ({ row, data, view, relevance }, compact = false) => {
+    const key = `planning_entity:${row.id}:data`
+    const rendered = compact ? deduper.compactEntity(row, view) : view
+    const label = row.kind === 'volume' ? '本卷目标与边界（不含整卷规划）' : '本章相关人物与设定（非自动角色知情）'
+    if (add(key, label, { title: row.title, data: rendered }, relevance === 2, { title: row.title, data }) && rendered !== view) {
+      deduplicated.push(key)
+    }
+  }
+  for (const item of explicit) {
+    addEntity(item)
+    deduper.addEntity(item.row, item.view)
+  }
+  if (budget === null) for (const item of named) deduper.addEntity(item.row, item.view)
+
+  const knowledge = db.prepare("SELECT * FROM knowledge_items WHERE project_id=? AND status='open' ORDER BY position,id").all(project.id)
+    .map(row => {
+      const value = knowledgeValue(row)
+      return { row, value, relevance: scope.knowledge(row, value, entityIds) }
+    }).filter(({ relevance }) => relevance > 0).sort((a, b) => b.relevance - a.relevance)
+  let optional = 0
+  const optionalLimit = input.draftKnowledgeLimit ?? 16
+  for (const { row, value, relevance } of knowledge) {
+    const required = relevance === 3
+    const key = `knowledge_item:${row.id}:content`
+    if (deduper.duplicate(row, value)) {
+      sources.push({ targetKey: key, digest: hash(value), required })
+      deduplicated.push(key)
+      continue
+    }
+    if (!required && optional >= optionalLimit) continue
+    const linked = deduper.compactLinkedFact(row, value)
+    const label = row.kind === 'fact' ? '本章相关事实（知情范围以标记为准）'
+      : row.kind === 'timeline' ? '本章相关时间线（保留规划与已发生状态）' : '本章相关伏笔'
+    if (add(key, label, draftKnowledgeView(linked), required, value)) {
+      if (linked !== value) deduplicated.push(key)
+      deduper.addFact(row, value)
+      if (!required) optional++
+    }
+  }
+  for (const item of named) addEntity(item, budget !== null)
+}
+
 // This is a retrieval view of existing facts, not a second truth store.
 export function buildCreativeContext(db, input = {}) {
   const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(input.projectId)
@@ -144,7 +223,7 @@ export function buildCreativeContext(db, input = {}) {
   const chapterNo = chapter?.chapter_no || 1
   const query = terms([input.instruction, chapter?.title, chapter?.card_json, project.idea].join('\n'))
   const parts = [], sources = [], items = [], omitted = [], deduplicated = []
-  const deduper = isChapterFirstDraft(input, chapter) ? createDraftContextDeduper() : null
+  const deduper = chapter && isChapterFirstDraft(input, chapter) ? createDraftContextDeduper() : null
   const budget = input.budget === null ? null : Math.max(2000, Number(input.budget || 24000))
   let usedChars = 0
   function add(key, label, value, required = false, dependencyValue = value) {
@@ -161,11 +240,14 @@ export function buildCreativeContext(db, input = {}) {
   }
   add(`project:${project.id}:identity`, '任务与作品（作者设定）', { title: project.title, genre: project.genre, idea: project.idea }, true)
   if (shortStoryGuidance(project)) add(`project:${project.id}:work-format`, '短故事篇幅与结构', shortStoryGuidance(project), true)
-  if (chapter) add(`chapter:${chapter.id}:planning`, '当前章节目标与边界', { title: chapter.title, card: parse(chapter.card_json), scenes: parse(chapter.scene_plan, chapter.scene_plan) }, true)
+  const planning = deduper ? draftChapterPlanning(chapter) : null
+  if (planning) add(`chapter:${chapter.id}:draft-planning`, '当前章节目标与边界', planning, true)
+  else if (chapter) add(`chapter:${chapter.id}:planning`, '当前章节目标与边界', { title: chapter.title, card: parse(chapter.card_json), scenes: parse(chapter.scene_plan, chapter.scene_plan) }, true)
   const documents = db.prepare('SELECT * FROM planning_documents WHERE project_id = ?').all(project.id)
   for (const doc of documents.filter(item => item.kind === 'foundation')) {
     const data = parse(doc.content_json)
-    if (add(`planning_document:${project.id}:${doc.kind}`, '相关硬事实 · 故事基础', data, true)) deduper?.addDocument(doc.kind, data)
+    const view = deduper ? draftFoundation(data) : data
+    if (add(`planning_document:${project.id}:${doc.kind}`, '相关硬事实 · 故事基础', view, true, data)) deduper?.addDocument(doc.kind, view)
   }
   const world = documents.find(item => item.kind === 'world')
   if (world) {
@@ -174,29 +256,18 @@ export function buildCreativeContext(db, input = {}) {
     if (add(`planning_document:${project.id}:world-hardRules`, '世界硬规则与代价', rules, true)) deduper?.addDocument(world.kind, rules)
   }
   add(`project:${project.id}:style`, '作者文风（表达要求，不是剧情事实）', project.style || '', true)
+  if (deduper) {
+    addDraftSources(db, project, chapter, planning, input, { add, deduper, budget, deduplicated, sources })
+    return { text: parts.join(''), sources, items, diagnostics: { budgetChars: budget, usedChars, omitted, deduplicated,
+      truncated: omitted.length > 0, retrieval: 'chapter-first-draft', scoped: true, globalDependencies: sources.filter(item => item.required).map(item => item.targetKey) } }
+  }
   const entities = db.prepare('SELECT * FROM planning_entities WHERE project_id = ?').all(project.id)
     .map(item => ({ ...item, rank: score(item.title + item.data_json, query) })).filter(item => item.rank > 0).sort((a, b) => b.rank - a.rank)
     .map(item => ({ ...item, data: parse(item.data_json) }))
-  // With no character budget every matched entity below will be rendered.
-  // Under a finite budget optional entities might be omitted, so do not
-  // reference them from an earlier required fact.
-  if (deduper && budget === null) for (const entity of entities) deduper.addEntity(entity, entity.data)
   const knowledge = db.prepare("SELECT * FROM knowledge_items WHERE project_id = ? AND status = 'open'").all(project.id).map(item => ({ ...item, content: parse(item.content_json) }))
     .filter(item => (item.effective_from_chapter == null || item.effective_from_chapter <= chapterNo) && (item.effective_to_chapter == null || item.effective_to_chapter >= chapterNo))
   for (const fact of knowledge.filter(item => item.kind === 'fact' && score(item.title + JSON.stringify(item.content), query) > 0)) {
-    const key = `knowledge_item:${fact.id}:content`
-    const value = knowledgeValue(fact)
-    if (deduper?.duplicate(fact, value)) {
-      // Keep dependency tracking even when this copy adds no prompt text.
-      sources.push({ targetKey: key, digest: hash(value), required: true })
-      deduplicated.push(key)
-    } else {
-      const rendered = deduper?.compactLinkedFact(fact, value) || value
-      if (add(key, '硬事实（知情范围以标记为准）', rendered, true, value)) {
-        if (rendered !== value) deduplicated.push(key)
-        deduper?.addFact(fact, value)
-      }
-    }
+    add(`knowledge_item:${fact.id}:content`, '硬事实（知情范围以标记为准）', knowledgeValue(fact), true)
   }
   const memories = db.prepare('SELECT * FROM chapter_memories WHERE project_id = ? AND chapter_no < ? AND confirmed = 1 AND needs_review = 0 ORDER BY chapter_no DESC').all(project.id, chapterNo)
   const previous = memories[0]
@@ -212,11 +283,7 @@ export function buildCreativeContext(db, input = {}) {
       memoryValue(memory))
   }
   for (const entity of entities) {
-    const data = entity.data
-    const compacted = budget === null ? data : deduper?.compactEntity(entity, data) || data
-    const key = `planning_entity:${entity.id}:data`
-    if (add(key, '相关人物与设定（非自动角色知情）', { title: entity.title, data: compacted }, false, { title: entity.title, data })
-      && compacted !== data) deduplicated.push(key)
+    add(`planning_entity:${entity.id}:data`, '相关人物与设定（非自动角色知情）', { title: entity.title, data: entity.data })
   }
   for (const item of knowledge.filter(item => item.kind !== 'fact' && score(item.title + JSON.stringify(item.content), query) > 0)) {
     add(`knowledge_item:${item.id}:content`, '相关知识 / 伏笔', knowledgeValue(item))
@@ -228,7 +295,7 @@ export function buildCreativeContext(db, input = {}) {
   const samples = db.prepare('SELECT * FROM author_style_samples WHERE project_id = ? AND active = 1 ORDER BY updated_at DESC').all(project.id)
     .sort((a, b) => score(b.reason + b.text, query) - score(a.reason + a.text, query)).slice(0, 3)
   for (const sample of samples) add(`style_sample:${sample.id}:text`, '认可片段：只参考表达与取舍，不继承人物/事件/事实', { text: sample.text, reason: sample.reason })
-  return { text: parts.join(''), sources, items, diagnostics: { budgetChars: budget, usedChars, omitted, ...(deduper ? { deduplicated } : {}), truncated: omitted.length > 0, retrieval: 'local-entity-paragraph', globalDependencies: sources.filter(item => item.required).map(item => item.targetKey) } }
+  return { text: parts.join(''), sources, items, diagnostics: { budgetChars: budget, usedChars, omitted, truncated: omitted.length > 0, retrieval: 'local-entity-paragraph', globalDependencies: sources.filter(item => item.required).map(item => item.targetKey) } }
 }
 
 export function contextDependencyDigest(context) { return hash(context.sources.map(item => [item.targetKey, item.digest])) }
@@ -256,6 +323,7 @@ function dependencyValue(db, key) {
     const row = db.prepare('SELECT * FROM chapters WHERE id=?').get(id)
     if (!row) return null
     if (field === 'manuscript') return row.manuscript
+    if (field === 'draft-planning') return draftChapterPlanning(row)
     if (field === 'manual-handoff-index') return manualHandoffIndex(db, row.project_id, row.chapter_no)
     if (field === 'manual-handoff') return manualHandoff(db, id)
     return field === 'planning' ? { title: row.title, card: parse(row.card_json), scenes: parse(row.scene_plan, row.scene_plan) }
