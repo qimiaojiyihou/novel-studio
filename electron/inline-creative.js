@@ -15,6 +15,7 @@ const TARGET_TASKS = Object.freeze({
   knowledge_item_draft: ['planning_field'],
   prompt_template_draft: ['planning_field'],
   style_profile_draft: ['planning_field'],
+  reference_style_draft: ['planning_field'],
   prompt_addon_draft: ['planning_field'],
   chapter_card: ['chapter_card'],
   scene_plan: ['scene_plan'],
@@ -34,6 +35,7 @@ export const INLINE_RENDERER_DRAFT_KINDS = Object.freeze([
   'knowledge_item_draft',
   'prompt_template_draft',
   'style_profile_draft',
+  'reference_style_draft',
   'prompt_addon_draft',
 ])
 
@@ -172,7 +174,7 @@ export function normalizeInlineCreativeAction(input = {}) {
     targetKey: inlineTargetKey(target),
     conversationScope: inlineConversationReuseScope({ ...input, target }),
     candidateType: candidateTypeFor(kind),
-    instruction: cleanText(input.instruction, 20000),
+    instruction: cleanText(input.instruction, kind === 'reference_style_draft' ? 40000 : 20000),
     targetLength: Math.max(0, Math.min(12000, Math.round(Number(input.targetLength) || 0))),
     requestedExecutionMode: input.executionMode === 'app_model' ? 'app_model' : 'codex',
   }

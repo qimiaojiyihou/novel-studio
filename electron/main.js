@@ -28,6 +28,8 @@ import { contextDependencyDigest, recordCreativeDependencies, invalidateCreative
 import { buildContextDelta } from './context-reuse.js'
 import { AgentEventBuffer } from './agent-event-buffer.js'
 import { createAuthoringRepository } from './authoring-repository.js'
+import { createReferenceNovelRepository } from './reference-novels.js'
+import { readReferenceNovel } from './reference-import.js'
 import { TEXT_PATCH_SCHEMA, assertProtectedText, inlineRevisionMessages } from './manuscript-patches.js'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import {
@@ -517,23 +519,26 @@ function inlinePlanningInput({ step, workspace, planningCenter, chapter }) {
 }
 
 async function prepareCodexPrompt({ run, step, extra = {} }) {
-  const workspace = loadWorkspaceSnapshot(run.projectId)
+  const inlineAction = run.workflowId === 'inline-action' ? step.input || {} : null
+  const referenceAnalysis = inlineAction?.target?.kind === 'reference_style_draft'
+  const workspace = referenceAnalysis
+    ? { project: openDatabase().prepare('SELECT * FROM projects WHERE id=?').get(run.projectId), chapters: [] }
+    : loadWorkspaceSnapshot(run.projectId)
   const chapter = workspace.chapters.find((item) => item.id === run.chapterId) || workspace.chapters[0]
-  const planningCenter = loadPlanningCenter(run.projectId)
-  const knowledgeCenter = loadKnowledgeCenter(run.projectId)
-  const promptContext = run.frozenContext?.prompts?.[step.task] || resolvePromptContext({
+  const planningCenter = referenceAnalysis ? null : loadPlanningCenter(run.projectId)
+  const knowledgeCenter = referenceAnalysis ? null : loadKnowledgeCenter(run.projectId)
+  const promptContext = referenceAnalysis ? {} : run.frozenContext?.prompts?.[step.task] || resolvePromptContext({
     projectId: run.projectId,
     chapterId: run.chapterId,
     task: step.task,
   })
   const lockedPack = getAgentRunPack(run.id)
   if (lockedPack) promptContext.creativePack = { ...run.creativePack, prompt: lockedPack.prompts?.[step.task], manifest: lockedPack.manifest }
-  const inlineAction = run.workflowId === 'inline-action' ? step.input || {} : null
   const intent = extra.collaborativeRepair ? 'repair' : inlineAction?.intent || (step.task === 'quality_review' ? 'analysis' : 'draft')
   const localRevision = inlineAction?.patchSource && inlineAction.modificationScope?.kind !== 'whole'
     ? { text: inlineAction.patchSource.text, scope: inlineAction.modificationScope }
     : undefined
-  const longContext = buildGenerationContext({
+  const longContext = referenceAnalysis ? null : buildGenerationContext({
     projectId: run.projectId,
     chapterId: run.chapterId,
     creativePackVersion: run.creativePack?.version,
@@ -858,10 +863,12 @@ async function runAgentAppModel({ run, step, eventContext, extra, signal }) {
   const planningBundleContract = planningBundleSchemaValue
     ? `只返回一个 JSON 对象，不要使用 Markdown 代码围栏。结构必须严格符合：${JSON.stringify(planningBundleSchemaValue)}。fields 中每一项都是可直接写入对应字段的最终文本。`
     : ''
-  const workspace = inlineAction ? loadWorkspaceSnapshot(run.projectId) : null
+  const workspace = target?.kind === 'reference_style_draft'
+    ? { project: openDatabase().prepare('SELECT * FROM projects WHERE id=?').get(run.projectId), chapters: [] }
+    : inlineAction ? loadWorkspaceSnapshot(run.projectId) : null
   const inlineChapter = workspace?.chapters.find((item) => item.id === run.chapterId) || workspace?.chapters[0]
   const inlinePlanning = inlineAction
-    ? inlinePlanningInput({ step, workspace, planningCenter: loadPlanningCenter(run.projectId), chapter: inlineChapter })
+    ? inlinePlanningInput({ step, workspace, planningCenter: target?.kind === 'reference_style_draft' ? null : loadPlanningCenter(run.projectId), chapter: inlineChapter })
     : undefined
   return await runGenerationTask(eventContext, {
     taskId,
@@ -879,6 +886,7 @@ async function runAgentAppModel({ run, step, eventContext, extra, signal }) {
     } : inlinePlanning,
     promptProfile: target?.promptProfile || '',
     protectedOutputContract: planningBundleContract || undefined,
+    creativeExecution: target?.kind === 'reference_style_draft' ? { target } : undefined,
     instruction: [step.candidateType === 'foundation_bundle'
       ? `只输出 JSON 对象，字段结构必须严格符合：${JSON.stringify(outputSchemaForTask(getAgentRunPack(run.id), step.task, step.candidateType))}`
       : step.candidateType === 'planning_document_bundle'
@@ -1278,6 +1286,10 @@ async function initializeCodexIntegration() {
       attachStoryChangeAnalysis({ changeSetId, analysis: candidate.payload, agentRunId: run.id })
     },
     currentSourceDigest: async (run) => {
+      const step = run.steps?.find(item => item.id === run.currentStepId) || run.steps?.at(-1)
+      if (step?.input?.target?.kind === 'reference_style_draft') {
+        return createReferenceNovelRepository(openDatabase()).state(run.projectId).sourceDigest
+      }
       if (run.modelRoutes?.creativeRequestId) return readCreativeSnapshot(openDatabase(),run.projectId).sourceDigest
       if (run.workflowId === COLLABORATIVE_WORKFLOW_ID || run.modelRoutes?.activeStage) {
         // Match generation's lazy planning/knowledge projections before pinning
@@ -1286,7 +1298,6 @@ async function initializeCodexIntegration() {
         loadKnowledgeCenter(run.projectId)
       }
       if (run.creativePack?.version !== '1.3.0') return mirrorForRun(run).sourceDigest
-      const step = run.steps?.find(item => item.id === run.currentStepId) || run.steps?.at(-1)
       const context = buildGenerationContext({ projectId: run.projectId, chapterId: run.chapterId, instruction: step?.input?.instruction || '', creativePackVersion: run.creativePack.version,
         task: step?.task, intent: (run.workflowId === 'inline-action' ? step?.input?.intent : '') || 'draft', chapterStateMode: run.modelRoutes?.chapterStateMode })
       // The current manuscript/target is a required dependency even if no paragraph matched retrieval.
@@ -1498,6 +1509,10 @@ function generationRequestSnapshot(payload = {}) {
     projectId: String(payload.projectId || ''),
     chapterId: String(payload.chapterId || ''),
     instruction: String(payload.instruction || ''),
+    referenceStyleAnalysis: payload.referenceStyleAnalysis ? true : undefined,
+    referencePreference: payload.referenceStyleAnalysis ? String(payload.referencePreference || '') : undefined,
+    referenceSourceDigest: payload.referenceStyleAnalysis ? String(payload.referenceSourceDigest || '') : undefined,
+    creativeExecution: payload.creativeExecution?.target?.kind === 'reference_style_draft' ? { target: { kind: 'reference_style_draft' } } : undefined,
     zhuqueDigest: String(payload.zhuqueDigest || ''),
     modelProfileId: String(payload.modelProfileId || ''),
     selectedText: String(payload.selectedText || ''),
@@ -1533,17 +1548,27 @@ function compactGenerationEvent(event = {}) {
 }
 
 async function runGenerationTask(event, payload = {}, { retryOfId = '' } = {}) {
+  if (payload.referenceStyleAnalysis) {
+    if (payload.task !== 'planning_field') throw new Error('参考小说分析任务类型不匹配')
+    const packet = createReferenceNovelRepository(openDatabase()).analysisPacket({ projectId: payload.projectId, preference: payload.referencePreference })
+    if (packet.sourceDigest !== payload.referenceSourceDigest) throw new Error('参考书资料已变化，请重新开始分析')
+    payload = { ...payload, instruction: packet.instruction }
+  }
   const taskId = String(payload.taskId || '')
   if (!taskId) throw new Error('生成任务缺少 taskId')
-  const workspace = loadWorkspaceSnapshot(payload.projectId)
+  const referenceAnalysis = payload.referenceStyleAnalysis || payload.creativeExecution?.target?.kind === 'reference_style_draft'
+  const workspace = referenceAnalysis
+    ? { project: openDatabase().prepare('SELECT * FROM projects WHERE id=?').get(payload.projectId), chapters: [] }
+    : loadWorkspaceSnapshot(payload.projectId)
+  if (!workspace.project) throw new Error('项目不存在')
   const chapter = workspace.chapters.find((item) => item.id === payload.chapterId) || workspace.chapters[0]
-  const planningCenter = workspace.project ? loadPlanningCenter(workspace.project.id) : null
-  const knowledgeCenter = workspace.project ? loadKnowledgeCenter(workspace.project.id) : null
+  const planningCenter = referenceAnalysis ? null : loadPlanningCenter(workspace.project.id)
+  const knowledgeCenter = referenceAnalysis ? null : loadKnowledgeCenter(workspace.project.id)
   const chapterScopedTasks = new Set(['chapter', 'chapter_card', 'scene_plan', 'rewrite', 'chapter_state_extract', 'continuity_audit', 'quality_review'])
   const promptChapterId = payload.chapterId || (chapterScopedTasks.has(payload.task) ? chapter?.id : '')
   const promptVolumeId = payload.planning?.scopeType === 'volume' ? payload.planning.scopeId : ''
   const frozenRun = payload.agentRunId ? getAgentRun(payload.agentRunId) : null
-  const promptContext = frozenRun?.frozenContext?.prompts?.[payload.task] || (workspace.project ? resolvePromptContext({
+  const promptContext = referenceAnalysis ? null : frozenRun?.frozenContext?.prompts?.[payload.task] || (workspace.project ? resolvePromptContext({
     projectId: workspace.project.id,
     chapterId: promptChapterId,
     volumeId: promptVolumeId,
@@ -1554,7 +1579,7 @@ async function runGenerationTask(event, payload = {}, { retryOfId = '' } = {}) {
     ? (chapter?.manuscript?.trim() ? 'rewrite' : 'draft')
     : payload.task === 'quality_review' ? 'analysis' : 'draft'
   const intent = allowedIntents.has(payload.intent) ? payload.intent : defaultIntent
-  const longContext = workspace.project ? buildGenerationContext({
+  const longContext = workspace.project && !referenceAnalysis ? buildGenerationContext({
     projectId: workspace.project.id,
     chapterId: chapter?.id,
     instruction: payload.instruction,
@@ -2266,7 +2291,7 @@ async function importProjectFile() {
 function registerAppHandler(channel, handler) {
   creativeHandlers.set(channel, handler)
   ipcMain.handle(channel, (event, payload) => {
-    const mutations = /:(start|start-inline|continue-inline|pause|resume|cancel|finish-inline|confirm-candidate|reject-candidate|retry-step|resolve|create|update|delete|reorder|document-save|style-save|entity-update|finalize-start|finalize-confirm|amendment-confirm|manual-confirm|restore|protect|save-sample)$/
+    const mutations = /:(start|start-inline|continue-inline|pause|resume|cancel|finish-inline|confirm-candidate|reject-candidate|retry-step|resolve|create|update|delete|reorder|document-save|style-save|entity-update|finalize-start|finalize-confirm|amendment-confirm|manual-confirm|restore|protect|save-sample|book-update|book-delete|guide-save)$/
     if (!mutations.test(channel)) return handler(event, payload)
     lastForegroundWriteAt = Date.now()
     const value = payload && typeof payload === 'object' ? payload : {}
@@ -2346,6 +2371,24 @@ function registerIpc() {
     return { version: '1.3.0' }
   })
   ipcMain.handle('authoring:samples', (_event, payload) => createAuthoringRepository(openDatabase()).listSamples(payload))
+  ipcMain.handle('references:load', (_event, payload) => createReferenceNovelRepository(openDatabase()).state(payload.projectId))
+  ipcMain.handle('references:import', async (_event, payload) => {
+    createReferenceNovelRepository(openDatabase()).state(payload.projectId)
+    const selected = await dialogOptions('showOpenDialog', {
+      title: '导入参考小说', properties: ['openFile', 'multiSelections'],
+      filters: [{ name: '参考小说（每本最大10 MB）', extensions: ['txt', 'md', 'markdown', 'docx'] }],
+    })
+    if (selected.canceled || !selected.filePaths?.length) return { cancelled: true }
+    if (selected.filePaths.length > 12) throw new Error('每次最多导入12本参考小说')
+    const imported = []
+    for (const filePath of selected.filePaths) imported.push(await readReferenceNovel(filePath))
+    return creativeMutationQueue.run(payload.projectId, () => createReferenceNovelRepository(openDatabase()).importBooks(payload.projectId, imported))
+  })
+  ipcMain.handle('references:book-update', (_event, payload) => createReferenceNovelRepository(openDatabase()).updateBook(payload))
+  ipcMain.handle('references:book-delete', (_event, payload) => createReferenceNovelRepository(openDatabase()).removeBook(payload))
+  ipcMain.handle('references:packet', (_event, payload) => createReferenceNovelRepository(openDatabase()).analysisPacket(payload))
+  ipcMain.handle('references:guide-save', (_event, payload) => createReferenceNovelRepository(openDatabase()).saveGuide(payload))
+  ipcMain.handle('references:style-save', (_event, payload) => createReferenceNovelRepository(openDatabase()).applyGuide(payload))
   ipcMain.handle('authoring:save-sample', (_event, payload) => createAuthoringRepository(openDatabase()).saveSample(payload))
   ipcMain.handle('authoring:protections', (_event, payload) => createAuthoringRepository(openDatabase()).protections(payload))
   ipcMain.handle('authoring:protect', (_event, payload) => createAuthoringRepository(openDatabase()).protect(payload))

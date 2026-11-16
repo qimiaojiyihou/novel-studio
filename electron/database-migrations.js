@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url'
 import { validateCreativePack } from './creative-pack.js'
 import { creativeUpgradeMigrations } from './creative-upgrade-migrations.js'
 
-export const LATEST_SCHEMA_VERSION = 39
+export const LATEST_SCHEMA_VERSION = 40
 
 function bundledOfficialPack(version = '1.2.0') {
   const directory = version === '1.3.0' ? 'dist' : 'historical'
@@ -1684,6 +1684,37 @@ migrations.push({ version: 39, name: 'optional-context-budget', up(database) {
       knowledge_limit, chapter_summary_chars, created_at, updated_at FROM context_profiles;
     DROP TABLE context_profiles;
     ALTER TABLE context_profiles_v39 RENAME TO context_profiles;
+  `)
+} })
+
+migrations.push({ version: 40, name: 'reference-novels-and-style-guides', up(database) {
+  database.exec(`
+    CREATE TABLE reference_novels (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      title TEXT NOT NULL,
+      filename TEXT NOT NULL,
+      content TEXT NOT NULL,
+      content_digest TEXT NOT NULL,
+      char_count INTEGER NOT NULL,
+      focus TEXT NOT NULL DEFAULT '',
+      enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
+      revision INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(project_id, content_digest)
+    );
+    CREATE INDEX reference_novels_project ON reference_novels(project_id);
+    CREATE TABLE reference_style_guides (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL UNIQUE REFERENCES projects(id) ON DELETE CASCADE,
+      draft_text TEXT NOT NULL DEFAULT '',
+      source_digest TEXT NOT NULL DEFAULT '',
+      applied_text TEXT NOT NULL DEFAULT '',
+      revision INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
   `)
 } })
 

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { DatabaseSync } from 'node:sqlite'
-import { runMigrations } from '../electron/database-migrations.js'
+import { runMigrations, LATEST_SCHEMA_VERSION } from '../electron/database-migrations.js'
 import { createFinalizationRepository, ChapterFinalizer, contentDigest, validateStateEvidence } from '../electron/chapter-finalization.js'
 import { checkManuscript } from '../electron/manuscript-checks.js'
 import { applyTextPatches } from '../electron/manuscript-patches.js'
@@ -11,7 +11,7 @@ import { createCodexRepository } from '../electron/codex-repository.js'
 import { AgentRuntime } from '../electron/agent-runtime.js'
 import { buildCreativeContext, contextDependencyDigest, recordCreativeDependencies, invalidateCreativeDependencies } from '../electron/creative-context.js'
 import { createContextRepository } from '../electron/context-repository.js'
-import { createProjectBackup, restoreProjectBackup } from '../electron/project-portability.js'
+import { createProjectBackup, restoreProjectBackup, PROJECT_BACKUP_VERSION } from '../electron/project-portability.js'
 import { compilePrompt } from '../electron/prompt-compiler.js'
 import { deterministicQualityChecks } from '../electron/creative-quality.js'
 import { normalizeChapterStateSnapshot } from '../electron/model-adapter.js'
@@ -35,7 +35,7 @@ test('v21→v38 preserves pinned historical packs, runs sequentially and cascade
   runMigrations(db, { targetVersion: 21 })
   const before = db.prepare('SELECT version,digest FROM creative_pack_versions ORDER BY version').all()
   runMigrations(db)
-  assert.deepEqual(db.prepare('SELECT version FROM schema_migrations WHERE version>=22 ORDER BY version').all().map(r=>r.version), [22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39])
+  assert.deepEqual(db.prepare('SELECT version FROM schema_migrations WHERE version>=22 ORDER BY version').all().map(r=>r.version), Array.from({length:LATEST_SCHEMA_VERSION-21},(_,i)=>i+22))
   assert.deepEqual(db.prepare("SELECT version,digest FROM creative_pack_versions WHERE version!='1.3.0' ORDER BY version").all(), before)
   runMigrations(db)
   assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(), [])
@@ -171,7 +171,7 @@ test('discussion persists messages without replacing or staling the pending cand
   db.close()
 })
 
-test('style samples stay distinct from facts, protections use authoritative sources, backup9 roundtrips', async () => {
+test('style samples stay distinct from facts, protections use authoritative sources, portable backups roundtrip', async () => {
   const db=setup(),author=createAuthoringRepository(db)
   author.saveSample({projectId:'p',chapterId:'c',text:'周砚付了摊位租金。',reason:'干脆的动作'})
   assert.throws(()=>author.saveSample({projectId:'p',chapterId:'c',text:'编造的原文'}),/当前原文/)
@@ -183,7 +183,7 @@ test('style samples stay distinct from facts, protections use authoritative sour
   const finalRepo=createFinalizationRepository(db)
   finalRepo.start({projectId:'p',chapterId:'c',reviewer})
   const backup=createProjectBackup(db,'p')
-  assert.equal(backup.version,9)
+  assert.equal(backup.version,PROJECT_BACKUP_VERSION)
   const restored=restoreProjectBackup(db,backup)
   assert.equal(author.listSamples({projectId:restored.projectId}).length,1)
   assert.equal(db.prepare('SELECT status FROM chapter_finalizations WHERE project_id=?').get(restored.projectId).status,'paused')

@@ -25,7 +25,8 @@
       </aside>
 
       <main class="prompt-sheet">
-        <AuthorStyleSamples v-if="mode === 'samples'" :project-id="project.id" :chapter-id="activeChapterId" />
+        <ReferenceNovels v-if="mode === 'references'" :key="project.id" :project="project" :model-settings="modelSettings" @applied="referenceApplied" @count="referenceCount = $event" @codex-action="emit('codex-action', $event)" @toast="emit('toast', $event)" />
+        <AuthorStyleSamples v-else-if="mode === 'samples'" :project-id="project.id" :chapter-id="activeChapterId" />
         <template v-else-if="mode === 'templates'">
           <div class="prompt-sheet-heading"><div><span class="eyebrow copper">TASK TEMPLATE</span><h2>任务模板</h2><p>内置模板保持只读；从它保存时会建立一份可继续迭代的自定义模板。</p></div><button class="prompt-add" @click="newTemplate">＋ 新建模板</button></div>
           <div class="prompt-edit-layout">
@@ -98,6 +99,7 @@
 
 <script setup>
 import AuthorStyleSamples from './AuthorStyleSamples.vue'
+import ReferenceNovels from './ReferenceNovels.vue'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { appService } from '../services/app-service.js'
 import CreativeExecutionControl from './CreativeExecutionControl.vue'
@@ -107,6 +109,7 @@ const props = defineProps({ project: { type: Object, required: true }, activeCha
 const emit = defineEmits(['toast', 'project-updated', 'codex-action'])
 const center = ref(null)
 const mode = ref('templates')
+const referenceCount = ref(0)
 const task = ref('chapter')
 const scopeType = ref('project')
 const scopeId = ref(props.project.id)
@@ -125,6 +128,7 @@ const addonDraft = reactive({ id: '', name: '', category: '自定义', kind: 'us
 let previewTimer = null
 
 const modes = [
+  { id: 'references', mark: '书', label: '参考小说', hint: '导入、分析与应用文风规范' },
   { id: 'samples', mark: '文', label: '认可片段', hint: '作者声音，独立于故事事实' },
   { id: 'templates', mark: 'T', label: '任务模板', hint: '定义每类生成做什么' },
   { id: 'styles', mark: 'S', label: '三级文风', hint: '项目、分卷与章节继承' },
@@ -169,6 +173,7 @@ watch(scopeType, () => {
 watch(scopeId, schedulePreview)
 
 function modeCount(id) {
+  if (id === 'references') return referenceCount.value || ''
   if (id === 'templates') return taskTemplates.value.length
   if (id === 'styles') return center.value?.styleScopes.length || 0
   return center.value?.addons.length || 0
@@ -314,6 +319,11 @@ async function saveStyle() {
     emit('toast', `${styleDraft.label}文风已保存`)
     await refreshPreview()
   } catch (error) { emit('toast', `保存文风失败：${error.message}`) } finally { saving.value = false }
+}
+
+async function referenceApplied(patch) {
+  emit('project-updated', patch)
+  await loadCenter()
 }
 
 function selectAddon(item) { selectedAddonId.value = item.id; Object.assign(addonDraft, { ...item }) }

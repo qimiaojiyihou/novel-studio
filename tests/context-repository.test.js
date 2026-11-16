@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { DatabaseSync } from 'node:sqlite'
 import { createServer } from 'node:http'
 import { once } from 'node:events'
-import { runMigrations } from '../electron/database-migrations.js'
+import { runMigrations, LATEST_SCHEMA_VERSION } from '../electron/database-migrations.js'
 import { createContextRepository } from '../electron/context-repository.js'
 import { createModelGateway } from '../electron/model-gateway.js'
 import { inlineRevisionMessages } from '../electron/manuscript-patches.js'
@@ -131,7 +131,7 @@ test('upgrading v38 preserves the current context profile, chapters, planning, k
   const tables = ['projects', 'chapters', 'planning_documents', 'knowledge_items', 'chapter_memories']
   const existing = tables.map(readRows)
 
-  assert.equal(runMigrations(database, { now }), 39)
+  assert.equal(runMigrations(database, { now }), LATEST_SCHEMA_VERSION)
   assert.deepEqual(readRows('context_profiles'), originalProfiles.map((profile) => ({ ...profile, context_budget_unlimited: 0 })))
   assert.deepEqual(tables.map(readRows), existing)
 

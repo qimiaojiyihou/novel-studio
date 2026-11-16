@@ -2,9 +2,9 @@ import { createHash, randomUUID } from 'node:crypto'
 import { WORK_FORMATS, isShortStory, shortStoryWordCount } from './work-format.js'
 
 export const PROJECT_BACKUP_FORMAT = 'novel-studio-project'
-export const PROJECT_BACKUP_VERSION = 9
+export const PROJECT_BACKUP_VERSION = 10
 
-const UPGRADE_TABLES = { 6: ['chapter_finalizations'], 7: ['author_style_samples', 'creative_messages', 'manuscript_protections', 'creative_patches'], 8: ['creative_dependencies'] }
+const UPGRADE_TABLES = { 6: ['chapter_finalizations'], 7: ['author_style_samples', 'creative_messages', 'manuscript_protections', 'creative_patches'], 8: ['creative_dependencies'], 10: ['reference_novels', 'reference_style_guides'] }
 const NEW_TABLES = Object.values(UPGRADE_TABLES).flat()
 
 const PROJECT_TABLES = [
