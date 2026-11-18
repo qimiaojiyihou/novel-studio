@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url'
 import { validateCreativePack } from './creative-pack.js'
 import { creativeUpgradeMigrations } from './creative-upgrade-migrations.js'
 
-export const LATEST_SCHEMA_VERSION = 40
+export const LATEST_SCHEMA_VERSION = 43
 
 function bundledOfficialPack(version = '1.2.0') {
   const directory = version === '1.3.0' ? 'dist' : 'historical'
@@ -1716,6 +1716,46 @@ migrations.push({ version: 40, name: 'reference-novels-and-style-guides', up(dat
       updated_at TEXT NOT NULL
     );
   `)
+} })
+
+migrations.push({ version: 41, name: 'reference-scene-selection-and-calibration', up(database) {
+  database.exec(`
+    ALTER TABLE reference_novels ADD COLUMN priority INTEGER NOT NULL DEFAULT 1 CHECK(priority BETWEEN 0 AND 2);
+    ALTER TABLE reference_novels ADD COLUMN sample_mode TEXT NOT NULL DEFAULT 'auto' CHECK(sample_mode IN ('auto','scenes'));
+    ALTER TABLE reference_novels ADD COLUMN selected_excerpts_json TEXT NOT NULL DEFAULT '[]';
+    ALTER TABLE reference_novels ADD COLUMN chapter_index_json TEXT NOT NULL DEFAULT '[]';
+    ALTER TABLE reference_style_guides ADD COLUMN settings_json TEXT NOT NULL DEFAULT '{}';
+    ALTER TABLE reference_style_guides ADD COLUMN settings_revision INTEGER NOT NULL DEFAULT 1;
+    CREATE TABLE reference_style_trials (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL CHECK(kind IN ('daily','conflict')),
+      brief TEXT NOT NULL,
+      output_text TEXT NOT NULL,
+      guide_digest TEXT NOT NULL,
+      source_digest TEXT NOT NULL,
+      author_feedback TEXT NOT NULL DEFAULT '',
+      revision INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(project_id,kind)
+    );
+  `)
+} })
+
+migrations.push({ version: 42, name: 'reference-blind-comparisons', up(database) {
+  database.exec(`CREATE TABLE reference_comparisons (
+    id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    task TEXT NOT NULL, brief TEXT NOT NULL, source_text TEXT NOT NULL, rule TEXT NOT NULL,
+    model_json TEXT NOT NULL, guide_digest TEXT NOT NULL, source_digest TEXT NOT NULL,
+    output_a TEXT NOT NULL, output_b TEXT NOT NULL, guided_slot INTEGER NOT NULL CHECK(guided_slot IN (0,1)),
+    verdict TEXT NOT NULL DEFAULT '', feedback TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL
+  );
+  CREATE INDEX reference_comparisons_by_project ON reference_comparisons(project_id,created_at DESC)`)
+} })
+
+migrations.push({ version: 43, name: 'reference-sample-comparisons', up(database) {
+  database.exec("ALTER TABLE reference_comparisons ADD COLUMN sample_trial_json TEXT NOT NULL DEFAULT '{}'")
 } })
 
 export function runMigrations(database, { now = () => new Date().toISOString(), targetVersion = LATEST_SCHEMA_VERSION } = {}) {

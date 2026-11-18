@@ -1,3 +1,4 @@
+import { selectVoiceSamples, voicePassage } from './reference-voice.js'
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell, safeStorage } from 'electron'
 import { createReaderPublisher } from './reader-publisher.js'
 import { applicationMenuTemplate } from './application-menu.js'
@@ -28,8 +29,10 @@ import { contextDependencyDigest, recordCreativeDependencies, invalidateCreative
 import { buildContextDelta } from './context-reuse.js'
 import { AgentEventBuffer } from './agent-event-buffer.js'
 import { createAuthoringRepository } from './authoring-repository.js'
+import { sentReferenceRules } from './reference-rules.js'
+import { generateComparison, generateComparisonCodex } from './reference-comparison.js'
 import { createReferenceNovelRepository } from './reference-novels.js'
-import { readReferenceNovel } from './reference-import.js'
+import { readReferenceNovel, browseReferenceNovel } from './reference-import.js'
 import { TEXT_PATCH_SCHEMA, assertProtectedText, inlineRevisionMessages } from './manuscript-patches.js'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import {
@@ -181,7 +184,7 @@ import { ClaudeAgentGateway, inspectClaudeRuntime } from './claude-agent-gateway
 import { AgentGatewayRouter, agentProviderLabel, agentProviderModel, agentProviderReasoningEffort, agentProviderBackend, normalizeAgentProvider, agentRunSettings } from './agent-gateway-router.js'
 import { createCodexBookWorkspace, createCodexProjectMirror, findCodexBookWorkspace, removeCodexBookWorkspace } from './codex-project-mirror.js'
 import { codexTaskDisplayTitle } from './codex-task-label.js'
-import { projectForInlineTarget, sanitizeProjectDraftContext } from './inline-creative.js'
+import { projectForInlineTarget, sanitizeProjectDraftContext, isReferenceDraftTarget } from './inline-creative.js'
 import { planningBundleSchema } from './planning-bundle.js'
 import { WorkDesignSync } from './work-design-sync.js'
 
@@ -520,7 +523,7 @@ function inlinePlanningInput({ step, workspace, planningCenter, chapter }) {
 
 async function prepareCodexPrompt({ run, step, extra = {} }) {
   const inlineAction = run.workflowId === 'inline-action' ? step.input || {} : null
-  const referenceAnalysis = inlineAction?.target?.kind === 'reference_style_draft'
+  const referenceAnalysis = isReferenceDraftTarget(inlineAction?.target)
   const workspace = referenceAnalysis
     ? { project: openDatabase().prepare('SELECT * FROM projects WHERE id=?').get(run.projectId), chapters: [] }
     : loadWorkspaceSnapshot(run.projectId)
@@ -673,6 +676,7 @@ async function prepareCodexPrompt({ run, step, extra = {} }) {
   qualityRepairInstruction, zhuqueRepair?.instruction, lengthInstruction, repairInstruction].filter(Boolean)
   const promptInput = {
     task: step.task,
+    sceneInstruction: inlineRevision?.instruction || inlineAction?.instruction || step.input?.instruction || '',
     intent,
     project: promptProject,
     chapter,
@@ -735,14 +739,21 @@ async function prepareCodexPrompt({ run, step, extra = {} }) {
     run,
     step,
   })
-  const executionMessages = inlineRevisionMessages({ action: inlineAction, context: effectiveLongContext, candidate: revisionCandidate, repairInstruction }) || compiled.messages
+  const patchVoice = [voicePassage(selectVoiceSamples(promptContext?.voiceLibrary, promptInput), promptContext?.voiceLibrary?.previousEnding), compiled.snapshot.detailDirection].filter(Boolean).join('\n')
+  const executionMessages = inlineRevisionMessages({ voicePassage: patchVoice, action: inlineAction, context: effectiveLongContext, candidate: revisionCandidate, repairInstruction }) || compiled.messages
   const continuationMessages = deltaContext
-    ? inlineRevisionMessages({ action: inlineAction, context: deltaContext, isDelta: true, repairInstruction }) || continuationCompiled?.messages || null
+    ? inlineRevisionMessages({ voicePassage: patchVoice, action: inlineAction, context: deltaContext, isDelta: true, repairInstruction }) || continuationCompiled?.messages || null
     : null
+  compiled.snapshot.referenceRules = sentReferenceRules(executionMessages)
+  compiled.snapshot.continuationReferenceRules = continuationMessages ? sentReferenceRules(continuationMessages) : []
   compiled.snapshot.messages = executionMessages
   compiled.snapshot.promptHash = createHash('sha256').update(JSON.stringify(executionMessages)).digest('hex')
   compiled.snapshot.modificationScope = inlineAction?.modificationScope || null
   compiled.snapshot.conversationMode = inlineAction?.conversationMode || 'modify'
+  if (inlineAction?.conversationMode === 'discuss') {
+    compiled.snapshot.voiceSamples = []
+    compiled.snapshot.detailDirection = ''
+  }
   compiled.snapshot.outputSchema = inlineAction?.conversationMode === 'discuss' ? { type: 'object', required: ['text'], properties: { text: { type: 'string' } } }
     : inlineAction?.patchSource && inlineAction.modificationScope?.kind !== 'whole' ? TEXT_PATCH_SCHEMA : outputSchemaForTask(lockedPack, step.task, step.candidateType, target)
   compiled.snapshot.reviewerLineage = run.modelRoutes?.finalizationId ? { finalizationId: run.modelRoutes.finalizationId, independentContext: true, parentRunId: run.parentRunId || null } : null
@@ -863,12 +874,12 @@ async function runAgentAppModel({ run, step, eventContext, extra, signal }) {
   const planningBundleContract = planningBundleSchemaValue
     ? `只返回一个 JSON 对象，不要使用 Markdown 代码围栏。结构必须严格符合：${JSON.stringify(planningBundleSchemaValue)}。fields 中每一项都是可直接写入对应字段的最终文本。`
     : ''
-  const workspace = target?.kind === 'reference_style_draft'
+  const workspace = isReferenceDraftTarget(target)
     ? { project: openDatabase().prepare('SELECT * FROM projects WHERE id=?').get(run.projectId), chapters: [] }
     : inlineAction ? loadWorkspaceSnapshot(run.projectId) : null
   const inlineChapter = workspace?.chapters.find((item) => item.id === run.chapterId) || workspace?.chapters[0]
   const inlinePlanning = inlineAction
-    ? inlinePlanningInput({ step, workspace, planningCenter: target?.kind === 'reference_style_draft' ? null : loadPlanningCenter(run.projectId), chapter: inlineChapter })
+    ? inlinePlanningInput({ step, workspace, planningCenter: isReferenceDraftTarget(target) ? null : loadPlanningCenter(run.projectId), chapter: inlineChapter })
     : undefined
   return await runGenerationTask(eventContext, {
     taskId,
@@ -886,7 +897,7 @@ async function runAgentAppModel({ run, step, eventContext, extra, signal }) {
     } : inlinePlanning,
     promptProfile: target?.promptProfile || '',
     protectedOutputContract: planningBundleContract || undefined,
-    creativeExecution: target?.kind === 'reference_style_draft' ? { target } : undefined,
+    creativeExecution: isReferenceDraftTarget(target) ? { target } : undefined,
     instruction: [step.candidateType === 'foundation_bundle'
       ? `只输出 JSON 对象，字段结构必须严格符合：${JSON.stringify(outputSchemaForTask(getAgentRunPack(run.id), step.task, step.candidateType))}`
       : step.candidateType === 'planning_document_bundle'
@@ -1287,8 +1298,8 @@ async function initializeCodexIntegration() {
     },
     currentSourceDigest: async (run) => {
       const step = run.steps?.find(item => item.id === run.currentStepId) || run.steps?.at(-1)
-      if (step?.input?.target?.kind === 'reference_style_draft') {
-        return createReferenceNovelRepository(openDatabase()).state(run.projectId).sourceDigest
+      if (isReferenceDraftTarget(step?.input?.target)) {
+        return createReferenceNovelRepository(openDatabase()).state(run.projectId).referenceDigest
       }
       if (run.modelRoutes?.creativeRequestId) return readCreativeSnapshot(openDatabase(),run.projectId).sourceDigest
       if (run.workflowId === COLLABORATIVE_WORKFLOW_ID || run.modelRoutes?.activeStage) {
@@ -1510,9 +1521,13 @@ function generationRequestSnapshot(payload = {}) {
     chapterId: String(payload.chapterId || ''),
     instruction: String(payload.instruction || ''),
     referenceStyleAnalysis: payload.referenceStyleAnalysis ? true : undefined,
+    referenceMode: payload.referenceStyleAnalysis ? payload.referenceMode || 'analysis' : undefined,
+    referenceKind: payload.referenceStyleAnalysis ? payload.referenceKind : undefined,
+    referenceBrief: payload.referenceStyleAnalysis ? payload.referenceBrief : undefined,
+    referenceInputDigest: payload.referenceStyleAnalysis ? payload.referenceInputDigest : undefined,
     referencePreference: payload.referenceStyleAnalysis ? String(payload.referencePreference || '') : undefined,
     referenceSourceDigest: payload.referenceStyleAnalysis ? String(payload.referenceSourceDigest || '') : undefined,
-    creativeExecution: payload.creativeExecution?.target?.kind === 'reference_style_draft' ? { target: { kind: 'reference_style_draft' } } : undefined,
+    creativeExecution: isReferenceDraftTarget(payload.creativeExecution?.target) ? { target: { kind: payload.creativeExecution.target.kind } } : undefined,
     zhuqueDigest: String(payload.zhuqueDigest || ''),
     modelProfileId: String(payload.modelProfileId || ''),
     selectedText: String(payload.selectedText || ''),
@@ -1550,13 +1565,14 @@ function compactGenerationEvent(event = {}) {
 async function runGenerationTask(event, payload = {}, { retryOfId = '' } = {}) {
   if (payload.referenceStyleAnalysis) {
     if (payload.task !== 'planning_field') throw new Error('参考小说分析任务类型不匹配')
-    const packet = createReferenceNovelRepository(openDatabase()).analysisPacket({ projectId: payload.projectId, preference: payload.referencePreference })
+    const packet = createReferenceNovelRepository(openDatabase()).taskPacket({ projectId: payload.projectId, preference: payload.referencePreference, mode: payload.referenceMode, kind: payload.referenceKind, brief: payload.referenceBrief })
     if (packet.sourceDigest !== payload.referenceSourceDigest) throw new Error('参考书资料已变化，请重新开始分析')
+    if (payload.referenceInputDigest && packet.inputDigest !== payload.referenceInputDigest) throw new Error('参考资料、规范或反馈已变化，请重新开始')
     payload = { ...payload, instruction: packet.instruction }
   }
   const taskId = String(payload.taskId || '')
   if (!taskId) throw new Error('生成任务缺少 taskId')
-  const referenceAnalysis = payload.referenceStyleAnalysis || payload.creativeExecution?.target?.kind === 'reference_style_draft'
+  const referenceAnalysis = payload.referenceStyleAnalysis || isReferenceDraftTarget(payload.creativeExecution?.target)
   const workspace = referenceAnalysis
     ? { project: openDatabase().prepare('SELECT * FROM projects WHERE id=?').get(payload.projectId), chapters: [] }
     : loadWorkspaceSnapshot(payload.projectId)
@@ -2291,7 +2307,7 @@ async function importProjectFile() {
 function registerAppHandler(channel, handler) {
   creativeHandlers.set(channel, handler)
   ipcMain.handle(channel, (event, payload) => {
-    const mutations = /:(start|start-inline|continue-inline|pause|resume|cancel|finish-inline|confirm-candidate|reject-candidate|retry-step|resolve|create|update|delete|reorder|document-save|style-save|entity-update|finalize-start|finalize-confirm|amendment-confirm|manual-confirm|restore|protect|save-sample|book-update|book-delete|guide-save)$/
+    const mutations = /:(start|start-inline|continue-inline|pause|resume|cancel|finish-inline|confirm-candidate|reject-candidate|retry-step|resolve|create|update|delete|reorder|document-save|style-save|entity-update|finalize-start|finalize-confirm|amendment-confirm|manual-confirm|restore|protect|save-sample|book-update|book-delete|guide-save|settings-save|trial-save)$/
     if (!mutations.test(channel)) return handler(event, payload)
     lastForegroundWriteAt = Date.now()
     const value = payload && typeof payload === 'object' ? payload : {}
@@ -2347,6 +2363,76 @@ async function initializeCreativeInterface() {
   creativeServer = await startCreativeServer({ api:creativeInterface,directory,databasePath:getDatabaseInfo().path,buildId:CREATIVE_BUILD_ID })
 }
 
+const activeComparisons = new Map()
+
+async function runReferenceComparison(payload) {
+  const repo = createReferenceNovelRepository(openDatabase())
+  const resume = payload.comparisonId ? repo.resumeComparison(payload.projectId, payload.comparisonId) : null
+  const input = resume?.input || repo.comparisonInput(payload)
+  let comparisonId = payload.comparisonId || ''
+  let latestProgress
+  let model
+  if (activeComparisons.has(payload.projectId)) throw new Error('本书已有一组盲评正在生成')
+  const controller = new AbortController()
+  activeComparisons.set(payload.projectId, controller)
+  try {
+    let generate
+    if ((resume?.model.provider || payload.backend) === 'codex') {
+      const defaults = loadCodexSettings()
+      const settings = resume?.model || { model: agentProviderModel(defaults, 'codex'), reasoningEffort: agentProviderReasoningEffort(defaults, 'codex'), fastMode: Boolean(defaults.fastMode) }
+      if (!settings.model) throw new Error('请先在 Codex 设置中选择具体模型，以便各稿使用相同配置')
+      model = { provider: 'codex', ...settings }
+      generate = (messages, signal) => generateComparisonCodex(codexGateway, settings, messages, signal)
+    } else {
+      const settings = loadModelSettings()
+      const profile = settings.profiles.find(item => item.id === (resume?.model.profileId || payload.modelProfileId || settings.routes.planning_field) && item.enabled)
+      if (!profile?.model || !profile.baseUrl || profile.provider === 'mock') throw new Error('请选择已配置的应用模型')
+      if (resume && JSON.stringify(profile) !== JSON.stringify(resume.model.profileSnapshot)) throw new Error('这组盲评的模型配置已变化，请恢复配置后续接')
+      const apiKey = getModelApiKey(profile.id)
+      if (profile.provider !== 'local' && !apiKey) throw new Error('请先配置所选模型的 API Key')
+      model = { provider: profile.provider, model: profile.model, profileId: profile.id, profileSnapshot: profile }
+      generate = async (messages, signal) => {
+        if (signal.aborted) throw new Error('盲评已停止或超时')
+        const taskId = 'blind-' + randomBytes(16).toString('hex')
+        const cancel = () => { void modelGateway.cancel(taskId) }
+        signal.addEventListener('abort', cancel, { once: true })
+        try {
+          const result = await modelGateway.generate({ task: input.task === 'rewrite' ? 'rewrite' : 'chapter',
+            modelProfile: profile, apiKey, compiledPrompt: { messages, snapshot: {} } }, { taskId,
+            onPrepared: prepared => {
+              model.reasoningEffort = prepared.parameters.reasoning_effort || prepared.parameters.reasoning?.effort || ''
+              model.temperature = prepared.temperature
+            } })
+          if (result.execution === 'mock') throw new Error('盲评需要实际模型输出')
+          return result.text || result.manuscript
+        } finally { signal.removeEventListener('abort', cancel) }
+      }
+    }
+    await generateComparison(input, async messages => {
+      controller.signal.throwIfAborted()
+      const timeout = AbortSignal.timeout(5 * 60 * 1000)
+      const signal = AbortSignal.any([controller.signal, timeout])
+      try {
+        const text = await generate(messages, signal)
+        signal.throwIfAborted()
+        return text
+      } catch (error) {
+        if (controller.signal.aborted) throw new Error('盲评已停止')
+        if (timeout.aborted) throw new Error('单稿生成超过5分钟，请重试')
+        throw error
+      }
+    }, { order: resume?.order, outputs: resume?.outputs, save: async progress => {
+      latestProgress = progress
+      const saved = repo.storeComparison(input, model, progress, comparisonId)
+      comparisonId = saved.id
+    } })
+    return repo.comparison(payload.projectId, comparisonId)
+  } catch (error) {
+    if (!comparisonId || !latestProgress) throw error
+    return repo.storeComparison(input, model, latestProgress, comparisonId, error.message)
+  } finally { activeComparisons.delete(payload.projectId) }
+}
+
 function registerIpc() {
   // Preserve the existing handlers as the only implementation of creative actions.
   const ipcMain = { handle:registerAppHandler, on:nativeIpcMain.on.bind(nativeIpcMain) }
@@ -2386,7 +2472,14 @@ function registerIpc() {
   })
   ipcMain.handle('references:book-update', (_event, payload) => createReferenceNovelRepository(openDatabase()).updateBook(payload))
   ipcMain.handle('references:book-delete', (_event, payload) => createReferenceNovelRepository(openDatabase()).removeBook(payload))
-  ipcMain.handle('references:packet', (_event, payload) => createReferenceNovelRepository(openDatabase()).analysisPacket(payload))
+  ipcMain.handle('references:packet', (_event, payload) => createReferenceNovelRepository(openDatabase()).taskPacket(payload))
+  ipcMain.handle('references:browse', (_event, payload) => browseReferenceNovel(getDatabaseInfo().path, payload))
+  ipcMain.handle('references:settings-save', (_event, payload) => createReferenceNovelRepository(openDatabase()).saveSettings(payload))
+  ipcMain.handle('references:trial-save', (_event, payload) => createReferenceNovelRepository(openDatabase()).saveTrial(payload))
+  ipcMain.handle('references:compare', (_event, payload) => runReferenceComparison(payload))
+  ipcMain.handle('references:compare-stop', (_event, payload) => { activeComparisons.get(payload.projectId)?.abort() })
+  ipcMain.handle('references:compare-read', (_event, payload) => createReferenceNovelRepository(openDatabase()).comparison(payload.projectId, payload.id))
+  ipcMain.handle('references:compare-vote', (_event, payload) => createReferenceNovelRepository(openDatabase()).judgeComparison(payload))
   ipcMain.handle('references:guide-save', (_event, payload) => createReferenceNovelRepository(openDatabase()).saveGuide(payload))
   ipcMain.handle('references:style-save', (_event, payload) => createReferenceNovelRepository(openDatabase()).applyGuide(payload))
   ipcMain.handle('authoring:save-sample', (_event, payload) => createAuthoringRepository(openDatabase()).saveSample(payload))

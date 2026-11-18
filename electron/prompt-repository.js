@@ -1,3 +1,4 @@
+import { voiceLibrary } from './reference-voice.js'
 import { randomUUID } from 'node:crypto'
 import { builtInPromptTemplate } from './prompt-templates.js'
 
@@ -219,6 +220,7 @@ export function createPromptRepository(database, {
       WHERE b.project_id = ?
     `).get(projectId)
     return {
+      voiceLibrary: ['chapter', 'rewrite'].includes(task) ? voiceLibrary(database, projectId, chapter?.chapter_no) : null,
       template: resolveTemplate(task, projectId, chapter?.id || '', volume?.id || ''),
       creativePack: packRow ? {
         id: packRow.pack_id,

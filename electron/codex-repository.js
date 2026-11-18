@@ -312,7 +312,7 @@ export function createCodexRepository(database, {
       const row = database.prepare('SELECT id FROM story_change_sets WHERE id = ? AND project_id = ?').get(target.targetId, projectId)
       if (!row) throw new Error('设定变更集不属于当前项目')
     }
-    if (['project_brief_draft', 'reference_style_draft'].includes(target.kind) && target.targetId && target.targetId !== projectId) throw new Error('项目草稿目标不属于当前项目')
+    if (['project_brief_draft', 'reference_style_draft', 'reference_trial_draft'].includes(target.kind) && target.targetId && target.targetId !== projectId) throw new Error('项目草稿目标不属于当前项目')
     if (target.kind === 'style_profile_draft') {
       if (target.scopeType === 'project' && target.scopeId !== projectId) throw new Error('文风范围不属于当前项目')
       if (target.scopeType === 'volume' && !owned('planning_entities', target.scopeId)) throw new Error('分卷文风不属于当前项目')

@@ -1,3 +1,4 @@
+import { isReferenceDraftTarget } from './inline-creative.js'
 import { validateChapterCard, validateScenePlan } from './creative-quality.js'
 import { CodexCancelledError } from './codex-agent-gateway.js'
 import { cleanPlanningFieldText } from './generated-text.js'
@@ -312,7 +313,7 @@ export class AgentRuntime {
     const controller = new AbortController()
     this.controllers.set(run.id, controller)
     try {
-      const sourceDigest = step.input?.target?.kind === 'reference_style_draft' || run.creativePack?.version === '1.3.0' || run.modelRoutes?.creativeRequestId ? await this.currentSourceDigest(run) : mirror?.sourceDigest || await this.currentSourceDigest(run)
+      const sourceDigest = isReferenceDraftTarget(step.input?.target) || run.creativePack?.version === '1.3.0' || run.modelRoutes?.creativeRequestId ? await this.currentSourceDigest(run) : mirror?.sourceDigest || await this.currentSourceDigest(run)
       if (step.input?.conversationMode === 'discuss') {
         const result = await this._executeTask({ run, step, mirror, eventContext, signal: controller.signal, extra: {} })
         const text = String(result.structuredOutput?.text || result.content || result.text || '')

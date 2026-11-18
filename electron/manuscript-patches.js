@@ -36,7 +36,7 @@ export const TEXT_PATCH_SCHEMA = { type: 'object', additionalProperties: false, 
 } }
 
 // Keep dependency/delta bookkeeping out of the text sent to the model.
-export function inlineRevisionMessages({ action, context, candidate, isDelta = false, repairInstruction = '' }) {
+export function inlineRevisionMessages({ action, context, candidate, isDelta = false, repairInstruction = '', voicePassage = '' }) {
   const reference = context?.text || ''
   if (action?.conversationMode === 'discuss') {
     const discussion = candidate?.payload?.manuscript ?? JSON.stringify(candidate?.payload || {})
@@ -58,6 +58,7 @@ export function inlineRevisionMessages({ action, context, candidate, isDelta = f
     { role: 'user', content: [
       `作者要求：${action.instruction}`,
       `正式约束${isDelta ? '增量' : ''}：\n${reference}`,
+      voicePassage,
       `范围：${JSON.stringify(action.modificationScope)}`, `sourceDigest：${digest}`,
       `保护范围：${JSON.stringify(protectedRanges)}`, `原文：\n${text}`, repairInstruction,
     ].filter(Boolean).join('\n') },

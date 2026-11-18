@@ -751,11 +751,11 @@ export class CodexAgentGateway {
     return ['adapter_start', 'initialize', 'session_new', 'prompt_transport'].includes(phase)
   }
 
-  async runExecFallback({ agentRunId, agentStepId, prompt, outputSchema, signal, onEvent = () => {}, mirrorRoot, workspaceRoot = mirrorRoot, model = '', reasoningEffort = '', fastMode = false, fallbackReason = '' }) {
-    return this.withRuntimeUsage(() => this._runExecFallback({ agentRunId, agentStepId, prompt, outputSchema, signal, onEvent, mirrorRoot, workspaceRoot, model, reasoningEffort, fastMode, fallbackReason }))
+  async runExecFallback({ agentRunId, agentStepId, prompt, outputSchema, signal, onEvent = () => {}, mirrorRoot, workspaceRoot = mirrorRoot, model = '', reasoningEffort = '', fastMode = false, fallbackReason = '', isolatedWriting = false }) {
+    return this.withRuntimeUsage(() => this._runExecFallback({ agentRunId, agentStepId, prompt, outputSchema, signal, onEvent, mirrorRoot, workspaceRoot, model, reasoningEffort, fastMode, fallbackReason, isolatedWriting }))
   }
 
-  async _runExecFallback({ agentRunId, agentStepId, prompt, outputSchema, signal, onEvent = () => {}, mirrorRoot, workspaceRoot = mirrorRoot, model = '', reasoningEffort = '', fastMode = false, fallbackReason = '' }) {
+  async _runExecFallback({ agentRunId, agentStepId, prompt, outputSchema, signal, onEvent = () => {}, mirrorRoot, workspaceRoot = mirrorRoot, model = '', reasoningEffort = '', fastMode = false, fallbackReason = '', isolatedWriting = false }) {
     assertCodexPromptLength(prompt)
     const runtime = this.runtime || this.resolveRuntime()
     if (!runtime.cliAvailable || !mirrorRoot) throw new Error('Codex exec 兼容模式运行时不完整')
@@ -770,6 +770,7 @@ export class CodexAgentGateway {
       '--sandbox', 'read-only', '--cd', workspaceRoot,
       ...(path.resolve(workspaceRoot) === path.resolve(mirrorRoot) ? [] : ['--add-dir', mirrorRoot]),
       '--ignore-user-config', '--skip-git-repo-check',
+      ...(isolatedWriting ? ['--ephemeral', '--disable', 'shell_tool', '--disable', 'multi_agent', '-c', 'web_search="disabled"'] : []),
       '-c', 'approval_policy="never"',
       ...execModelArgs({ model, reasoningEffort, fastMode }),
       ...(outputSchema && runtime.capabilities?.execOutputSchema ? ['--output-schema', schemaPath] : []),

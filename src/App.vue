@@ -952,7 +952,7 @@ function applyWorkspace(loaded) {
 onMounted(async () => {
   window.addEventListener('resize', updateViewport)
   closeRequestCleanup = appService.onCloseRequest(handleCloseRequest)
-  runtimeInfoCleanup = appService.onRuntimeInfo((info) => Object.assign(runtime, info))
+  runtimeInfoCleanup = appService.onRuntimeInfo((info) => { Object.assign(runtime, info) })
   creativeChangeCleanup = appService.onCreativeChange(event => {
     if (event.projectId === project.id) externalChange.value = true
   })

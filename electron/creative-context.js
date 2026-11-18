@@ -1,3 +1,4 @@
+import { selectReferenceStyle, guideSection, withoutReferenceGuide } from './reference-rules.js'
 import { createHash } from 'node:crypto'
 import { COMPACT_HANDOFF_MODE } from './chapter-handoff.js'
 import { shortStoryGuidance } from './work-format.js'
@@ -47,7 +48,8 @@ function localExcerpt(value, limit, anchors = []) {
   return (start ? '…' : '') + text.slice(start, start + limit - 2) + '…'
 }
 
-function buildLocalRevisionContext(db, project, chapter, { instruction, localRevision, styleText }) {
+function buildLocalRevisionContext(db, project, chapter, input) {
+  const { instruction, localRevision, styleText } = input
   const scope = localRevision.scope || {}
   const original = String(localRevision.text || chapter.manuscript || '')
   const focus = ['selection', 'scene'].includes(scope.kind) && Number.isInteger(scope.from) && Number.isInteger(scope.to)
@@ -86,7 +88,11 @@ function buildLocalRevisionContext(db, project, chapter, { instruction, localRev
   const identity = { title: project.title, genre: project.genre, idea: project.idea }
   add(`project:${project.id}:identity`, '当前作品', `${project.title} · ${project.genre}\n${localExcerpt(project.idea, 600, anchors)}`, identity, true)
   const style = project.style || ''
-  add(`project:${project.id}:style`, '本次文风要求（不作为剧情事实）', localExcerpt(styleText || style, 3600, anchors), style, true)
+  const selectedStyle = selectReferenceStyle(styleText || style, { ...input, chapter })
+  const section = guideSection(selectedStyle)
+  const compactStyle = section ? [localExcerpt(selectedStyle.slice(0, section.start) + selectedStyle.slice(section.end), 3600, anchors),
+    selectedStyle.slice(section.start, section.end)].filter(Boolean).join('\n') : localExcerpt(selectedStyle, 3600, anchors)
+  add(`project:${project.id}:style`, '本次文风要求（不作为剧情事实）', compactStyle, style, true)
   const planning = { title: chapter.title, card: parse(chapter.card_json), scenes: parse(chapter.scene_plan, chapter.scene_plan) }
   add(`chapter:${chapter.id}:planning`, '当前章节目标与边界',
     [planning.title, fields(planning.card, ['goal', 'ending', 'executionNotes', 'protagonistGoal', 'resistance', 'turningPoint'], 500),
@@ -233,7 +239,7 @@ export function buildCreativeContext(db, input = {}) {
       omitted.push({ targetKey: key, reason: '上下文预算不足' }); return false
     }
     const source = { targetKey: key, digest: hash(dependencyValue), required }
-    if (deduper) source.promptDigest = hash(text)
+    if (deduper || (value !== dependencyValue && key === `project:${project.id}:style`)) source.promptDigest = hash(text)
     usedChars += text.length
     parts.push(text); sources.push(source); items.push({ ...source, label, text })
     return true
@@ -246,7 +252,8 @@ export function buildCreativeContext(db, input = {}) {
   const documents = db.prepare('SELECT * FROM planning_documents WHERE project_id = ?').all(project.id)
   for (const doc of documents.filter(item => item.kind === 'foundation')) {
     const data = parse(doc.content_json)
-    const view = deduper ? draftFoundation(data) : data
+    const view = { ...(deduper ? draftFoundation(data) : data) }
+    if (typeof view.tone === 'string') view.tone = withoutReferenceGuide(view.tone)
     if (add(`planning_document:${project.id}:${doc.kind}`, '相关硬事实 · 故事基础', view, true, data)) deduper?.addDocument(doc.kind, view)
   }
   const world = documents.find(item => item.kind === 'world')
@@ -255,7 +262,7 @@ export function buildCreativeContext(db, input = {}) {
     const rules = { hardRules: data.hardRules || '', costs: data.costs || '', powerSystem: data.powerSystem || '' }
     if (add(`planning_document:${project.id}:world-hardRules`, '世界硬规则与代价', rules, true)) deduper?.addDocument(world.kind, rules)
   }
-  add(`project:${project.id}:style`, '作者文风（表达要求，不是剧情事实）', project.style || '', true)
+  add(`project:${project.id}:style`, '作者文风（表达要求，不是剧情事实）', selectReferenceStyle(project.style || '', { ...input, chapter }), true, project.style || '')
   if (deduper) {
     addDraftSources(db, project, chapter, planning, input, { add, deduper, budget, deduplicated, sources })
     return { text: parts.join(''), sources, items, diagnostics: { budgetChars: budget, usedChars, omitted, deduplicated,

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
+import { selectReferenceStyle, withoutReferenceGuide } from './reference-rules.js'
 
 const SENSITIVE_KEY = /(api[-_]?key|authorization|token|secret|cookie|credential|request[-_]?headers?|cipher)/i
 const SQLITE_PATH = /(?:^|[\/])(?:[^\/]*\.sqlite(?:3)?|novel-studio\.db)(?:$|[\/])/i
@@ -161,18 +162,18 @@ export function removeCodexBookWorkspace({ baseDirectory, projectId, provider = 
   return true
 }
 
-function projectFoundationMarkdown(project, planning) {
+function projectFoundationMarkdown(project, planning, input) {
   const foundation = planning?.documents?.foundation?.content || {}
   return [
     `# ${project.title || '未命名小说'}`,
     '',
     `- 题材：${project.genre || '未设置'}`,
     `- 初始想法：${project.idea || ''}`,
-    `- 项目文风：${project.style || ''}`,
+    `- 项目文风：${selectReferenceStyle(project.style || '', input)}`,
     '',
     '## 故事基础',
     '',
-    ...Object.entries(foundation).map(([key, value]) => `- ${key}：${typeof value === 'string' ? value : JSON.stringify(value)}`),
+    ...Object.entries(foundation).map(([key, value]) => `- ${key}：${typeof value === 'string' ? (key === 'tone' ? withoutReferenceGuide(value) : value) : JSON.stringify(value)}`),
     '',
   ].join('\n')
 }
@@ -259,7 +260,12 @@ export function createCodexProjectMirror({
     allowedRoots: ['project', 'chapter', 'candidates', 'creative-pack', '.codex/skills/novel-studio-creator'],
   }
   atomicWrite(path.join(root, '.nscollab.json'), jsonText(collaboration))
-  atomicWrite(path.join(root, 'project', 'foundation.md'), projectFoundationMarkdown(source.project, source.planning))
+  const currentStep = agentRun.steps?.find(step => step.id === agentRun.currentStepId)
+    || agentRun.steps?.find(step => step.status === 'running')
+    || agentRun.steps?.find(step => !['completed', 'confirmed', 'skipped', 'cancelled'].includes(step.status))
+    || agentRun.steps?.at(-1)
+  atomicWrite(path.join(root, 'project', 'foundation.md'), projectFoundationMarkdown(source.project, source.planning,
+    { ...currentStep?.input, task: currentStep?.task, chapter }))
   atomicWrite(path.join(root, 'project', 'characters.json'), jsonText(source.planning?.characters || []))
   atomicWrite(path.join(root, 'project', 'world.json'), jsonText({
     document: source.planning?.documents?.world || {},
