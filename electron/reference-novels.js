@@ -139,6 +139,7 @@ export function createReferenceNovelRepository(db, { now = () => new Date().toIS
       const existing = books(projectId)
       const known = new Set(existing.map(book => book.content_digest))
       const added = [], skipped = []
+      let firstVoiceBook
       for (const input of inputs) {
         const content = String(input.text || '').trim()
         if (!content) throw new Error(`《${input.title}》没有可导入的正文`)
@@ -147,10 +148,16 @@ export function createReferenceNovelRepository(db, { now = () => new Date().toIS
         if (known.has(contentDigest)) { skipped.push(input.title); continue }
         if (existing.length + added.length >= REFERENCE_BOOK_LIMIT) throw new Error(`每部作品最多保存${REFERENCE_BOOK_LIMIT}本参考小说，请移除不再使用的参考书后重试`)
         const id = `reference-${randomUUID()}`, time = now()
-        db.prepare(`INSERT INTO reference_novels (id,project_id,title,filename,content,content_digest,char_count,created_at,updated_at,chapter_index_json)
-          VALUES (?,?,?,?,?,?,length(?),?,?,?)`).run(id, projectId, clean(input.title, 200) || '未命名参考小说', clean(input.filename, 255), content, contentDigest, content, time, time, JSON.stringify(input.chapterIndex || []))
+        db.prepare(`INSERT INTO reference_novels (id,project_id,title,filename,content,content_digest,char_count,created_at,updated_at,chapter_index_json,selected_excerpts_json)
+          VALUES (?,?,?,?,?,?,length(?),?,?,?,?)`).run(id, projectId, clean(input.title, 200) || '未命名参考小说', clean(input.filename, 255), content, contentDigest, content, time, time, JSON.stringify(input.chapterIndex || []), JSON.stringify(input.excerpts || []))
+        if (!firstVoiceBook && input.excerpts?.some(s => s.use === '底色')) firstVoiceBook = contentDigest
         added.push(id)
         known.add(contentDigest)
+      }
+      if (firstVoiceBook && !existing.some(book => book.excerpts.some(s => s.use))) {
+        // Existing settings can represent a deliberate opt-out, including older versions.
+        db.prepare(`INSERT INTO reference_style_guides (id,project_id,settings_json,created_at,updated_at)
+          VALUES (?,?,?,?,?) ON CONFLICT(project_id) DO NOTHING`).run(`reference-guide-${randomUUID()}`, projectId, JSON.stringify({ voiceBook: firstVoiceBook }), now(), now())
       }
       return { ...state(projectId), added: added.length, skipped }
     })

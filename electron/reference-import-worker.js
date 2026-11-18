@@ -2,6 +2,7 @@ import { parentPort, workerData } from 'node:worker_threads'
 import { readFile, stat } from 'node:fs/promises'
 import path from 'node:path'
 import { parseManuscript } from './manuscript-formats.js'
+import { selectImportExcerpts } from './reference-auto-excerpts.js'
 import { indexReferenceChapters } from './reference-chapters.js'
 
 try {
@@ -33,7 +34,9 @@ try {
   } else throw new Error('请选择TXT、Markdown或Word DOCX文件')
   text = text.replace(/\r\n?/g, '\n').replace(/\u0000/g, '').trim()
   if (!text || !/[\p{L}\p{N}]/u.test(text)) throw new Error('文件中没有可分析的正文')
-  parentPort.postMessage({ ok: true, book: { title, filename, text, chapterIndex: chapterIndex || indexReferenceChapters(text) } })
+  chapterIndex ??= indexReferenceChapters(text)
+  const excerpts = selectImportExcerpts(text, chapterIndex)
+  parentPort.postMessage({ ok: true, book: { title, filename, text, chapterIndex, excerpts } })
 } catch (error) {
   parentPort.postMessage({ ok: false, error: error.message })
 }

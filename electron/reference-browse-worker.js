@@ -1,5 +1,6 @@
 import { DatabaseSync } from 'node:sqlite'
 import { parentPort, workerData } from 'node:worker_threads'
+import { selectImportExcerpts } from './reference-auto-excerpts.js'
 import { indexReferenceChapters } from './reference-chapters.js'
 let db
 try {
@@ -10,7 +11,8 @@ try {
   const storedIndex = JSON.parse(row.chapter_index_json)
   const chapters = storedIndex.length ? storedIndex : indexReferenceChapters(row.content)
   let value
-  if (input.chapter === undefined) {
+  if (input.autoSelect) value = selectImportExcerpts(row.content, chapters)
+  else if (input.chapter === undefined) {
     const query = String(input.query || '').trim().toLowerCase()
     const matches = chapters.map((chapter, index) => ({ index, title: chapter.title, length: chapter.end - chapter.start }))
       .filter(chapter => !query || chapter.title.toLowerCase().includes(query) || String(chapter.index + 1) === query)

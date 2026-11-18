@@ -472,3 +472,36 @@ test('a different setting can use a functional excerpt and apply its pacing to t
   const disabled = compilePrompt({ task: 'chapter', instruction: '在旧书摊商量分工' })
   assert.ok(!disabled.messages[1].content.includes('【本场详略】'))
 })
+
+test('file import selects continuous passages and immediately uses them in writing without a guide', async t => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'reference-selection-'))
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  const prose = [
+    '第一章 门前', '傍晚的风从巷子里吹过去。她还坐在门口，手里捧着昨天的旧本子，听着墙那头收拾碗筷的声音。',
+    '第二章 迟来的车', '他原以为最后一趟车早就开走了，没想到车灯还亮着。走近一看，原来那块写着停运的牌子是挂在对面车上的。',
+    '第三章 面摊', '要不咱俩今天换一换？我负责灶头，你负责招呼客人。她递过来那条洗得发白的围裙。就这么定了。',
+  ].join('\n')
+  const file = path.join(dir, '参考.txt')
+  await writeFile(file, prose)
+  const imported = await readReferenceNovel(file)
+  assert.equal(new Set(imported.excerpts.map(s => s.use)).size, imported.excerpts.length)
+  for (const s of imported.excerpts) assert.ok(prose.includes(s.text) && s.text.length <= 600 && !/第.章/.test(s.text))
+  const { db, repo } = fixture(t)
+  const r = repo()
+  const state = r.importBooks('a', [imported])
+  assert.equal(state.settings.voiceBook, state.books[0].content_digest)
+  assert.equal(state.guide.draft_text, '')
+  const prompts = createPromptRepository(db)
+  for (const task of ['chapter', 'rewrite']) {
+    const promptContext = prompts.resolvePromptContext({ projectId: 'a', chapterId: 'chapter-a', task })
+    const result = compilePrompt({ task, instruction: '让人物重新判断眼前的局势。', promptContext })
+    assert.deepEqual(result.snapshot.voiceSamples.map(s => s.use), ['底色', '判断修正'])
+    assert.ok(result.messages.some(m => m.content.includes(imported.excerpts.find(s => s.use === '判断修正').text)))
+  }
+  r.saveSettings({ projectId: 'a', revision: state.guide.settings_revision, voiceBook: '' })
+  const book = state.books[0]
+  r.updateBook({ projectId: 'a', ...book, excerpts: [] })
+  assert.equal(r.importBooks('a', [imported]).books[0].excerpts.length, 0)
+  const later = r.importBooks('a', [{ ...imported, text: prose + '。' }])
+  assert.ok(!later.settings.voiceBook)
+})

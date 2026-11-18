@@ -6,7 +6,7 @@
     </header>
     <p v-if="error" class="reference-error" role="alert">{{ error }} <button type="button" @click="load">刷新资料</button></p>
     <p v-if="notice" class="reference-notice" role="status">{{ notice }}</p>
-    <p class="reference-hint">支持 TXT、Markdown、Word DOCX，可多选，每本最大 10 MB。参考资料按当前作品保存；点击分析后，会把选中书籍的抽样片段发送给所选模型。</p>
+    <p class="reference-hint">支持 TXT、Markdown、Word DOCX，可多选，每本最大 10 MB。导入时在本机自动选取写作样本。首次设置的底色和匹配本场用途的选段，会随正文写作和改稿发送给所选模型。</p>
     <div v-if="!state" class="reference-empty">正在读取参考资料…</div>
     <template v-else>
       <div v-if="!state.books.length" class="reference-empty"><strong>从你喜欢的写法开始</strong><p>导入完整小说或精选片段，再为每本书注明想参考的部分，例如日常对白、动作描写、轻松语气。</p></div>
@@ -16,7 +16,7 @@
           <label><span class="reference-label">书名</span><input v-model="book.title" :disabled="busy" maxlength="200" /></label>
           <label><span class="reference-label">想参考什么</span><textarea v-model="book.focus" :disabled="busy" rows="2" maxlength="500" placeholder="例如：对白自然，关键场面写细，赶路和重复流程简略带过。" /></label>
           <div class="reference-book-options"><label><span class="reference-label">参考优先级</span><select v-model.number="book.priority" :disabled="busy"><option :value="2">主参考</option><option :value="1">同等参考</option><option :value="0">辅助参考</option></select></label><label><span class="reference-label">选样方式</span><select v-model="book.sample_mode" :disabled="busy"><option value="auto">自动抽样</option><option value="scenes">所选完整场景</option></select></label></div>
-          <div class="reference-chosen-scenes"><p class="reference-hint">已选 {{ book.excerpts.length }} 个选段（分析最多3个，写作最多24个）</p><div v-for="(scene, index) in book.excerpts" :key="index"><label v-if="scene.use === '底色'" class="reference-check"><input type="radio" :name="'primary-' + book.id" :checked="scene.primary" :disabled="busy" @change="book.excerpts.forEach(s => s.primary = s === scene)" />固定底色</label><span>{{ scene.label }} · {{ scene.text.length.toLocaleString() }} 字符</span><select :value="scene.use || '仅分析'" aria-label="选段用途" :disabled="busy" @change="scene.use = $event.target.value"><option>仅分析</option><option :disabled="scene.text.length > 600">底色</option><option v-for="purpose in purposes" :key="purpose" :disabled="scene.text.length > 600">{{ purpose }}</option></select><button type="button" :disabled="busy" @click="book.excerpts.splice(index, 1)">移除样本</button></div><button type="button" :disabled="busy || book.excerpts.length >= 27" @click="pickerBookId = book.id">从章节选择场景</button></div>
+          <details class="reference-chosen-scenes"><summary>查看与调整选段（{{ book.excerpts.length }}）</summary><div v-for="(scene, index) in book.excerpts" :key="index"><label v-if="scene.use === '底色'" class="reference-check"><input type="radio" :name="'primary-' + book.id" :checked="scene.primary" :disabled="busy" @change="book.excerpts.forEach(s => s.primary = s === scene)" />固定底色</label><details><summary>{{ scene.label }} · {{ scene.text.length.toLocaleString() }} 字符</summary><p class="reference-excerpt-text">{{ scene.text }}</p></details><select :value="scene.use || '仅分析'" aria-label="选段用途" :disabled="busy" @change="scene.use = $event.target.value"><option>仅分析</option><option :disabled="scene.text.length > 600">底色</option><option v-for="purpose in purposes" :key="purpose" :disabled="scene.text.length > 600">{{ purpose }}</option></select><button type="button" :disabled="busy" @click="book.excerpts.splice(index, 1)">移除样本</button></div><button type="button" :disabled="busy" @click="fillExcerpts(book)">按用途自动补选</button><button type="button" :disabled="busy || book.excerpts.length >= 27" @click="pickerBookId = book.id">从章节选择场景</button></details>
           <footer><button type="button" :disabled="busy || !bookChanged(book)" @click="saveBook(book)">保存参考重点</button><button class="reference-subtle" type="button" :disabled="busy" @click="removeBook(book)">移除</button></footer>
         </article>
       </div>
@@ -26,7 +26,7 @@
         <label><span class="reference-label">偏好与需要改善的用词</span><textarea v-model="preference" :disabled="busy" rows="3" maxlength="1200" placeholder="例如：用词别扭、对白太像书面语，希望接近热门小说那种顺畅、自然的表达。也可以粘贴你觉得生硬的一两句。" /></label>
         <label><span class="reference-label">参考冲突时如何取舍</span><textarea v-model="conflictPolicy" :disabled="busy" rows="2" maxlength="1200" placeholder="例如：以甲书的对白和情绪为主，乙书补充环境描写；冲突场景加快，日常场景保留趣味。" /></label>
         <label><span class="reference-label">贴近参考文风 · 底色来源</span><select v-model="voiceBook" :disabled="busy"><option value="">关闭选段随稿发送</option><option v-for="book in voiceBooks" :key="book.id" :value="book.content_digest">{{ book.title }}</option></select></label>
-        <label><span class="reference-label">补充选段用途</span><select v-model="voicePurpose" :disabled="busy"><option value="auto">按本场叙述功能匹配</option><option value="base">只用底色</option><option v-for="purpose in purposes" :key="purpose">{{ purpose }}</option></select></label><p class="reference-hint">先选一段你喜欢的原文（最多600字符），用途选「底色」，保存参考重点。指定底色来源并保存后，正文写作和改稿会发送一段底色原文。可固定底色并指定补充用途。可分别标记熟人商量、人物盘算、判断修正等用途。自动模式优先看本次要求，即使题材不同也能选用相同功能的片段。用途不明确时只发送底色。分析场景和写作样本分别计数；没有分析场景时采用自动抽样。</p>
+        <label><span class="reference-label">补充选段用途</span><select v-model="voicePurpose" :disabled="busy"><option value="auto">按本场叙述功能匹配</option><option value="base">只用底色</option><option v-for="purpose in purposes" :key="purpose">{{ purpose }}</option></select></label><p class="reference-hint">首次导入时，第一本选出底色的参考小说会成为底色来源。正文写作和改稿使用一段底色，按本次要求、选区和章节安排最多再选一段。用途不明确时只用底色。可在上方更换来源或关闭随稿发送。已有参考书可点「按用途自动补选」，再保存参考重点。</p>
         <div><button type="button" :disabled="busy || !settingsDirty || booksDirty" @click="saveSettings">保存分析偏好</button><small v-if="settingsDirty" class="reference-hint"> 偏好有修改，保存后用于分析。</small></div>
         <div class="reference-analyze-actions">
           <label class="reference-model"><span class="reference-label">分析模型</span><select v-model="modelId" :disabled="busy"><option value="">跟随规划模型</option><option v-for="profile in profiles" :key="profile.id" :value="profile.id">{{ profile.name }} · {{ profile.model }}</option></select></label>
@@ -147,10 +147,20 @@ async function importBooks() {
   importing.value = true
   const result = await operation(projectId => appService.importReferenceNovels({ projectId }))
   if (result && !result.cancelled) {
+    if (voiceBook.value === (state.value?.settings.voiceBook || '')) voiceBook.value = result.settings.voiceBook || ''
     accept(result, { replaceGuide: false })
     notice.value = `已导入 ${result.added} 本${result.skipped.length ? `，跳过 ${result.skipped.length} 本重复内容` : ''}`
   }
   importing.value = false
+}
+async function fillExcerpts(book) {
+  const samples = await operation(projectId => appService.browseReferenceNovel({ projectId, bookId: book.id, autoSelect: true }))
+  if (!samples) return
+  const existing = book.excerpts.filter(s => s.use && s.use !== '仅分析')
+  const additions = samples.filter(sample => !existing.some(s => s.use === sample.use || s.text === sample.text))
+    .slice(0, Math.max(0, 24 - existing.length))
+  book.excerpts.push(...additions)
+  notice.value = additions.length ? `已补选 ${additions.length} 段，保存参考重点后生效。` : '没有找到适合补充的新用途选段。'
 }
 async function saveBook(book) {
   const value = await operation(projectId => appService.updateReferenceNovel({ projectId, ...book, excerpts: book.excerpts.map(sample => ({ ...sample })) }))
@@ -269,5 +279,5 @@ onBeforeUnmount(() => { disposed = true; epoch++; void generation?.cancel() })
 .reference-empty{padding:24px;border:1px dashed var(--ns-border,#bdcfd2);border-radius:12px;color:var(--ns-text-muted,#657e87);line-height:1.8}.reference-empty strong{color:var(--ns-text,#29444b)}.reference-empty p{margin-bottom:0;font-size:13px}
 .reference-samples{padding:13px;border:1px solid var(--ns-border,#bdcfd2);border-radius:8px}.reference-samples summary{cursor:pointer;font-size:13px;line-height:1.8}.reference-samples h4{font-size:14px;margin:16px 0 5px}.reference-samples pre{white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.8 var(--font-ui,sans-serif);max-height:240px;overflow:auto}
 @media(max-width:600px){.reference-heading{flex-direction:column}.reference-heading button{width:100%}.reference-guide-heading{flex-wrap:wrap}}
-.reference-book-options{display:grid;grid-template-columns:1fr 1fr;gap:10px}.reference-chosen-scenes{display:grid;gap:9px}.reference-chosen-scenes>div{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;font-size:12px;align-items:center}.reference-trial{display:grid;gap:12px;padding:18px;border:1px solid var(--ns-border,#bdcfd2);border-radius:10px;background:var(--ns-surface,#fff)}.reference-trial h4{margin:0}.reference-trial>button{justify-self:start}
+.reference-book-options{display:grid;grid-template-columns:1fr 1fr;gap:10px}.reference-chosen-scenes summary{cursor:pointer}.reference-chosen-scenes>div,.reference-chosen-scenes>button{margin-top:9px}.reference-excerpt-text{white-space:pre-wrap;overflow-wrap:anywhere}.reference-chosen-scenes>div{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;font-size:12px;align-items:center}.reference-trial{display:grid;gap:12px;padding:18px;border:1px solid var(--ns-border,#bdcfd2);border-radius:10px;background:var(--ns-surface,#fff)}.reference-trial h4{margin:0}.reference-trial>button{justify-self:start}
 </style>
