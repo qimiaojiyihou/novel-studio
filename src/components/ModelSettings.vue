@@ -7,10 +7,24 @@
           <h2>模型与任务路由</h2>
           <p>把创作任务交给合适的模型。正文、本地模型和外部模型可以分别配置。</p>
         </div>
-        <button class="settings-close" title="关闭设置" @click="$emit('close')">×</button>
+        <button class="settings-close" aria-label="关闭设置" title="关闭设置" @click="$emit('close')">×</button>
       </header>
 
       <div class="settings-content">
+        <section class="settings-block">
+          <div class="settings-block-heading"><h3>本书创作设置</h3></div>
+          <label class="route-row"><span class="route-copy"><strong>默认执行方式</strong><small>用于故事设计、正文、改稿和参考分析</small></span>
+            <select aria-label="默认执行方式" :value="project.default_execution_mode" @change="$emit('project-mode', $event.target.value)">
+              <option value="codex">{{ agentName }} · 创作 Agent</option><option value="app_model">应用任务模型</option>
+            </select>
+          </label>
+          <label class="route-row"><span class="route-copy"><strong>正文写作方式</strong></span>
+            <select :value="writingProfile" @change="$emit('writing-profile', $event.target.value)">
+              <option :value="REFERENCE_WRITING_PROFILE">参考文风写作</option><option value="">常规写作</option>
+            </select>
+          </label>
+          <label><input v-model="showModelOverrides" type="checkbox" /> 在创作页面显示单次模型选择（所有书）</label>
+        </section>
         <StorageSettings />
         <ReaderSettings />
         <section class="settings-block codex-agent-block">
@@ -103,7 +117,7 @@
           </section>
           <small class="codex-permission-note">工具权限按次审批；不会提供永久允许。{{ agentName }} 只访问当前 AgentRun 的受控镜像，结果只进入候选区。</small>
         </section>
-        <section class="settings-block route-block">
+        <details class="settings-block route-block"><summary>高级 · 按任务配置应用模型</summary>
           <div class="settings-block-heading">
             <div>
               <span class="settings-kicker">TASK ROUTING</span>
@@ -124,7 +138,7 @@
               </select>
             </label>
           </div>
-        </section>
+        </details>
 
         <section class="settings-block profile-block">
           <div class="settings-block-heading">
@@ -303,8 +317,10 @@
 </template>
 
 <script setup>
+import { showModelOverrides } from '../composables/model-controls.js'
 import { computed, reactive, ref, watch, onUnmounted, nextTick } from 'vue'
 import { appService } from '../services/app-service.js'
+import { REFERENCE_WRITING_PROFILE } from '../../electron/prompt-templates.js'
 import StorageSettings from './StorageSettings.vue'
 import ReaderSettings from './ReaderSettings.vue'
 import { modelDirectory } from '../../electron/codex-models.js'
@@ -317,12 +333,14 @@ import {
 } from '../../electron/model-request-config.js'
 
 const props = defineProps({
+  project: { type: Object, required: true },
+  writingProfile: String,
   visible: { type: Boolean, default: false },
   settings: { type: Object, required: true },
   saveState: { type: Object, default: () => ({ state: 'idle', message: '' }) },
 })
 
-const emit = defineEmits(['close', 'save-profile', 'delete-profile', 'route-change'])
+const emit = defineEmits(['project-mode', 'writing-profile', 'close', 'save-profile', 'delete-profile', 'route-change'])
 
 const taskDefinitions = [
   { id: 'chapter', label: '正文续写', description: '默认优先选择本地正文模型' },

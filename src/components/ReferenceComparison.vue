@@ -6,7 +6,7 @@
     <label>本次测试的规则<select v-model="rule" :disabled="running"><option v-for="line in rules" :key="line">{{ line }}</option></select></label>
     <div class="reference-book-options">
       <label>测试任务<select v-model="task" :disabled="running"><option value="draft">起草</option><option value="rewrite">定向修稿</option></select></label>
-      <label>盲评模型<select v-model="backend" :disabled="running"><option value="codex">Codex · 跟随 Codex 设置</option><option value="app">应用模型 · {{ modelLabel }}</option></select></label>
+      <label v-if="showModelOverrides">盲评模型<select v-model="backend" :disabled="running"><option value="codex">Codex · 跟随 Codex 设置</option><option value="app">应用模型 · {{ modelLabel }}</option></select></label>
     </div>
     <label>场景与要求<textarea v-model="brief" :disabled="running" maxlength="1200" rows="2" /></label>
     <label>{{ task === 'rewrite' ? '待修原稿' : '共同前文（可选）' }}<textarea v-model="sourceText" :disabled="running" maxlength="6000" rows="3" /></label>
@@ -33,11 +33,12 @@
 </template>
 
 <script setup>
+import { showModelOverrides } from '../composables/model-controls.js'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { appService } from '../services/app-service.js'
-const props = defineProps({ projectId: String, guide: String, history: Array, disabled: Boolean, modelId: String, modelLabel: String })
+const props = defineProps({ projectId: String, defaultMode: String, guide: String, history: Array, disabled: Boolean, modelId: String, modelLabel: String })
 const emit = defineEmits(['changed'])
-const task = ref('draft'), backend = ref('codex'), rule = ref(''), brief = ref(''), sourceText = ref('')
+const task = ref('draft'), backend = ref(props.defaultMode === 'app_model' ? 'app' : 'codex'), rule = ref(''), brief = ref(''), sourceText = ref('')
 const record = ref(null), feedback = ref(''), error = ref(''), running = ref(false), voting = ref(false)
 const comparisonMode = ref('rule')
 const choices = computed(() => ({ A: 'A 稿更好', B: 'B 稿更好', ...(record.value?.output_c ? { C: 'C 稿更好' } : {}), tie: '差不多', neither: '都不满意' }))
@@ -75,7 +76,7 @@ async function start(comparisonId = '') {
     finally { polling = false }
   }, 2000)
   try {
-    const value = await appService.compareReferences({ comparisonId, projectId: props.projectId, task: task.value, backend: backend.value, includeSamples: comparisonMode.value === 'samples',
+    const value = await appService.compareReferences({ comparisonId, projectId: props.projectId, task: task.value, backend: showModelOverrides.value ? backend.value : props.defaultMode === 'app_model' ? 'app' : 'codex', includeSamples: comparisonMode.value === 'samples',
       modelProfileId: props.modelId, brief: brief.value, sourceText: sourceText.value, rule: rule.value })
     if (!disposed) { record.value = value; feedback.value = ''; emit('changed') }
   } catch (e) { if (!disposed) error.value = e.message }

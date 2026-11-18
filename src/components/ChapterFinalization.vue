@@ -12,7 +12,7 @@
         <ChapterAmendment :project-id="projectId" :chapter-id="chapterId" :disabled="busy" @busy="amendmentBusy = $event" @completed="amendmentCompleted" />
         <p>此方式会审稿并生成交接，确认后供后续章节使用；若要跳过，请在上方选择“人工直接定稿”。</p>
         <p class="finalize-tip">建议先集中完成正文修改，再做一次独立审稿。下方“本地检查”不调用模型；正文变化后，旧报告保留作参考，新稿另行检查。</p>
-        <label>独立审稿方式<select v-model="reviewerChoice" :disabled="busy" @change="reviewerTouched = true"><option value="route">使用质量评审路由</option><option value="codex">{{ agentLabel }} · 新会话</option><option v-for="profile in settings.profiles.filter(p => p.enabled)" :key="profile.id" :value="profile.id">{{ profile.name }} · {{ profile.model }}</option></select></label>
+        <label v-if="showModelOverrides">独立审稿方式<select v-model="reviewerChoice" :disabled="busy" @change="reviewerTouched = true"><option value="route">使用质量评审路由</option><option value="codex">{{ agentLabel }} · 新会话</option><option v-for="profile in settings.profiles.filter(p => p.enabled)" :key="profile.id" :value="profile.id">{{ profile.name }} · {{ profile.model }}</option></select></label>
         <p v-if="record" class="reviewer-lock"><span>当前任务</span><strong>{{ record.reviewer?.label }}</strong><em v-if="selectionDiffers">切换后会取消当前任务，并用所选审稿器重新检查</em></p>
         <button class="primary-button" :disabled="busy" @click="start">{{ startLabel }}</button>
         <button v-if="record?.status === 'ready_for_review' && !selectionDiffers" class="primary-button review-ready" :disabled="busy" @click="confirm('start-review')">集中修改已完成，开始独立审稿</button>
@@ -84,6 +84,7 @@
 </template>
 
 <script setup>
+import { showModelOverrides } from '../composables/model-controls.js'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { appService } from '../services/app-service.js'
 import { useCreativeAgent } from '../composables/useCreativeAgent.js'
@@ -93,11 +94,11 @@ import ChapterManualFinalization from './ChapterManualFinalization.vue'
 import { useDialogFocus } from '../composables/useDialogFocus.js'
 import { finalizationProgressActivity } from '../utils/finalization-progress.js'
 import { HANDOFF_SECTIONS, evidenceQuote, handoffItems, handoffItemText } from '../../electron/chapter-handoff.js'
-const props = defineProps({ projectId: String, chapterId: String, targetLength: { type: Number, default: 2000 }, settings: { type: Object, default: () => ({ profiles: [], routes: {} }) } })
+const props = defineProps({ defaultMode: { type: String, default: 'codex' }, projectId: String, chapterId: String, targetLength: { type: Number, default: 2000 }, settings: { type: Object, default: () => ({ profiles: [], routes: {} }) } })
 const emit = defineEmits(['close', 'completed'])
 const dialogElement = ref(null)
 useDialogFocus(dialogElement, () => emit('close'))
-const record = ref(null), reviewerChoice = ref('route'), reason = ref(''), error = ref(''), busy = ref(false), approvals = ref([]), handoffEvents = ref([]), nowMs = ref(Date.now())
+const record = ref(null), reviewerChoice = ref(props.defaultMode === 'app_model' ? 'route' : 'codex'), reason = ref(''), error = ref(''), busy = ref(false), approvals = ref([]), handoffEvents = ref([]), nowMs = ref(Date.now())
 const evidenceEdits = ref({}), editStateDigest = ref(''), stateReason = ref('')
 const evidenceReasonElement = ref(null), evidenceFeedbackElement = ref(null)
 const evidenceError = ref(''), evidenceFeedback = ref(''), reasonMissing = ref(false)

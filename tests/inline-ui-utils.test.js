@@ -13,7 +13,7 @@ test('renderer draft digests are stable and project execution defaults safely', 
   assert.equal(draftDigest({ b: 2, a: 1 }), draftDigest({ a: 1, b: 2 }))
   assert.notEqual(draftDigest({ a: 1 }), draftDigest({ a: 2 }))
   assert.equal(projectExecutionMode({ default_execution_mode: 'codex' }), 'codex')
-  assert.equal(projectExecutionMode({ default_execution_mode: 'other' }), 'app_model')
+  assert.equal(projectExecutionMode({ default_execution_mode: 'other' }), 'codex')
 })
 
 test('current route presentation follows the project default before task-model routing', () => {

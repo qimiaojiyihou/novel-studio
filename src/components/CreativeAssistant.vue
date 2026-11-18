@@ -7,11 +7,11 @@
         <p>把章节卡、场景计划、正文、质量评审和章后状态放在同一次运行中。每一步都先成为候选，由你确认后才写入项目。</p>
       </div>
       <div class="assistant-launch">
-        <label v-if="!collaborativeSelected"><span>执行方式</span><select v-model="launch.executionMode"><option value="codex">{{ agentLabel }} · 创作 Agent</option><option value="app_model">应用模型路由</option></select></label>
-        <small v-if="!collaborativeSelected && launch.executionMode === 'codex'" class="assistant-launch-note">ACP Agent 提供方与模型在“模型与项目设置 → 创作 Agent”中选择，并在 AgentRun 启动时锁定。</small>
+        <label v-if="showModelOverrides && !collaborativeSelected"><span>执行方式</span><select v-model="launch.executionMode"><option value="codex">{{ agentLabel }} · 创作 Agent</option><option value="app_model">应用模型路由</option></select></label>
+        <small v-if="showModelOverrides && !collaborativeSelected && launch.executionMode === 'codex'" class="assistant-launch-note">ACP Agent 提供方与模型在“模型与项目设置 → 创作 Agent”中选择，并在 AgentRun 启动时锁定。</small>
         <label><span>工作流 · Creative Pack {{ creativePreferences?.version }}</span><select v-model="launch.workflowId"><option v-for="workflow in creativePreferences?.workflows || []" :key="workflow.id" :value="workflow.id">{{ workflow.name }}</option></select></label>
         <details v-if="creativePreferences?.upgrade"><summary>预览升级到 1.3.0</summary><p>新增精简流程；场景按需展开，章末默认约束事件，字数偏差保留候选。现有正文、长章节卡和已启动运行保持原样。</p><p>涉及任务：{{ creativePreferences.upgrade.changedTasks.join('、') }}</p><button type="button" @click="upgradePack">确认升级创作规则</button></details>
-        <div v-if="collaborativeSelected" class="collaborative-routing">
+        <details v-if="collaborativeSelected" class="collaborative-routing"><summary>分阶段选择模型</summary>
           <p>四个环节分别选择模型。规划确认后生成正文；独立审稿后，先勾选问题再修稿；最终确认前保留原稿。</p>
           <div v-for="stage in COLLABORATIVE_STAGES" :key="stage.id" class="collaborative-stage">
             <label><span>{{ stage.label }}执行方式</span>
@@ -29,9 +29,9 @@
             </div>
           </div>
           <small>Grok Build 复用本机登录，Grok / xAI 使用 API 配置。四个环节可分别选择执行器、模型和思考强度；按作品记住，启动后锁定。</small>
-        </div>
-        <label v-if="!collaborativeSelected && launch.executionMode === 'app_model'"><span>生成模型</span><select v-model="launch.modelProfileId"><option v-for="profile in enabledProfiles" :key="profile.id" :value="profile.id">{{ profile.name }}</option></select></label>
-        <label v-if="launch.workflowId === 'chapter-creation'"><span>独立审稿</span><select v-model="launch.reviewerProfileId"><option value="">质量评审路由</option><option value="codex">{{ agentLabel }} · 新会话</option><option v-for="profile in enabledProfiles" :key="profile.id" :value="profile.id">{{ profile.name }}</option></select></label>
+        </details>
+        <label v-if="showModelOverrides && !collaborativeSelected && launch.executionMode === 'app_model'"><span>生成模型</span><select v-model="launch.modelProfileId"><option v-for="profile in enabledProfiles" :key="profile.id" :value="profile.id">{{ profile.name }}</option></select></label>
+        <label v-if="showModelOverrides && launch.workflowId === 'chapter-creation'"><span>独立审稿</span><select v-model="launch.reviewerProfileId"><option value="">质量评审路由</option><option value="codex">{{ agentLabel }} · 新会话</option><option v-for="profile in enabledProfiles" :key="profile.id" :value="profile.id">{{ profile.name }}</option></select></label>
         <label v-if="launch.workflowId !== 'project-initialization'"><span>正文目标字数</span><input v-model.number="launch.targetLength" type="number" min="800" max="12000" step="100" /></label>
         <button class="primary-button" :disabled="busy || !projectId || (collaborativeSelected && COLLABORATIVE_STAGES.some(s => !stageModels[s.id]))" @click="startRun">{{ busy ? '正在启动…' : collaborativeSelected ? '开始协作创作' : '开始新的 AgentRun' }}</button>
       </div>
@@ -114,6 +114,8 @@
 </template>
 
 <script setup>
+import { projectExecutionMode } from '../utils/inline-creative.js'
+import { showModelOverrides } from '../composables/model-controls.js'
 import CreativeCandidateEditor from './CreativeCandidateEditor.vue'
 import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { appService } from '../services/app-service.js'
@@ -138,7 +140,7 @@ const busy = ref(false)
 const candidateReason = ref('')
 const message = reactive({ state: 'idle', text: '' })
 const launch = reactive({ executionMode: 'codex', workflowId: 'chapter-creation', modelProfileId: '', reviewerProfileId: '', targetLength: 2000 })
-const stageModels = reactive({ planning: 'codex', writing: '', review: 'codex', repair: '' })
+const stageModels = reactive({ planning: 'codex', writing: 'codex', review: 'codex', repair: 'codex' })
 const stageAgentSettings = reactive(Object.fromEntries(COLLABORATIVE_STAGES.map(s => [s.id, { model: '', reasoningEffort: '' }])))
 const stageCatalogs = reactive({})
 const agentStatus = ref({})
@@ -162,10 +164,9 @@ async function loadPreferences() {
     agentStatus.value = status
     stageDirectorySequence++; Object.keys(stageCatalogs).forEach(key => delete stageCatalogs[key])
     launch.executionMode = creativePreferences.value.executionMode
+    launch.reviewerProfileId = launch.executionMode === 'codex' ? 'codex' : ''
     launch.workflowId = creativePreferences.value.workflows.some(item => item.id === 'chapter-compact') ? 'chapter-compact' : 'chapter-creation'
-    const gpt = enabledProfiles.value.find(p => p.provider === 'openai' && p.apiKeyConfigured && p.model)?.id || 'codex'
-    const grok = status.grokRuntime?.available ? 'grok-build' : enabledProfiles.value.find(p => p.provider === 'grok')?.id || 'grok-build'
-    Object.assign(stageModels, { planning: gpt, writing: grok, review: gpt, repair: grok }, preferences.preferences?.collaborativeModels || {})
+    Object.assign(stageModels, Object.fromEntries(COLLABORATIVE_STAGES.map(stage => [stage.id, 'codex'])), preferences.preferences?.collaborativeModels || {})
     for (const stage of COLLABORATIVE_STAGES) Object.assign(stageAgentSettings[stage.id], stageDefaults(stage.id), preferences.preferences?.collaborativeAgentSettings?.[stage.id] || {})
   } catch (error) { message.text = error.message; message.state = 'error' }
 }
@@ -192,7 +193,7 @@ watch(() => JSON.stringify([activeRun.value?.id, qualityStep.value?.output?.revi
 watch(() => props.projectId, () => { activeRun.value = null; void loadRuns() })
 watch(enabledProfiles, (profiles) => {
   launch.modelProfileId ||= props.modelSettings.routes?.chapter_card || profiles[0]?.id || ''
-  launch.reviewerProfileId ||= props.modelSettings.routes?.quality_review || profiles[0]?.id || ''
+
 }, { immediate: true })
 
 onMounted(() => {
@@ -231,14 +232,15 @@ async function selectRun(runId) { await refreshActive(runId); candidateReason.va
 async function startRun() {
   busy.value = true
   try {
+    const mode = showModelOverrides.value ? launch.executionMode : projectExecutionMode(props.project)
     const run = await appService.startAgent({
       projectId: props.projectId,
       chapterId: props.chapterId,
       workflowId: launch.workflowId,
-      executionMode: launch.executionMode,
+      executionMode: mode,
       ...(collaborativeSelected.value ? { stageModels: { ...stageModels }, stageAgentSettings: JSON.parse(JSON.stringify(stageAgentSettings)) } : {}),
-      modelProfileId: launch.modelProfileId,
-      reviewerProfileId: launch.reviewerProfileId,
+      modelProfileId: showModelOverrides.value ? launch.modelProfileId : '',
+      reviewerProfileId: showModelOverrides.value ? launch.reviewerProfileId : mode === 'codex' ? 'codex' : '',
       targetLength: Math.max(800, Math.min(12000, Math.round(Number(launch.targetLength) || 2000))),
     })
     runs.value.unshift(run)

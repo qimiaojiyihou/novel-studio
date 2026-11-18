@@ -165,7 +165,7 @@ export function validateProjectBackup(bundle) {
     target_word_count: bundle.data.project.target_word_count ?? 8000,
     default_execution_mode: ['app_model', 'codex'].includes(bundle.data.project.default_execution_mode)
       ? bundle.data.project.default_execution_mode
-      : 'app_model',
+      : 'codex',
   }
   if (!WORK_FORMATS.includes(normalizedProject.work_format)) throw new Error('备份作品形式不受支持')
   shortStoryWordCount(normalizedProject.target_word_count)

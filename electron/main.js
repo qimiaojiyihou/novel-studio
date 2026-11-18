@@ -1209,7 +1209,7 @@ async function initializeCodexIntegration() {
     prepareCodexPrompt,
     completeCodexGeneration,
     runIndependentReview: async ({ run, step, sourceCandidate, eventContext, signal }) => {
-      const profileId = run.modelRoutes?.reviewerProfileId || loadModelSettings().routes?.quality_review || ''
+      const profileId = run.modelRoutes?.reviewerProfileId || (run.executionMode === 'codex' ? 'codex' : loadModelSettings().routes?.quality_review) || ''
       const useCodex = ['codex', 'grok-build'].includes(profileId)
       if (!useCodex && !loadModelSettings().profiles.some(profile => profile.id === profileId && profile.enabled)) throw new Error('请为独立审稿选择质量评审路由或 Codex 新会话')
       let child = step.output?.reviewRunId ? getAgentRun(step.output.reviewRunId) : null
@@ -2435,6 +2435,44 @@ async function runReferenceComparison(payload) {
   } finally { activeComparisons.delete(payload.projectId) }
 }
 
+const activeImportAnalyses = new Set()
+
+async function analyzeImportedReferences(event, payload, repo, result) {
+  const projectId = payload.projectId
+  if (!result.needsAnalysis || !['app_model', 'codex'].includes(payload.analyzeWith)) return result
+  if (activeImportAnalyses.has(projectId)) return { ...result, analysisError: '本书已有分析正在运行，请稍后刷新资料。' }
+  activeImportAnalyses.add(projectId)
+  try {
+    const analysisPreset = payload.analysisPreset
+    const revision = result.guide?.revision || 0
+    const packet = repo.taskPacket({ projectId, analysisPreset })
+    let text
+    if (payload.analyzeWith === 'codex') {
+      const defaults = loadCodexSettings()
+      const { messages } = compilePrompt({ task: 'planning_field', referenceStyleAnalysis: true, instruction: packet.instruction })
+      text = await generateComparisonCodex(codexGateway, {
+        model: agentProviderModel(defaults, 'codex'), reasoningEffort: agentProviderReasoningEffort(defaults, 'codex'), fastMode: Boolean(defaults.fastMode),
+      }, messages, AbortSignal.timeout(5 * 60 * 1000))
+    } else {
+      const generated = await runGenerationTask(event, {
+        taskId: 'reference-import-' + randomBytes(16).toString('hex'), task: 'planning_field', intent: 'analysis',
+        projectId, modelProfileId: payload.modelProfileId, referenceStyleAnalysis: true, referenceAnalysisPreset: analysisPreset,
+        referenceMode: 'analysis', referenceInputDigest: packet.inputDigest, referenceSourceDigest: packet.sourceDigest,
+      })
+      if (generated.execution === 'mock') throw new Error('请配置分析模型或选择 Codex 后再分析')
+      text = generated.text
+    }
+    text = String(text || '').trim()
+    if (!text || text.length > REFERENCE_GUIDE_LIMIT) throw new Error('模型返回内容为空或超过规范字数限制，请重新分析')
+    const draft = { projectId, mode: 'analysis', analysisPreset, inputDigest: packet.inputDigest, sourceDigest: packet.sourceDigest, revision, text }
+    return { ...repo.saveGuide(draft), generatedDraft: true }
+  } catch (error) {
+    return { ...repo.state(projectId), analysisError: error.message }
+  } finally {
+    activeImportAnalyses.delete(projectId)
+  }
+}
+
 function registerIpc() {
   // Preserve the existing handlers as the only implementation of creative actions.
   const ipcMain = { handle:registerAppHandler, on:nativeIpcMain.on.bind(nativeIpcMain) }
@@ -2473,34 +2511,12 @@ function registerIpc() {
     const projectId = payload.projectId
     const repo = createReferenceNovelRepository(openDatabase())
     const result = await creativeMutationQueue.run(projectId, () => repo.importBooks(projectId, imported))
-    if (!result.added || !['app_model', 'codex'].includes(payload.analyzeWith)) return result
-    try {
-      const analysisPreset = payload.analysisPreset
-      const revision = result.guide?.revision || 0
-      const packet = repo.taskPacket({ projectId, analysisPreset })
-      let text
-      if (payload.analyzeWith === 'codex') {
-        const defaults = loadCodexSettings()
-        const { messages } = compilePrompt({ task: 'planning_field', referenceStyleAnalysis: true, instruction: packet.instruction })
-        text = await generateComparisonCodex(codexGateway, {
-          model: agentProviderModel(defaults, 'codex'), reasoningEffort: agentProviderReasoningEffort(defaults, 'codex'), fastMode: Boolean(defaults.fastMode),
-        }, messages, AbortSignal.timeout(5 * 60 * 1000))
-      } else {
-        const generated = await runGenerationTask(event, {
-          taskId: 'reference-import-' + randomBytes(16).toString('hex'), task: 'planning_field', intent: 'analysis',
-          projectId, modelProfileId: payload.modelProfileId, referenceStyleAnalysis: true, referenceAnalysisPreset: analysisPreset,
-          referenceMode: 'analysis', referenceInputDigest: packet.inputDigest, referenceSourceDigest: packet.sourceDigest,
-        })
-        if (generated.execution === 'mock') throw new Error('请配置分析模型或选择 Codex 后再分析')
-        text = generated.text
-      }
-      text = String(text || '').trim()
-      if (!text || text.length > REFERENCE_GUIDE_LIMIT) throw new Error('模型返回内容为空或超过规范字数限制，请重新分析')
-      const draft = { projectId, mode: 'analysis', analysisPreset, inputDigest: packet.inputDigest, sourceDigest: packet.sourceDigest, revision, text }
-      return { ...result, ...repo.saveGuide(draft), generatedDraft: true }
-    } catch (error) {
-      return { ...result, analysisError: error.message }
-    }
+    const analysis = await analyzeImportedReferences(event, payload, repo, result)
+    return { ...result, ...analysis }
+  })
+  ipcMain.handle('references:analyze-imported', (event, payload) => {
+    const repo = createReferenceNovelRepository(openDatabase())
+    return analyzeImportedReferences(event, payload, repo, repo.state(payload.projectId))
   })
   ipcMain.handle('references:book-update', (_event, payload) => createReferenceNovelRepository(openDatabase()).updateBook(payload))
   ipcMain.handle('references:book-delete', (_event, payload) => createReferenceNovelRepository(openDatabase()).removeBook(payload))
@@ -2807,7 +2823,7 @@ function registerIpc() {
   ipcMain.handle('chapter:finalize-start', async (_event, payload = {}) => {
     const settings = loadModelSettings()
     const requested = payload.reviewer || {}
-    const executionMode = requested.executionMode === 'codex' ? 'codex' : 'app_model'
+    const executionMode = requested.executionMode ?? (requested.profileId ? 'app_model' : listProjects().find(item => item.id === payload.projectId)?.default_execution_mode || 'codex')
     const profileId = requested.profileId || settings.routes?.quality_review || ''
     const profile = settings.profiles.find(item => item.id === profileId && item.enabled)
     if (executionMode === 'app_model' && !profile) throw new Error('请先在模型设置中选择质量评审模型，或选择 Codex 独立审稿')

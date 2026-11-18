@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url'
 import { validateCreativePack } from './creative-pack.js'
 import { creativeUpgradeMigrations } from './creative-upgrade-migrations.js'
 
-export const LATEST_SCHEMA_VERSION = 44
+export const LATEST_SCHEMA_VERSION = 45
 
 function bundledOfficialPack(version = '1.2.0') {
   const directory = version === '1.3.0' ? 'dist' : 'historical'
@@ -1760,6 +1760,17 @@ migrations.push({ version: 43, name: 'reference-sample-comparisons', up(database
 
 migrations.push({ version: 44, name: 'reference-guide-merge-review', up(database) {
   database.exec("ALTER TABLE reference_style_guides ADD COLUMN pending_merge_json TEXT NOT NULL DEFAULT ''")
+} })
+
+migrations.push({ version: 45, name: 'codex-default-for-creative-work', up(database) {
+  database.exec(`
+    DROP INDEX projects_execution_mode_idx;
+    ALTER TABLE projects DROP COLUMN default_execution_mode;
+    ALTER TABLE projects ADD COLUMN default_execution_mode TEXT NOT NULL DEFAULT 'codex'
+      CHECK(default_execution_mode IN ('app_model', 'codex'));
+    CREATE INDEX projects_execution_mode_idx ON projects(project_type, default_execution_mode, updated_at DESC);
+    UPDATE agent_provider_settings SET agent_provider = 'codex';
+  `)
 } })
 
 export function runMigrations(database, { now = () => new Date().toISOString(), targetVersion = LATEST_SCHEMA_VERSION } = {}) {

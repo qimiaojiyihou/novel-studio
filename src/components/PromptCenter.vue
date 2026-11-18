@@ -98,6 +98,7 @@
 </template>
 
 <script setup>
+import { projectExecutionMode } from '../utils/inline-creative.js'
 import AuthorStyleSamples from './AuthorStyleSamples.vue'
 import ReferenceNovels from './ReferenceNovels.vue'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
@@ -157,7 +158,7 @@ const scopeTargets = computed(() => scopeType.value === 'volume'
   : center.value.chapters.map((item) => ({ id: item.id, label: `第 ${item.chapterNo} 章 · ${item.title}` })))
 const forbiddenText = computed(() => Array.isArray(styleDraft.style.forbiddenPatterns) ? styleDraft.style.forbiddenPatterns.join('\n') : '')
 const previewMessage = computed(() => preview.value?.messages.find((item) => item.role === messageRole.value)?.content || '')
-const defaultExecutionMode = computed(() => props.project.default_execution_mode === 'codex' ? 'codex' : 'app_model')
+const defaultExecutionMode = computed(() => projectExecutionMode(props.project))
 const promptModelName = computed(() => {
   const id = props.modelSettings.routes?.planning_field
   return props.modelSettings.profiles?.find((profile) => profile.id === id)?.name || '任务模型'

@@ -318,9 +318,10 @@ test('v18 to v19 preserves projects and defaults creative execution to app model
 
     runMigrations(database, { now: () => now })
 
-    assert.equal(database.prepare('SELECT default_execution_mode FROM projects WHERE id = ?').get('project-v19').default_execution_mode, 'app_model')
-    database.prepare("UPDATE projects SET default_execution_mode = 'codex' WHERE id = 'project-v19'").run()
     assert.equal(database.prepare('SELECT default_execution_mode FROM projects WHERE id = ?').get('project-v19').default_execution_mode, 'codex')
+    database.prepare("UPDATE projects SET default_execution_mode = 'app_model' WHERE id = 'project-v19'").run()
+    runMigrations(database)
+    assert.equal(database.prepare('SELECT default_execution_mode FROM projects WHERE id = ?').get('project-v19').default_execution_mode, 'app_model')
     assert.throws(() => database.prepare("UPDATE projects SET default_execution_mode = 'other' WHERE id = 'project-v19'").run(), /CHECK constraint failed/)
     assert.deepEqual(database.prepare('PRAGMA foreign_key_check').all(), [])
   } finally {

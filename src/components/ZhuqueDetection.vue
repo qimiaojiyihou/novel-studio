@@ -81,7 +81,7 @@ const { agentLabel } = useCreativeAgent()
 
 const props = defineProps({
   projectId: { type: String, required: true }, chapterId: { type: String, required: true },
-  defaultMode: { type: String, default: 'app_model' }, appModelLabel: { type: String, default: '任务模型' },
+  defaultMode: { type: String, default: 'codex' }, appModelLabel: { type: String, default: '任务模型' },
   repairBusy: { type: Boolean, default: false },
 })
 defineEmits(['close', 'repair'])

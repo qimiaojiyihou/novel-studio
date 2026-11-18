@@ -120,7 +120,7 @@ test('project backup restores a new internally consistent project without creden
     const backup = createProjectBackup(database, 'project-1', { now: () => NOW })
     assert.equal(backup.format, 'novel-studio-project')
     assert.equal(backup.version, PROJECT_BACKUP_VERSION)
-    assert.equal(backup.data.project.default_execution_mode, 'app_model')
+    assert.equal(backup.data.project.default_execution_mode, 'codex')
     assert.equal(backup.data.tables.chapters.length, 2)
     assert.equal(backup.data.tables.quality_reports.length, 1)
     assert.equal(backup.data.tables.quality_human_reviews.length, 1)
@@ -142,7 +142,7 @@ test('project backup restores a new internally consistent project without creden
     const restored = restoreProjectBackup(database, backup, { now: () => NOW, createId: deterministicIds() })
     assert.notEqual(restored.projectId, 'project-1')
     assert.equal(database.prepare('SELECT title FROM projects WHERE id = ?').get(restored.projectId).title, '雾港来信 · 恢复副本')
-    assert.equal(database.prepare('SELECT default_execution_mode FROM projects WHERE id = ?').get(restored.projectId).default_execution_mode, 'app_model')
+    assert.equal(database.prepare('SELECT default_execution_mode FROM projects WHERE id = ?').get(restored.projectId).default_execution_mode, 'codex')
     assert.equal(database.prepare('SELECT COUNT(*) AS count FROM chapters WHERE project_id = ?').get(restored.projectId).count, 2)
     assert.equal(database.prepare('SELECT COUNT(*) AS count FROM revisions JOIN chapters ON revisions.chapter_id = chapters.id WHERE chapters.project_id = ?').get(restored.projectId).count, 1)
 
@@ -211,7 +211,7 @@ test('v3 project backup restores with app model as its execution default', () =>
     delete backup.data.project.default_execution_mode
     backup.integrity.digest = createHash('sha256').update(JSON.stringify(backup.data)).digest('hex')
     const restored = restoreProjectBackup(database, backup, { now: () => NOW, createId: deterministicIds() })
-    assert.equal(database.prepare('SELECT default_execution_mode FROM projects WHERE id = ?').get(restored.projectId).default_execution_mode, 'app_model')
+    assert.equal(database.prepare('SELECT default_execution_mode FROM projects WHERE id = ?').get(restored.projectId).default_execution_mode, 'codex')
   } finally {
     database.close()
   }

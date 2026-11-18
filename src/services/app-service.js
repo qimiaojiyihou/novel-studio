@@ -252,6 +252,7 @@ export const appService = {
   rollbackCodexComponents(payload) { return electronApi.rollbackCodexComponents(payload) },
   listStyleSamples(payload) { return electronApi.listStyleSamples(payload) },
   loadReferenceNovels(payload) { return electronApi.loadReferenceNovels(payload) },
+  analyzeImportedReferences(payload) { return electronApi.analyzeImportedReferences(payload) },
   importReferenceNovels(payload) { return electronApi.importReferenceNovels(payload) },
   updateReferenceNovel(payload) { return electronApi.updateReferenceNovel(payload) },
   deleteReferenceNovel(payload) { return electronApi.deleteReferenceNovel(payload) },

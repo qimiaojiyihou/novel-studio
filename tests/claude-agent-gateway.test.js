@@ -331,7 +331,7 @@ test('v34 upgrades existing Qoder/Codex preferences and sessions without losing 
     runMigrations(db)
     const repository = createCodexRepository(db)
     const before = repository.getProviderSettings()
-    assert.equal(before.agentProvider, 'qoder'); assert.equal(before.model, 'codex-custom'); assert.equal(before.qoderModel, 'q-custom')
+    assert.equal(before.agentProvider, 'codex'); assert.equal(before.model, 'codex-custom'); assert.equal(before.qoderModel, 'q-custom')
     const after = repository.updateProviderSettings({ agentProvider: 'claude', claudeCliPath: ' /claude ', claudeModel: ' opus ', claudeAuthMethod: 'environment', claudeReasoningEffort: 'max' })
     assert.equal(after.claudeReasoningEffort, 'max')
     assert.equal(repository.updateProviderSettings({ reasoningEffort: 'low' }).claudeReasoningEffort, 'max')

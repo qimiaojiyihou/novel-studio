@@ -2,13 +2,15 @@
   <section class="reference-novels" aria-label="参考小说">
     <header class="reference-heading">
       <div><span class="eyebrow">REFERENCE LIBRARY</span><h2>参考小说</h2><p>选几本喜欢的小说，提炼表达习惯，形成这本书自己的文风。</p></div>
-      <button type="button" :disabled="busy || !state || (importMode !== 'off' && (booksDirty || settingsDirty || dirty || state.pendingMerge))" @click="importBooks">{{ importing ? (importMode === 'off' ? '正在读取…' : '正在导入并分析…') : '＋ 导入小说' }}</button>
+      <button type="button" :disabled="busy || !state || (importMode !== 'off' && (booksDirty || dirty || state.pendingMerge))" @click="runImportAnalysis(false)">{{ importing ? (importMode === 'off' ? '正在读取…' : '正在导入并分析…') : '＋ 导入小说' }}</button>
     </header>
-    <label><span class="reference-label">导入参考小说后</span><select v-model="importMode" :disabled="busy" @change="rememberOptions">
-      <option value="app_model">用分析模型生成规范草稿</option><option value="codex">用 Codex 生成规范草稿</option><option value="off">只导入并自动选段</option>
-    </select></label>
-    <p v-if="importMode !== 'off' && (booksDirty || settingsDirty || dirty || state?.pendingMerge)" class="reference-hint">请先保存当前编辑或处理待确认的合并稿，再导入并分析。</p>
-    <p v-if="error" class="reference-error" role="alert">{{ error }} <button type="button" @click="load">刷新资料</button></p>
+    <label class="reference-check"><input v-model="autoAnalyze" type="checkbox" :disabled="busy" @change="rememberOptions" /> 导入后自动生成文风规范草稿</label>
+    <p v-if="importMode !== 'off' && (booksDirty || dirty || state?.pendingMerge)" class="reference-hint">请先保存当前编辑或处理待确认的合并稿，再导入并分析。</p>
+    <p v-if="error" class="reference-error" role="alert">{{ error }} <button type="button"  :disabled="busy" @click="load">刷新资料</button></p>
+    <div v-if="state?.needsAnalysis && importMode !== 'off'" class="reference-resume">
+      <span class="reference-hint">{{ state.guide?.draft_text ? '已保存的参考资料有更新。' : '已保存的参考资料尚待分析。' }}</span>
+      <button type="button" :disabled="busy || booksDirty || dirty" @click="runImportAnalysis(true)">{{ resuming ? '正在分析…' : '继续分析已导入资料' }}</button>
+    </div>
     <p v-if="notice" class="reference-notice" role="status">{{ notice }}</p>
     <p class="reference-hint">支持 TXT、Markdown、Word DOCX，可多选，每本最大 10 MB。导入时在本机自动选取写作样本。首次设置的底色和匹配本场用途的选段，会随正文写作和改稿发送给所选模型。</p>
     <div v-if="!state" class="reference-empty">正在读取参考资料…</div>
@@ -32,10 +34,10 @@
         <label><span class="reference-label">参考冲突时如何取舍</span><textarea v-model="conflictPolicy" :disabled="busy" rows="2" maxlength="1200" placeholder="例如：以甲书的对白和情绪为主，乙书补充环境描写；冲突场景加快，日常场景保留趣味。" /></label>
         <label><span class="reference-label">贴近参考文风 · 底色来源</span><select v-model="voiceBook" :disabled="busy"><option value="">关闭选段随稿发送</option><option v-for="book in voiceBooks" :key="book.id" :value="book.content_digest">{{ book.title }}</option></select></label>
         <label><span class="reference-label">补充选段用途</span><select v-model="voicePurpose" :disabled="busy"><option value="auto">按本场叙述功能匹配</option><option value="base">只用底色</option><option v-for="purpose in purposes" :key="purpose">{{ purpose }}</option></select></label><p class="reference-hint">首次导入时，第一本选出底色的参考小说会成为底色来源。正文写作和改稿使用一段底色，按本次要求、选区和章节安排最多再选一段。用途不明确时只用底色。可在上方更换来源或关闭随稿发送。已有参考书可点「按用途自动补选」，再保存参考重点。</p>
-        <div><button type="button" :disabled="busy || !settingsDirty || booksDirty" @click="saveSettings">保存分析偏好</button><small v-if="settingsDirty" class="reference-hint"> 偏好有修改，保存后用于分析。</small></div>
+        <div><button type="button" :disabled="busy || !settingsDirty || booksDirty" @click="saveSettings">保存分析偏好</button><small v-if="settingsDirty" class="reference-hint"> 分析时会自动保存本次偏好。</small></div>
         <div class="reference-analyze-actions">
-          <label class="reference-model"><span class="reference-label">分析模型</span><select v-model="modelId" :disabled="busy"><option value="">跟随规划模型</option><option v-for="profile in profiles" :key="profile.id" :value="profile.id">{{ profile.name }} · {{ profile.model }}</option></select></label>
-          <CreativeExecutionControl :default-mode="defaultMode" :app-model-label="modelLabel" action-label="分析并生成规范" busy-label="正在分析…" :busy="analyzing" :disabled="busy || dirty || state.pendingMerge || !state.books.some(book => book.enabled) || booksDirty || settingsDirty" @execute="analyze" />
+          <label v-if="showModelOverrides" class="reference-model"><span class="reference-label">分析模型</span><select v-model="modelId" :disabled="busy"><option value="">跟随规划模型</option><option v-for="profile in profiles" :key="profile.id" :value="profile.id">{{ profile.name }} · {{ profile.model }}</option></select></label>
+          <CreativeExecutionControl :default-mode="defaultMode" :app-model-label="modelLabel" action-label="分析并生成规范" busy-label="正在分析…" :busy="analyzing" :disabled="busy || dirty || state.pendingMerge || !state.books.some(book => book.enabled) || booksDirty" @execute="analyze" />
           <button v-if="analyzing" type="button" @click="cancelAnalysis">停止分析</button>
           <button type="button" :disabled="busy || booksDirty || settingsDirty || !state.books.some(book => book.enabled)" @click="previewSamples">查看抽样</button>
         </div>
@@ -55,7 +57,7 @@
         <div v-if="!state.pendingMerge" class="reference-guide-footer"><small>{{ guideText.length.toLocaleString() }} / 8,000 字符</small><div><button type="button" :disabled="busy || state.pendingMerge || !guideText.trim()" @click="saveGuide">保存规范草稿</button><button class="reference-primary" type="button" :disabled="busy || state.pendingMerge || !guideText.trim() || dirty || outdated || booksDirty || settingsDirty" @click="applyGuide(false)">确认应用到本书</button><button v-if="state.applied" type="button" :disabled="busy" @click="applyGuide(true)">停用参考规范</button></div></div>
         <p class="reference-hint">应用后，带【通用】【对白】【详略】【冲突】【视角】【情绪】【改稿】标签的规则按场景选取，最多四条。旧版无标签规范沿用全文。可在生成记录的任务凭证中核对本次发送的规则。</p>
       </section>
-      <ReferenceComparison :key="project.id" :project-id="project.id" :guide="state.guide?.draft_text" :history="state.comparisons" :model-id="modelId" :model-label="modelLabel" :disabled="busy || !canCalibrate" @changed="refreshComparisons" />
+      <ReferenceComparison :default-mode="defaultMode" :key="project.id" :project-id="project.id" :guide="state.guide?.draft_text" :history="state.comparisons" :model-id="modelId" :model-label="modelLabel" :disabled="busy || !canCalibrate" @changed="refreshComparisons" />
       <section class="reference-calibration" aria-label="试写校准">
         <h3>试写校准</h3><p class="reference-hint">保存规范后，分别试写日常与冲突场景。写下喜欢和需要调整的地方，再根据反馈校准规范。每类保留最新一段试写。</p>
         <p v-if="dirty || outdated || booksDirty || settingsDirty" class="reference-warning">请先保存参考资料与偏好，核对并保存当前规范，再开始试写。</p>
@@ -80,9 +82,11 @@
 </template>
 
 <script setup>
+import { showModelOverrides } from '../composables/model-controls.js'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { appService } from '../services/app-service.js'
-import { draftDigest } from '../utils/inline-creative.js'
+import { useCreativeAgent } from '../composables/useCreativeAgent.js'
+import { draftDigest, projectExecutionMode } from '../utils/inline-creative.js'
 import CreativeExecutionControl from './CreativeExecutionControl.vue'
 import { voicePurposes } from '../../electron/reference-voice.js'
 import ReferenceComparison from './ReferenceComparison.vue'
@@ -92,15 +96,18 @@ const props = defineProps({ project: { type: Object, required: true }, modelSett
 const emit = defineEmits(['toast', 'applied', 'codex-action', 'count'])
 const state = ref(null), bookDrafts = ref([]), guideText = ref(''), guideSource = ref('')
 const error = ref(''), notice = ref(''), preference = ref(''), conflictPolicy = ref(''), modelId = ref(''), samplePacket = ref(null), pickerBookId = ref('')
-const importing = ref(false), saving = ref(false), analyzing = ref(false), trialDrafts = ref([])
+const resuming = ref(false), importing = ref(false), saving = ref(false), analyzing = ref(false), trialDrafts = ref([])
 let generation = null, epoch = 0, disposed = false
-const analysisPreset = ref('reference-language'), importMode = ref('app_model'), mergeText = ref('')
+const analysisPreset = ref('reference-language'), autoAnalyze = ref(true), mergeText = ref('')
 function rememberOptions() {
-  localStorage.setItem('reference-import:' + props.project.id, JSON.stringify({ importMode: importMode.value, analysisPreset: analysisPreset.value }))
+  localStorage.setItem('reference-import:' + props.project.id, JSON.stringify({ autoAnalyze: autoAnalyze.value, analysisPreset: analysisPreset.value }))
 }
 const busy = computed(() => importing.value || saving.value || analyzing.value)
+watch(showModelOverrides, enabled => { if (!enabled) modelId.value = '' })
 const profiles = computed(() => (props.modelSettings.profiles || []).filter(profile => profile.enabled !== false && profile.enabled !== 0))
-const defaultMode = computed(() => props.project.default_execution_mode === 'codex' ? 'codex' : 'app_model')
+const defaultMode = computed(() => projectExecutionMode(props.project))
+const { provider } = useCreativeAgent()
+const importMode = computed(() => autoAnalyze.value ? defaultMode.value : 'off')
 const modelLabel = computed(() => profiles.value.find(profile => profile.id === (modelId.value || props.modelSettings.routes?.planning_field))?.name || '规划模型')
 const dirty = computed(() => guideText.value !== (state.value?.guide?.draft_text || '') || guideSource.value !== (state.value?.guide?.source_digest || ''))
 const outdated = computed(() => Boolean(guideText.value && guideSource.value !== state.value?.sourceDigest))
@@ -158,19 +165,32 @@ async function refreshComparisons() {
     if (valid(projectId, token)) state.value.comparisons = next.comparisons
   } catch (e) { if (valid(projectId, token)) error.value = e.message }
 }
-async function importBooks() {
+async function runImportAnalysis(resume) {
+  if (busy.value) return
   const project = props.project.id, token = epoch
-  importing.value = true
-  const result = await operation(projectId => appService.importReferenceNovels({ projectId, analyzeWith: importMode.value, analysisPreset: analysisPreset.value, modelProfileId: modelId.value }))
+  if (importMode.value !== 'off' && settingsDirty.value && !await saveSettings()) return
+  if (!valid(project, token) || (importMode.value !== 'off' && state.value.pendingMerge)) return
+  resuming.value = resume
+  importing.value = !resume
+  const useInlineAgent = importMode.value === 'codex' && provider.value !== 'codex'
+  const result = await operation(projectId => {
+    const request = { projectId, analyzeWith: useInlineAgent ? 'off' : importMode.value, analysisPreset: analysisPreset.value, modelProfileId: modelId.value }
+    return resume ? appService.analyzeImportedReferences(request) : appService.importReferenceNovels(request)
+  })
   if (!valid(project, token)) return
   if (result && !result.cancelled) {
     if (voiceBook.value === (state.value?.settings.voiceBook || '')) voiceBook.value = result.settings.voiceBook || ''
-    accept(result, { replaceGuide: Boolean(result.generatedDraft) })
-    notice.value = `已导入 ${result.added} 本${result.skipped.length ? `，跳过 ${result.skipped.length} 本重复内容` : ''}`
-    if (result.generatedDraft) notice.value += result.pendingMerge ? '。已结合原草稿生成合并稿，请对照后保存。' : '。文风规范草稿已保存，可核对后应用。'
+    accept(result, { replaceGuide: Boolean(result.generatedDraft || resume) })
+    const messages = []
+    if (!resume) messages.push(`已导入 ${result.added} 本${result.skipped.length ? `，跳过 ${result.skipped.length} 本重复内容` : ''}`)
+    if (result.generatedDraft) messages.push(result.pendingMerge ? '已结合原草稿生成合并稿，请对照后保存' : '文风规范草稿已保存，可核对后应用')
+    else if (!result.analysisError && !result.needsAnalysis && !result.pendingMerge && result.guide?.draft_text && !result.added) messages.push('当前资料已有规范草稿')
+    notice.value = messages.join('。')
     if (result.analysisError) error.value = '书籍已导入，分析未完成：' + result.analysisError
   }
   importing.value = false
+  resuming.value = false
+  if (useInlineAgent && result?.needsAnalysis && !result.cancelled) await analyze('codex')
 }
 async function fillExcerpts(book) {
   const samples = await operation(projectId => appService.browseReferenceNovel({ projectId, bookId: book.id, autoSelect: true }))
@@ -199,7 +219,11 @@ function addScene(sample) {
 }
 async function saveSettings() {
   const value = await operation(projectId => appService.saveReferenceSettings({ projectId, voiceBook: voiceBook.value, voicePurpose: voicePurpose.value, preference: preference.value, conflictPolicy: conflictPolicy.value, revision: state.value.guide?.settings_revision || 0 }))
-  if (value) { accept(value, { replaceGuide: false, replaceSettings: true }); samplePacket.value = null; notice.value = '分析偏好已保存' }
+  if (!value) return false
+  accept(value, { replaceGuide: false, replaceSettings: true })
+  samplePacket.value = null
+  notice.value = '分析偏好已保存'
+  return true
 }
 async function previewSamples() {
   const value = await operation(projectId => appService.referenceAnalysisPacket({ projectId }))
@@ -230,8 +254,11 @@ async function saveFeedback(trial) {
 }
 async function analyze(executionMode, mode = 'analysis', trial = null) {
   const projectId = props.project.id, token = epoch, kind = trial?.kind || '', brief = trial?.brief || ''
+  if (busy.value) return
   error.value = ''; notice.value = ''; analyzing.value = true; pickerBookId.value = ''
   try {
+    if (mode === 'analysis' && settingsDirty.value && !await saveSettings()) return
+    if (!valid(projectId, token) || state.value.pendingMerge) return
     const preset = mode === 'analysis' ? analysisPreset.value : ''
     const packet = await appService.referenceAnalysisPacket({ projectId, mode, kind, brief, analysisPreset: preset })
     if (!valid(projectId, token)) return
@@ -283,10 +310,10 @@ function cancelAnalysis() { void generation?.cancel() }
 watch(() => props.project.id, () => {
   void generation?.cancel(); generation = null; state.value = null; samplePacket.value = null; pickerBookId.value = ''
   bookDrafts.value = []; trialDrafts.value = []
-  importing.value = false; saving.value = false; analyzing.value = false; preference.value = ''; conflictPolicy.value = ''; notice.value = ''; error.value = ''
+  resuming.value = false; importing.value = false; saving.value = false; analyzing.value = false; preference.value = ''; conflictPolicy.value = ''; notice.value = ''; error.value = ''
   let options = {}
   try { options = JSON.parse(localStorage.getItem('reference-import:' + props.project.id) || '{}') } catch {}
-  importMode.value = ['off', 'codex', 'app_model'].includes(options.importMode) ? options.importMode : defaultMode.value
+  autoAnalyze.value = options.autoAnalyze ?? (options.importMode !== 'off')
   analysisPreset.value = options.analysisPreset === '' ? '' : 'reference-language'
   guideText.value = ''; guideSource.value = ''; mergeText.value = ''; modelId.value = ''
   void load()
@@ -304,7 +331,7 @@ onBeforeUnmount(() => { disposed = true; epoch++; void generation?.cancel() })
 .reference-novels label{display:grid;gap:7px}.reference-label{font-size:12px;font-weight:600;color:var(--ns-text-muted,#657e87)}
 .reference-novels input:not([type=checkbox]),.reference-novels textarea,.reference-novels select{box-sizing:border-box;width:100%;min-width:0;padding:11px 12px;border:1px solid var(--ns-border,#bdcfd2);border-radius:8px;color:inherit;background:var(--ns-surface,#fff);line-height:1.7}
 .reference-novels textarea{resize:vertical}.reference-hint{font-size:12px;line-height:1.8;color:var(--ns-text-muted,#657e87);margin:0}
-.reference-books{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(245px,100%),1fr));gap:12px}.reference-book{display:grid;gap:12px;padding:17px;border:1px solid var(--ns-border,#bdcfd2);border-radius:12px;border-top:3px solid var(--ns-accent,#41766e);background:var(--ns-surface,#fff)}.reference-book.muted{border-top-color:var(--ns-border,#bdcfd2)}
+.reference-resume{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.reference-books{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(245px,100%),1fr));gap:12px}.reference-book{display:grid;gap:12px;padding:17px;border:1px solid var(--ns-border,#bdcfd2);border-radius:12px;border-top:3px solid var(--ns-accent,#41766e);background:var(--ns-surface,#fff)}.reference-book.muted{border-top-color:var(--ns-border,#bdcfd2)}
 .reference-book-top,.reference-book footer{display:flex;justify-content:space-between;align-items:center;gap:8px}.reference-book-top small{color:var(--ns-text-muted,#657e87);font-size:11px}.reference-novels .reference-check{display:flex;align-items:center;font-size:12px}.reference-check input{accent-color:var(--ns-accent,#41766e)}
 .reference-novels .reference-subtle{border:0;background:transparent;color:var(--ns-text-muted,#657e87)}
 .reference-analysis,.reference-guide,.reference-calibration{display:grid;gap:14px;padding-top:20px;border-top:1px solid var(--ns-border,#bdcfd2)}.reference-novels h3{margin:0;font-size:19px}.reference-analyze-actions{display:flex;align-items:end;flex-wrap:wrap;gap:12px}.reference-model{flex:1;min-width:180px}.reference-guide-heading span{font-size:12px;color:var(--ns-accent,#41766e)}

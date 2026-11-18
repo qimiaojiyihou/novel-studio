@@ -19,7 +19,7 @@ export function draftDigest(value) {
 }
 
 export function projectExecutionMode(project = {}) {
-  return project.default_execution_mode === 'codex' ? 'codex' : 'app_model'
+  return project.default_execution_mode === 'app_model' ? 'app_model' : 'codex'
 }
 
 export function executionModeLabel(mode) {

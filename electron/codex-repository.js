@@ -237,7 +237,7 @@ export function createCodexRepository(database, {
   }
 
   function createRun(input = {}) {
-    const project = database.prepare('SELECT id, archived_at FROM projects WHERE id = ?').get(input.projectId)
+    const project = database.prepare('SELECT id, archived_at, default_execution_mode FROM projects WHERE id = ?').get(input.projectId)
     if (!project) throw new Error('项目不存在')
     if (project.archived_at) throw new Error('归档项目需要先恢复才能启动创作助手')
     if (input.chapterId) {
@@ -259,7 +259,7 @@ export function createCodexRepository(database, {
     const modelRoutes = collaborative ? lockCollaborativeModels(database, input.modelRoutes) : input.modelRoutes || {}
     const id = createId('agent-run')
     const createdAt = now()
-    const executionMode = !collaborative && input.executionMode === 'codex' ? 'codex' : 'app_model'
+    const executionMode = !collaborative && (input.executionMode ?? project.default_execution_mode) === 'codex' ? 'codex' : 'app_model'
     database.exec('BEGIN IMMEDIATE')
     try {
       database.prepare(`

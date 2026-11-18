@@ -500,6 +500,7 @@
 </template>
 
 <script setup>
+import { projectExecutionMode } from '../utils/inline-creative.js'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { appService } from '../services/app-service.js'
 import { planningPromptProfile, renderScenePlan } from '../../electron/creative-quality.js'
@@ -598,7 +599,7 @@ const planningModelName = computed(() => {
   const id = props.modelSettings.routes?.planning_field
   return props.modelSettings.profiles.find((profile) => profile.id === id)?.name || 'MockProvider'
 })
-const defaultExecutionMode = computed(() => props.project.default_execution_mode === 'codex' ? 'codex' : 'app_model')
+const defaultExecutionMode = computed(() => projectExecutionMode(props.project))
 const deleteDialog = computed(() => deleteTarget.value?.type === 'arc'
   ? {
       eyebrow: 'REMOVE STORY THREAD',

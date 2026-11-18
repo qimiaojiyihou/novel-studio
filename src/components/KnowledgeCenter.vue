@@ -294,6 +294,7 @@
 </template>
 
 <script setup>
+import { projectExecutionMode } from '../utils/inline-creative.js'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { appService } from '../services/app-service.js'
 import CreativeExecutionControl from './CreativeExecutionControl.vue'
@@ -364,7 +365,7 @@ const openChecks = computed(() => center.value?.checks.filter((check) => check.s
 const activeChapter = computed(() => props.chapters.find((chapter) => chapter.id === props.activeChapterId) || props.chapters[0] || null)
 const chapterHasManuscript = computed(() => Boolean(String(activeChapter.value?.manuscript || '').trim()))
 const aiRunning = computed(() => Boolean(aiTask.value))
-const defaultExecutionMode = computed(() => props.project.default_execution_mode === 'codex' ? 'codex' : 'app_model')
+const defaultExecutionMode = computed(() => projectExecutionMode(props.project))
 const knowledgeModelName = computed(() => {
   const profileId = props.modelSettings.routes?.planning_field
   return props.modelSettings.profiles?.find((profile) => profile.id === profileId)?.name || '任务模型'

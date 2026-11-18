@@ -70,7 +70,7 @@ const props = defineProps({
   fields: { type: Array, required: true },
   entityCount: { type: Number, required: true },
   generationKey: { type: String, default: '' },
-  defaultExecutionMode: { type: String, default: 'app_model' },
+  defaultExecutionMode: { type: String, default: 'codex' },
   appModelLabel: { type: String, default: '任务模型' },
 })
 defineEmits(['update-title', 'update-field', 'generate-title', 'generate-field', 'generate-all', 'cascade-title', 'cascade-field', 'move', 'delete', 'edit-default'])

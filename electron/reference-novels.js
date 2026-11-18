@@ -124,8 +124,12 @@ export function createReferenceNovelRepository(db, { now = () => new Date().toIS
     const guide = db.prepare('SELECT * FROM reference_style_guides WHERE project_id=?').get(projectId) || null
     const section = guideSection(current.style || '')
     const trials = db.prepare('SELECT * FROM reference_style_trials WHERE project_id=? ORDER BY kind').all(projectId)
-    return { books: books(projectId), guide, pendingMerge: guide?.pending_merge_json ? JSON.parse(guide.pending_merge_json) : null, comparisons: comparisonHistory(projectId), settings: settings(projectId), trials, guideDigest: digest(guide?.draft_text || ''), sourceDigest: sourceDigest(projectId),
-      referenceDigest: digest([sourceDigest(projectId), guide?.draft_text || '', trials.map(trial => [trial.kind, trial.brief, trial.output_text, trial.author_feedback, trial.guide_digest, trial.source_digest])]),
+    const referenceBooks = books(projectId)
+    const currentSource = sourceDigest(projectId)
+    const needsAnalysis = referenceBooks.some(book => book.enabled) && !guide?.pending_merge_json
+      && (!guide?.draft_text?.trim() || guide.source_digest !== currentSource)
+    return { books: referenceBooks, needsAnalysis, guide, pendingMerge: guide?.pending_merge_json ? JSON.parse(guide.pending_merge_json) : null, comparisons: comparisonHistory(projectId), settings: settings(projectId), trials, guideDigest: digest(guide?.draft_text || ''), sourceDigest: currentSource,
+      referenceDigest: digest([currentSource, guide?.draft_text || '', trials.map(trial => [trial.kind, trial.brief, trial.output_text, trial.author_feedback, trial.guide_digest, trial.source_digest])]),
       applied: Boolean(section), appliedText: section?.text || '', projectStyle: current.style || '' }
   }
   function transaction(operation) {

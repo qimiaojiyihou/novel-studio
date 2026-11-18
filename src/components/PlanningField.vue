@@ -46,7 +46,7 @@ const props = defineProps({
   field: { type: Object, required: true },
   modelValue: { type: String, default: '' },
   busy: { type: Boolean, default: false },
-  defaultExecutionMode: { type: String, default: 'app_model' },
+  defaultExecutionMode: { type: String, default: 'codex' },
   appModelLabel: { type: String, default: '任务模型' },
 })
 

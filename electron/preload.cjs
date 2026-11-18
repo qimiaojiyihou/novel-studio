@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('novelStudio', {
   upgradeCreativePack: (payload) => ipcRenderer.invoke('creative:upgrade', payload),
   listStyleSamples: (payload) => ipcRenderer.invoke('authoring:samples', payload),
   loadReferenceNovels: payload => ipcRenderer.invoke('references:load', payload),
+  analyzeImportedReferences: payload => ipcRenderer.invoke('references:analyze-imported', payload),
   importReferenceNovels: payload => ipcRenderer.invoke('references:import', payload),
   updateReferenceNovel: payload => ipcRenderer.invoke('references:book-update', payload),
   deleteReferenceNovel: payload => ipcRenderer.invoke('references:book-delete', payload),

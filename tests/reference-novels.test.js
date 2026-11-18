@@ -34,7 +34,7 @@ test('migration preserves existing author data; import is bounded, atomic, dedup
   const { db, repo } = fixture(t, 39)
   const before = db.prepare('SELECT * FROM projects').all()
   assert.equal(runMigrations(db), LATEST_SCHEMA_VERSION)
-  assert.deepEqual(db.prepare('SELECT * FROM projects').all(), before)
+  assert.deepEqual(db.prepare('SELECT * FROM projects').all().map(project => ({ ...project })), before.map(project => ({ ...project, default_execution_mode: 'codex' })))
   const r = repo()
   const imported = r.importBooks('a', [input('甲'), input('甲副本', input('甲').text)])
   assert.equal(imported.added, 1)

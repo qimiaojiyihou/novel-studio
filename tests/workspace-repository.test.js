@@ -108,8 +108,8 @@ test('projects can be edited, archived, restored and deleted without losing the 
 
   const renamed = repository.updateProject({ id: first.project.id, title: '改名后的第一本书', idea: '新的核心想法' })
   assert.equal(renamed.title, '改名后的第一本书')
-  assert.equal(renamed.default_execution_mode, 'app_model')
-  assert.equal(repository.updateProject({ id: first.project.id, default_execution_mode: 'codex' }).default_execution_mode, 'codex')
+  assert.equal(renamed.default_execution_mode, 'codex')
+  assert.equal(repository.updateProject({ id: first.project.id, default_execution_mode: 'app_model' }).default_execution_mode, 'app_model')
   assert.throws(() => repository.updateProject({ id: first.project.id, default_execution_mode: 'unknown' }), /执行方式/)
 
   const afterArchive = repository.archiveProject(second.project.id)

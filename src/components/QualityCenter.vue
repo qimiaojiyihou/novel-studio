@@ -39,7 +39,7 @@
 
           <div class="review-launch">
             <label><span>待评审生成记录</span><select v-model="selectedGenerationId"><option value="">请选择</option><option v-for="record in reviewableRecords" :key="record.id" :value="record.id">{{ taskLabel(record.task) }} · {{ formatTime(record.createdAt) }} · {{ record.model?.name || 'Mock' }}</option></select></label>
-            <label><span>独立评审模型</span><select v-model="reviewerProfileId"><option v-for="profile in enabledProfiles" :key="profile.id" :value="profile.id">{{ profile.name }} · {{ profile.model || profile.provider }}</option></select></label>
+            <label v-if="showModelOverrides"><span>独立评审模型</span><select v-model="reviewerProfileId"><option v-for="profile in enabledProfiles" :key="profile.id" :value="profile.id">{{ profile.name }} · {{ profile.model || profile.provider }}</option></select></label>
             <CreativeExecutionControl
               :default-mode="defaultExecutionMode"
               :app-model-label="selectedReviewerLabel"
@@ -128,6 +128,7 @@
 </template>
 
 <script setup>
+import { showModelOverrides } from '../composables/model-controls.js'
 import { computed, reactive, ref, watch } from 'vue'
 import { QUALITY_DIMENSIONS } from '../../electron/creative-quality.js'
 import { appService } from '../services/app-service.js'
@@ -232,7 +233,7 @@ async function refreshPreflight() {
   try { preflight.value = await appService.qualityPreflight({ projectId: props.project.id, chapterId: props.chapter.id, intent: props.chapter.manuscript?.trim() ? 'rewrite' : 'draft' }) }
   catch (error) { emit('toast', `准备度检查失败：${error.message}`) }
 }
-async function runReview(executionMode = 'app_model') {
+async function runReview(executionMode = defaultExecutionMode.value) {
   if (executionMode === 'codex') {
     const source = reviewableRecords.value.find((record) => record.id === selectedGenerationId.value)
     if (!source || !props.chapter?.id) return
@@ -272,7 +273,7 @@ async function runReview(executionMode = 'app_model') {
   finally { busy.value = '' }
 }
 function toggleIssue(id) { selectedIssues.value = selectedIssues.value.includes(id) ? selectedIssues.value.filter((item) => item !== id) : [...selectedIssues.value, id] }
-async function repairSelected(executionMode = 'app_model') {
+async function repairSelected(executionMode = defaultExecutionMode.value) {
   if (executionMode === 'codex') {
     const report = selectedReport.value
     const source = selectedSourceRecord.value

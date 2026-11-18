@@ -1,18 +1,18 @@
 <template>
-  <div ref="root" class="creative-execution" :class="{ compact }">
-    <button class="creative-execution-main" type="button" :disabled="disabled || busy" :aria-busy="busy" @click="execute(defaultMode)">
+  <div ref="root" class="creative-execution" :class="{ compact, simple: !showModelOverrides }">
+    <button class="creative-execution-main" :title="defaultMode === 'codex' ? agentLabel : appModelLabel" type="button" :disabled="disabled || busy" :aria-busy="busy" @click="execute(defaultMode)">
       <span v-if="busy" class="creative-execution-spinner"></span>
       <span>{{ busy ? busyLabel : actionLabel }}</span>
-      <small>{{ defaultMode === 'codex' ? agentLabel : appModelLabel }}</small>
+      <small v-if="showModelOverrides">{{ defaultMode === 'codex' ? agentLabel : appModelLabel }}</small>
     </button>
-    <button ref="trigger" class="creative-execution-menu" type="button" :disabled="disabled || busy" aria-label="选择本次执行方式" aria-haspopup="menu" :aria-controls="menuId" :aria-expanded="open" @click="toggle" @keydown.down.prevent="showMenu" @keydown.up.prevent="showMenu(true)"><span class="creative-execution-chevron" :class="{ open }"></span></button>
+    <button v-if="showModelOverrides" ref="trigger" class="creative-execution-menu" type="button" :disabled="disabled || busy" aria-label="选择本次执行方式" aria-haspopup="menu" :aria-controls="menuId" :aria-expanded="open" @click="toggle" @keydown.down.prevent="showMenu" @keydown.up.prevent="showMenu(true)"><span class="creative-execution-chevron" :class="{ open }"></span></button>
     <Teleport to="body">
-    <div v-if="open" :id="menuId" ref="menu" class="creative-execution-popover" role="menu" aria-label="本次创作执行方式" :style="menuStyle" @keydown="navigateMenu">
+    <div v-if="open && showModelOverrides" :id="menuId" ref="menu" class="creative-execution-popover" role="menu" aria-label="本次创作执行方式" :style="menuStyle" @keydown="navigateMenu">
       <button type="button" role="menuitem" @click="execute(alternateMode)">
         <strong>仅本次使用{{ alternateMode === 'codex' ? ` ${agentLabel}` : '任务模型' }}</strong>
         <small>不修改项目默认方式</small>
       </button>
-      <button type="button" role="menuitem" @click="close(true); emit('edit-default')">
+      <button type="button" role="menuitem" @click="close(true); editDefault()">
         <strong>修改项目默认方式</strong>
         <small>当前：{{ defaultMode === 'codex' ? agentLabel : '应用模型路由' }}</small>
       </button>
@@ -22,13 +22,14 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
+import { showModelOverrides } from '../composables/model-controls.js'
+import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
 import { placePopover } from '../utils/ui-layout.js'
 import { useCreativeAgent } from '../composables/useCreativeAgent.js'
 const { agentLabel } = useCreativeAgent()
 
 const props = defineProps({
-  defaultMode: { type: String, default: 'app_model' },
+  defaultMode: { type: String, default: 'codex' },
   appModelLabel: { type: String, default: '任务模型' },
   actionLabel: { type: String, default: '生成候选' },
   busyLabel: { type: String, default: '生成中' },
@@ -37,6 +38,7 @@ const props = defineProps({
   compact: { type: Boolean, default: false },
 })
 const emit = defineEmits(['execute', 'edit-default'])
+const editDefault = inject('open-creative-settings', () => emit('edit-default'))
 const open = ref(false)
 const root = ref(null), trigger = ref(null), menu = ref(null)
 const menuId = useId()
@@ -113,6 +115,7 @@ function execute(mode) {
 .compact .creative-execution-main { padding: 0 11px; border-radius: 8px 0 0 8px; font-size: 12px; }
 .compact .creative-execution-main small { display: none; }
 .compact .creative-execution-menu { width: 34px; flex-basis: 34px; border-radius: 0 8px 8px 0; }
+.creative-execution.simple .creative-execution-main { border-right: 1px solid var(--ns-accent, #5c8d85); border-radius: 9px; }
 .creative-execution-spinner { width: 11px; height: 11px; border: 1px solid rgba(255,255,255,.4); border-top-color: #fff; border-radius: 50%; animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 </style>

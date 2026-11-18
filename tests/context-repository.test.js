@@ -129,7 +129,7 @@ test('upgrading v38 preserves the current context profile, chapters, planning, k
   const readRows = (table) => database.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all().map((row) => ({ ...row }))
   const originalProfiles = readRows('context_profiles')
   const tables = ['projects', 'chapters', 'planning_documents', 'knowledge_items', 'chapter_memories']
-  const existing = tables.map(readRows)
+  const existing = tables.map(table => table === 'projects' ? readRows(table).map(project => ({ ...project, default_execution_mode: 'codex' })) : readRows(table))
 
   assert.equal(runMigrations(database, { now }), LATEST_SCHEMA_VERSION)
   assert.deepEqual(readRows('context_profiles'), originalProfiles.map((profile) => ({ ...profile, context_budget_unlimited: 0 })))

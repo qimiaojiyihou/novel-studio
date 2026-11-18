@@ -197,9 +197,6 @@
               </button>
             </div>
             <div class="editor-generation-actions" aria-label="正文生成">
-              <select v-model="chapterPromptProfile" class="generation-intent" aria-label="章节写作提示词" :disabled="taskIsRunning()">
-                <option value="">常规写作</option><option :value="REFERENCE_WRITING_PROFILE">参考文风写作</option>
-              </select>
               <select v-model="generationIntent" class="generation-intent" aria-label="正文生成方式" :disabled="taskIsRunning()">
                 <option v-if="!editorText.trim()" value="draft">生成首稿</option>
                 <option v-if="editorText.trim()" value="continue">从光标续写</option>
@@ -272,13 +269,13 @@
             @mousedown.stop
           >
             <span class="selection-caption">已选 {{ selectionTools.text.length }} 字</span>
-            <select v-model="selectionExecutionMode" class="selection-execution-mode" title="本次局部重写执行方式"><option value="app_model">任务模型</option><option value="codex">{{ agentLabel }}</option></select>
+            <select v-if="showModelOverrides" v-model="selectionExecutionMode" class="selection-execution-mode" title="本次局部重写执行方式"><option value="app_model">任务模型</option><option value="codex">{{ agentLabel }}</option></select>
             <button
               v-for="preset in REWRITE_PRESETS"
               :key="preset.id"
               :disabled="taskIsRunning() || selectionPreview.visible"
               :title="preset.name"
-              @click="rewriteSelection(preset, selectionExecutionMode)"
+              @click="rewriteSelection(preset, showModelOverrides ? selectionExecutionMode : defaultExecutionMode)"
             >{{ preset.shortLabel }}</button>
           </div>
 
@@ -332,7 +329,7 @@
           <div class="section-label"><span>当前执行策略</span><button class="link-button" @click="openSettings">配置</button></div>
           <div class="model-route"><span class="model-orb" :class="executionRoute('chapter').mode === 'codex' ? 'agent' : 'local'"></span><div><strong>正文 · {{ executionRoute('chapter').name }}</strong><small>{{ executionRoute('chapter').detail }}</small></div></div>
           <div class="model-route"><span class="model-orb" :class="executionRoute('chapter_card').mode === 'codex' ? 'agent' : 'external'"></span><div><strong>规划 · {{ executionRoute('chapter_card').name }}</strong><small>{{ executionRoute('chapter_card').detail }}</small></div></div>
-          <p v-if="defaultExecutionMode === 'codex'" class="model-route-fallback">仅在生成按钮下拉菜单选择“任务模型”时使用：正文 {{ modelName('chapter') }} · 规划 {{ modelName('chapter_card') }}</p>
+          <p v-if="showModelOverrides && defaultExecutionMode === 'codex'" class="model-route-fallback">仅在生成按钮下拉菜单选择“任务模型”时使用：正文 {{ modelName('chapter') }} · 规划 {{ modelName('chapter_card') }}</p>
         </section>
 
         <section class="context-section progress-section">
@@ -395,6 +392,10 @@
     <div v-if="toast" class="toast" role="status">{{ toast }}</div>
     <ModelSettings
       :visible="settingsOpen"
+      :project="project"
+      :writing-profile="chapterPromptProfile"
+      @writing-profile="setChapterPromptProfile"
+      @project-mode="changeProjectMode"
       :settings="modelSettings"
       :save-state="modelProfileSaveState"
       @close="settingsOpen = false"
@@ -403,7 +404,7 @@
       @route-change="changeTaskRoute"
     />
     <ApprovalDrawer :project-id="project.id" />
-    <ChapterFinalization v-if="finalizationOpen" :project-id="project.id" :chapter-id="activeChapter.id" :settings="modelSettings" @close="finalizationOpen = false" @completed="reloadAfterFinalization" />
+    <ChapterFinalization v-if="finalizationOpen" :project-id="project.id" :chapter-id="activeChapter.id" :settings="modelSettings" :default-mode="defaultExecutionMode" @close="finalizationOpen = false" @completed="reloadAfterFinalization" />
     <ZhuqueDetection v-if="zhuqueOpen && zhuqueTarget" :project-id="zhuqueTarget.projectId" :chapter-id="zhuqueTarget.chapterId" :default-mode="defaultExecutionMode" :app-model-label="modelName('chapter')" :repair-busy="zhuqueRepairBusy" @close="zhuqueOpen = false" @repair="runZhuqueRepair" />
     <InlineCodexPanel
       :visible="inlinePanelOpen"
@@ -541,7 +542,6 @@
           <CreativeExecutionControl compact :default-mode="defaultExecutionMode" :app-model-label="modelName('planning_field')" action-label="完善项目文风" @execute="requestProjectDraft('style', '项目文风', $event)" />
           <small>生成结果只填入此对话框，点击“保存修改”后才进入项目。</small>
         </div>
-        <label class="project-execution-choice"><span>默认创作执行方式</span><select v-model="editProjectDraft.default_execution_mode"><option value="app_model">应用模型路由</option><option value="codex">{{ agentLabel }} · 创作 Agent</option></select><small>所有分裂生成按钮会默认使用这里的选择；下拉菜单仍可只覆盖单次调用。Agent 提供方在模型设置中选择。</small></label>
         <div class="project-dialog-actions">
           <button type="button" @click="editProjectOpen = false">取消</button>
           <button type="submit" :disabled="workspaceActionPending">{{ workspaceActionPending ? '正在保存…' : '保存修改' }}</button>
@@ -601,6 +601,7 @@
 </template>
 
 <script setup>
+import { showModelOverrides } from './composables/model-controls.js'
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, provide, reactive, ref, watch } from 'vue'
 const DiffReview = defineAsyncComponent(() => import('./components/DiffReview.vue'))
 import AppIcon from './components/AppIcon.vue'
@@ -703,11 +704,11 @@ const planningCenterRef = ref(null)
 const knowledgeCenterRef = ref(null)
 const novelEditorRef = ref(null)
 const instruction = ref('')
-const chapterPromptProfile = ref('')
+const chapterPromptProfile = ref(REFERENCE_WRITING_PROFILE)
 const runningTask = ref('')
 const generationCancelPending = ref(false)
 const generationIntent = ref('draft')
-const selectionExecutionMode = ref('app_model')
+const selectionExecutionMode = ref('codex')
 const cursorOffset = ref(0)
 const lastSavedAt = ref('')
 const saveState = ref('saved')
@@ -824,7 +825,7 @@ watch(sidebarCollapsed, (collapsed) => {
   try { globalThis.localStorage?.setItem(SIDEBAR_COLLAPSED_KEY, String(collapsed)) } catch {}
 })
 const newProjectDraft = reactive({ title: '', genre: '', idea: '', style: '', work_format: 'novel', target_word_count: 8000 })
-const editProjectDraft = reactive({ id: '', title: '', genre: '', idea: '', style: '', work_format: 'novel', target_word_count: 8000, default_execution_mode: 'app_model' })
+const editProjectDraft = reactive({ id: '', title: '', genre: '', idea: '', style: '', work_format: 'novel', target_word_count: 8000 })
 const newChapterDraft = reactive({ title: '', mode: 'blank' })
 const renameChapterDraft = reactive({ id: '', title: '' })
 const confirmDialog = reactive({ visible: false, title: '', body: '', note: '', confirmLabel: '确认', danger: false })
@@ -839,10 +840,17 @@ const selectionPreview = reactive({
 const candidate = reactive({ visible: false, original: '', content: '', title: '', subtitle: '', hint: '', language: 'markdown', task: '', candidateId: '', targetTab: 'manuscript' })
 const streamPreview = reactive({ visible: false, task: '', status: '', content: '', gateway: 'embedded' })
 const runtime = reactive({ goServiceStatus: 'embedded-fallback', mode: 'embedded' })
+provide('open-creative-settings', openSettings)
 provide('creative-agent-provider', computed(() => runtime.agentProvider || 'codex'))
 const agentLabel = computed(() => creativeAgentLabel(runtime.agentProvider))
-const project = reactive({ title: '', genre: '', idea: '', style: '', work_format: 'novel', target_word_count: 8000, default_execution_mode: 'app_model' })
-watch(() => project.id, () => { chapterPromptProfile.value = '' })
+const project = reactive({ title: '', genre: '', idea: '', style: '', work_format: 'novel', target_word_count: 8000, default_execution_mode: 'codex' })
+watch(() => project.id, id => {
+  chapterPromptProfile.value = localStorage.getItem('chapter-writing-profile:' + id) === 'regular' ? '' : REFERENCE_WRITING_PROFILE
+})
+function setChapterPromptProfile(value) {
+  chapterPromptProfile.value = value
+  localStorage.setItem('chapter-writing-profile:' + project.id, value || 'regular')
+}
 const isShortStory = computed(() => projectIsShortStory(project))
 const cardLabel = computed(() => isShortStory.value ? '故事卡' : '章节卡')
 const modelSettings = reactive({ profiles: [], routes: {} })
@@ -1326,7 +1334,6 @@ function openEditProject(item) {
     style: item.style || '',
     work_format: item.work_format || 'novel',
     target_word_count: item.target_word_count || 8000,
-    default_execution_mode: projectExecutionMode(item),
   })
   editProjectOpen.value = true
 }
@@ -2318,6 +2325,13 @@ async function handleCloseRequest() {
   }
 }
 
+async function changeProjectMode(mode) {
+  try {
+    const updated = await appService.updateProject({ id: project.id, default_execution_mode: mode })
+    if (project.id === updated.id) Object.assign(project, updated)
+    projects.value = await appService.listProjects()
+  } catch (error) { showToast(error.message) }
+}
 function openSettings() {
   generationHistoryOpen.value = false
   Object.assign(modelProfileSaveState, { state: 'idle', message: '' })
