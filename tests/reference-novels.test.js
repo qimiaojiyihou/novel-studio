@@ -530,3 +530,28 @@ test('writing and rewrite prompts infer an exchange from goals while preserving 
   assert.deepEqual(pick(goals, {}, { samples, purpose: 'base' }), [])
   assert.deepEqual(pick(goals, {}, { samples: [samples[0]] }), [])
 })
+
+test('a newly imported evasive exchange reaches the writing prompt from opposed information goals', async t => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'reference-probe-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const exchange = '“昨夜水门是谁开的？”\n“跟你有什么关系？”\n“那你怎么知道几点退的水？”\n“轮到我守桥。”'
+  const file = path.join(directory, '渡口.txt')
+  await writeFile(file, '第一章 秋雨\n' + '石桥上满是落叶，过路的孩子摘了斗笠，趁着风停跑回家去。'.repeat(7) + '\n第二章 水门\n' + exchange)
+  const { db, repo } = fixture(t)
+  const imported = await readReferenceNovel(file)
+  repo().importBooks('a', [imported])
+  const prompts = createPromptRepository(db)
+  const pick = (sceneInstruction, task = 'chapter', extra = {}) => {
+    const result = compilePrompt({ sceneInstruction, task, chapter: {}, ...extra,
+      promptContext: prompts.resolvePromptContext({ projectId: 'a', chapterId: 'chapter-a', task }) })
+    const selected = result.snapshot.voiceSamples.some(s => s.use === '对白试探')
+    assert.equal(result.messages.some(m => m.content.includes(JSON.stringify(exchange))), selected)
+    return selected
+  }
+  const request = '镇文化馆的老放映室。林沅想弄清昨晚是谁在已经停用的放映室放了一卷旧片。值夜的周师傅想把女儿昨晚借过钥匙、进过放映室的事瞒住。'
+  assert.ok(pick(request))
+  assert.ok(pick('一个人想搞明白失约的缘由，另一个人不愿透露。', 'rewrite'))
+  assert.ok(pick('乘客不想让同事知道昨晚的事。司机打算核实行程。'))
+  for (const other of ['她想知道是谁来过。', '她想弄清是谁来过，但也想瞒住消息。',
+    '掌柜想核实消息，伙计不想瞒住事实。', request + '不要写对白。', request + '避免试探。']) assert.equal(pick(other), false)
+})

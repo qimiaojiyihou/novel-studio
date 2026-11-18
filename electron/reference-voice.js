@@ -47,6 +47,7 @@ function excludedPurposes(input, targets) {
     const negative = clause.search(/不要|避免|勿|禁止|无需|别|不得|不能|不必|不宜/)
     return negative >= 0 && cue.test(clause.slice(negative))
   })).map(([label]) => label))
+  if (clauses.some(clause => /(?:不要|避免|禁止|不写|省略)(?:写|出现|安排|任何)*(?:对白|对话)|全程沉默/.test(clause))) excluded.add('对白试探')
   if (/遗物交接|葬礼|丧事|哀悼|悲痛|悲伤|悲恸|庄重|肃穆|严肃/.test(targets.join(' '))) excluded.add('轻松打趣')
   return excluded
 }
@@ -84,6 +85,29 @@ function hasReciprocalGoals(target) {
   return false
 }
 
+// Infer a probing exchange only from nearby goals attributed to different people.
+// A curious character on their own, or one person's private conflict, isn't an exchange.
+const wantsInformation = /(?:想(?:要)?|希望|打算|一心要|决心要|非要)(?:知道|弄清|弄明白|搞清|搞明白|问清|问明|问出|查明|查出|核实|确认|打听出)/
+const wantsSecrecy = /(?:想(?:要)?|希望|打算|试图|一心要|必须)(?:(?!不再|不想|不必|不用|不要|别让|别再|别瞒|别隐瞒)[^，。！？；\n"]){0,40}?(?:瞒住|瞒着|瞒下|隐瞒|藏住|掩盖|守口如瓶|保密|蒙在鼓里)|(?:不想|不愿|不肯|不打算)(?:说出|交代|透露|承认|让[^，。！？；\n"]{0,18}(?:知道|发现|看出))/
+
+function opposedInformationGoals(target) {
+  let last
+  for (const clause of target.split(/[，,。！？!?；;\n"]/u)) {
+    const seek = wantsInformation.exec(clause)
+    const hide = wantsSecrecy.exec(clause)
+    const goal = seek || hide
+    if (!clause.trim()) continue
+    if (!goal) { last = null; continue }
+    const actor = clause.slice(0, goal.index).trim().replace(/^(?:但是|然而|而|但)/, '').replace(/(?:却|则|一直|只|偏偏|也|又)+$/, '')
+      .replace(/^.*的(?=[\p{Script=Han}]{1,5}$)/u, '')
+    if (!actor || /不$|没$|从未$/.test(actor) || (seek && hide)) { last = null; continue }
+    const kind = seek ? 'seek' : 'hide'
+    if (last && kind !== last.kind && actor !== last.actor) return true
+    last = { actor, kind }
+  }
+  return false
+}
+
 // Current instructions take precedence over earlier plans. A revised judgment is
 // a more precise cue than a generic turning point; unrelated ties stay unresolved.
 function matchScenePurpose(input, purposes) {
@@ -93,7 +117,11 @@ function matchScenePurpose(input, purposes) {
     const matches = new Set(purposes.filter(key => !excluded.has(key) && voicePurposes[key].test(target)))
     if (matches.has('判断修正')) matches.delete('关键转折')
     if (matches.size) return matches.size === 1 ? [...matches][0] : ''
-    if (purposes.includes('熟人商量') && !excluded.has('熟人商量') && hasReciprocalGoals(target)) return '熟人商量'
+    const probing = purposes.includes('对白试探') && !excluded.has('对白试探') && opposedInformationGoals(target)
+    const bargaining = purposes.includes('熟人商量') && !excluded.has('熟人商量') && hasReciprocalGoals(target)
+    if (probing && bargaining) return ''
+    if (probing) return '对白试探'
+    if (bargaining) return '熟人商量'
   }
   return ''
 }

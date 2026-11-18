@@ -22,17 +22,21 @@ const assent = /^(?:那(?:就)?|嗯[，,])?(?:也行|行啊|行吧|行[，。！
 const undertaking = /^(?:那|嗯[，,])?(?:我|我们|咱们)(?:今晚|今早|明早|明天|这就|马上|现在就|一定会|保证|负责)/
 const topicBreak = /^(?:对了[，,]|换个话题|说到别的)|(?:第二天|次日|几天后|话题一转|转过天)/
 
-function negotiationSample(chunk, label) {
-  const turns = Array.from(chunk.matchAll(/“([^“”\n]{1,350})”|「([^「」\n]{1,350})」|『([^『』\n]{1,350})』|"([^"\n]{1,350})"/gu), match => ({
+function dialogueTurns(chunk) {
+  return Array.from(chunk.matchAll(/“([^“”\n]{1,350})”|「([^「」\n]{1,350})」|『([^『』\n]{1,350})』|"([^"\n]{1,350})"/gu), match => ({
     start: match.index, end: match.index + match[0].length, words: (match[1] ?? match[2] ?? match[3] ?? match[4]).trim(),
   }))
-  function connected(a, b) {
-    if (b.start - a.end > 100) return false
-    const gap = chunk.slice(a.end, b.start)
-    // A speech tag inside one line often splits one speaker's sentence into two quotes.
-    if (!gap.includes('\n') && /(?:说|道|答|接着|继续)[^。！？]{0,8}[，,]$/u.test(gap.trim())) return false
-    return !/(?:^|\n)\s*[*＊—-]{3,}\s*(?:\n|$)/u.test(gap) && !topicBreak.test(gap) && !topicBreak.test(b.words)
-  }
+}
+
+function connected(chunk, a, b) {
+  if (b.start - a.end > 100) return false
+  const gap = chunk.slice(a.end, b.start)
+  // A speech tag inside one line often splits one speaker's sentence into two quotes.
+  if (!gap.includes('\n') && /(?:说|道|答|接着|继续)[^。！？]{0,8}[，,]$/u.test(gap.trim())) return false
+  return !/(?:^|\n)\s*[*＊—-]{3,}\s*(?:\n|$)/u.test(gap) && !topicBreak.test(gap) && !topicBreak.test(b.words)
+}
+
+function negotiationSample(chunk, label, turns) {
   let best
   for (let i = 0; i < turns.length - 1; i++) {
     const proposal = turns[i]
@@ -40,14 +44,14 @@ function negotiationSample(chunk, label) {
     let hasTerms = terms.test(proposal.words)
     for (let j = i + 1; j < Math.min(i + 5, turns.length); j++) {
       const reply = turns[j]
-      if (!connected(turns[j - 1], reply) || reply.end - proposal.start > 600) break
+      if (!connected(chunk, turns[j - 1], reply) || reply.end - proposal.start > 600) break
       const acceptedTerms = hasTerms && undertaking.test(reply.words)
       hasTerms ||= terms.test(reply.words)
       if (!assent.test(reply.words) && !acceptedTerms) continue
       let first = i
       // Include the initiating question and short reply when they lead into the offer.
       for (let k = i - 1; k >= Math.max(0, i - 2); k--) {
-        if (!connected(turns[k], turns[k + 1]) || reply.end - turns[k].start > 600) break
+        if (!connected(chunk, turns[k], turns[k + 1]) || reply.end - turns[k].start > 600) break
         if (/[？?]/u.test(turns[k].words)) { first = k; break }
         if (turns[k].words.length > 12) break
       }
@@ -60,9 +64,41 @@ function negotiationSample(chunk, label) {
   return best
 }
 
+// Look for a question, a reply which withholds the answer, and a renewed question.
+// Corroborate weak replies (e.g. "不知道") rather than treating ordinary Q&A as evasion.
+const evasiveReply = /问这(?:个|些)干什么|问那么多|少打听|别问|不便说|无可奉告|你管.{0,5}做什么|你听错|你看错|有什么好说|跟你有什么关系/
+const evasiveNarration = /搪塞|支吾|支支吾吾|敷衍|扯谎|撒(?:了个)?谎|胡话|含糊其辞|答非所问|避开.{0,6}(?:问题|话头)|没有正面回答|没接.{0,4}话/
+const uncertainReply = /不知道|不清楚|不记得|没看清|没留意|我没[….]|不[….]{2,}/
+const pressingQuestion = /到底|究竟|明明|刚才.{0,10}不是|那(?:又)?(?:是)?为什么|那你怎么|怎么会|可你|我问的是/
+const question = /[？?]|(?:吗|么|没有|是不是)[。！…]*$/
+
+function probingSample(chunk, label, turns) {
+  let best
+  for (let i = 1; i < turns.length - 1; i++) {
+    const first = turns[i - 1], reply = turns[i], follow = turns[i + 1]
+    if (follow.end - first.start > 600 || !question.test(first.words)) continue
+    if (!connected(chunk, first, reply) || !connected(chunk, reply, follow)) continue
+    const beforeReply = chunk.slice(first.end, reply.start)
+    const afterReply = chunk.slice(reply.end, follow.start)
+    const redirect = /我问的是|别岔开|你还没(?:说|回答)/.test(follow.words)
+    if (!question.test(follow.words) && !redirect) continue
+    const evasion = redirect || evasiveReply.test(reply.words) || evasiveNarration.test(afterReply)
+      || (/[：:]\s*$/.test(beforeReply) && evasiveNarration.test(beforeReply))
+    const pressure = pressingQuestion.test(follow.words)
+    if (!evasion && !(pressure && uncertainReply.test(reply.words))) continue
+    // Include an immediate answer to the follow-up, but stop if the topic changes.
+    const answer = turns[i + 2]
+    const end = answer && connected(chunk, follow, answer) && answer.end - first.start <= 600
+      && !question.test(answer.words) ? answer.end : follow.end
+    const score = Number(evasion) * 2 + Number(pressure) + Number(end !== follow.end)
+    if (!best || score > best.score) best = { text: chunk.slice(first.start, end), label, score }
+  }
+  return best
+}
+
 function proseWindows(text, chapters) {
   const windows = []
-  let negotiation
+  let negotiation, probing
   const seen = new Set()
   const count = Math.min(chapters.length, 96)
   for (let i = 0; i < count; i++) {
@@ -79,7 +115,11 @@ function proseWindows(text, chapters) {
       }
       else if (chunk.split('\n', 1)[0].replace(/^#+\s*/, '').trim() === chapter.title) chunk = chunk.slice(chunk.indexOf('\n') + 1)
       if (offset + 4800 < length) chunk = chunk.replace(/[^。！？!?\n]*$/u, '')
-      const exchange = negotiationSample(chunk, '自动选段 · ' + chapter.title)
+      const label = '自动选段 · ' + chapter.title
+      const turns = dialogueTurns(chunk)
+      const probe = probingSample(chunk, label, turns)
+      if (probe && (!probing || probe.score > probing.score)) probing = probe
+      const exchange = negotiationSample(chunk, label, turns)
       if (exchange && (!negotiation || exchange.score > negotiation.score)) negotiation = exchange
       let passage = ''
       function collect() {
@@ -101,11 +141,11 @@ function proseWindows(text, chapters) {
       collect()
     }
   }
-  return { windows, negotiation }
+  return { windows, negotiation, probing }
 }
 
 export function selectImportExcerpts(text, chapters) {
-  const { windows, negotiation } = proseWindows(text, chapters)
+  const { windows, negotiation, probing } = proseWindows(text, chapters)
   if (!windows.length) return []
   const ranks = windows.map(sample => {
     const quotes = (sample.text.match(/[“「『]/g) || []).length
@@ -122,10 +162,11 @@ export function selectImportExcerpts(text, chapters) {
   const result = [{ ...base.sample, use: '底色', primary: true }]
   const taken = new Set([base])
   const purposes = new Set()
-  if (negotiation && negotiation.text !== base.sample.text) {
-    result.push({ text: negotiation.text, label: negotiation.label, use: '熟人商量' })
-    purposes.add('熟人商量')
-    for (const rank of ranks) if (negotiation.text === rank.sample.text) taken.add(rank)
+  for (const [use, dialogue] of [['熟人商量', negotiation], ['对白试探', probing]]) {
+    if (!dialogue || result.some(sample => sample.text === dialogue.text)) continue
+    result.push({ text: dialogue.text, label: dialogue.label, use })
+    purposes.add(use)
+    for (const rank of ranks) if (dialogue.text === rank.sample.text) taken.add(rank)
   }
   const candidates = ranks.flatMap(rank => rank.scored.filter(item => item.score >= 2)
     .map(item => ({ ...item, rank }))).sort((a, b) => b.score - a.score || b.rank.base - a.rank.base)
