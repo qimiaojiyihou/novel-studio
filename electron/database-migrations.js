@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url'
 import { validateCreativePack } from './creative-pack.js'
 import { creativeUpgradeMigrations } from './creative-upgrade-migrations.js'
 
-export const LATEST_SCHEMA_VERSION = 43
+export const LATEST_SCHEMA_VERSION = 44
 
 function bundledOfficialPack(version = '1.2.0') {
   const directory = version === '1.3.0' ? 'dist' : 'historical'
@@ -1756,6 +1756,10 @@ migrations.push({ version: 42, name: 'reference-blind-comparisons', up(database)
 
 migrations.push({ version: 43, name: 'reference-sample-comparisons', up(database) {
   database.exec("ALTER TABLE reference_comparisons ADD COLUMN sample_trial_json TEXT NOT NULL DEFAULT '{}'")
+} })
+
+migrations.push({ version: 44, name: 'reference-guide-merge-review', up(database) {
+  database.exec("ALTER TABLE reference_style_guides ADD COLUMN pending_merge_json TEXT NOT NULL DEFAULT ''")
 } })
 
 export function runMigrations(database, { now = () => new Date().toISOString(), targetVersion = LATEST_SCHEMA_VERSION } = {}) {

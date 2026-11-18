@@ -2,8 +2,12 @@
   <section class="reference-novels" aria-label="参考小说">
     <header class="reference-heading">
       <div><span class="eyebrow">REFERENCE LIBRARY</span><h2>参考小说</h2><p>选几本喜欢的小说，提炼表达习惯，形成这本书自己的文风。</p></div>
-      <button type="button" :disabled="busy" @click="importBooks">{{ importing ? '正在读取…' : '＋ 导入小说' }}</button>
+      <button type="button" :disabled="busy || !state || (importMode !== 'off' && (booksDirty || settingsDirty || dirty || state.pendingMerge))" @click="importBooks">{{ importing ? (importMode === 'off' ? '正在读取…' : '正在导入并分析…') : '＋ 导入小说' }}</button>
     </header>
+    <label><span class="reference-label">导入参考小说后</span><select v-model="importMode" :disabled="busy" @change="rememberOptions">
+      <option value="app_model">用分析模型生成规范草稿</option><option value="codex">用 Codex 生成规范草稿</option><option value="off">只导入并自动选段</option>
+    </select></label>
+    <p v-if="importMode !== 'off' && (booksDirty || settingsDirty || dirty || state?.pendingMerge)" class="reference-hint">请先保存当前编辑或处理待确认的合并稿，再导入并分析。</p>
     <p v-if="error" class="reference-error" role="alert">{{ error }} <button type="button" @click="load">刷新资料</button></p>
     <p v-if="notice" class="reference-notice" role="status">{{ notice }}</p>
     <p class="reference-hint">支持 TXT、Markdown、Word DOCX，可多选，每本最大 10 MB。导入时在本机自动选取写作样本。首次设置的底色和匹配本场用途的选段，会随正文写作和改稿发送给所选模型。</p>
@@ -23,6 +27,7 @@
       <ReferenceScenePicker v-if="pickerBook" :key="pickerBook.id" :project-id="project.id" :book="pickerBook" @selected="addScene" @close="pickerBookId = ''" />
       <section class="reference-analysis" aria-label="分析设置">
         <h3>提炼文风规范</h3>
+        <label><span class="reference-label">参考分析提示词</span><select v-model="analysisPreset" :disabled="busy" @change="rememberOptions"><option value="reference-language">按选段提炼语言、对白与详略</option><option value="">常规分析</option></select></label>
         <label><span class="reference-label">偏好与需要改善的用词</span><textarea v-model="preference" :disabled="busy" rows="3" maxlength="1200" placeholder="例如：用词别扭、对白太像书面语，希望接近热门小说那种顺畅、自然的表达。也可以粘贴你觉得生硬的一两句。" /></label>
         <label><span class="reference-label">参考冲突时如何取舍</span><textarea v-model="conflictPolicy" :disabled="busy" rows="2" maxlength="1200" placeholder="例如：以甲书的对白和情绪为主，乙书补充环境描写；冲突场景加快，日常场景保留趣味。" /></label>
         <label><span class="reference-label">贴近参考文风 · 底色来源</span><select v-model="voiceBook" :disabled="busy"><option value="">关闭选段随稿发送</option><option v-for="book in voiceBooks" :key="book.id" :value="book.content_digest">{{ book.title }}</option></select></label>
@@ -30,7 +35,7 @@
         <div><button type="button" :disabled="busy || !settingsDirty || booksDirty" @click="saveSettings">保存分析偏好</button><small v-if="settingsDirty" class="reference-hint"> 偏好有修改，保存后用于分析。</small></div>
         <div class="reference-analyze-actions">
           <label class="reference-model"><span class="reference-label">分析模型</span><select v-model="modelId" :disabled="busy"><option value="">跟随规划模型</option><option v-for="profile in profiles" :key="profile.id" :value="profile.id">{{ profile.name }} · {{ profile.model }}</option></select></label>
-          <CreativeExecutionControl :default-mode="defaultMode" :app-model-label="modelLabel" action-label="分析并生成规范" busy-label="正在分析…" :busy="analyzing" :disabled="busy || !state.books.some(book => book.enabled) || booksDirty || settingsDirty" @execute="analyze" />
+          <CreativeExecutionControl :default-mode="defaultMode" :app-model-label="modelLabel" action-label="分析并生成规范" busy-label="正在分析…" :busy="analyzing" :disabled="busy || dirty || state.pendingMerge || !state.books.some(book => book.enabled) || booksDirty || settingsDirty" @execute="analyze" />
           <button v-if="analyzing" type="button" @click="cancelAnalysis">停止分析</button>
           <button type="button" :disabled="busy || booksDirty || settingsDirty || !state.books.some(book => book.enabled)" @click="previewSamples">查看抽样</button>
         </div>
@@ -39,10 +44,15 @@
         <details v-if="samplePacket" class="reference-samples" open><summary>本次抽样 · {{ samplePacket.books.length }} 本书</summary><article v-for="book in samplePacket.books" :key="book.id"><h4>{{ book.title }}</h4><details v-for="part in book.excerpts" :key="part.position"><summary>{{ part.position }}</summary><pre>{{ part.text }}</pre></details></article></details>
       </section>
       <section class="reference-guide" aria-label="文风规范草稿">
-        <div class="reference-guide-heading"><h3>文风规范</h3><span>{{ state.applied ? '已应用到本书' : '待确认应用' }}{{ dirty ? ' · 草稿未保存' : '' }}</span></div>
+        <div class="reference-guide-heading"><h3>文风规范</h3><span>{{ state.applied ? (state.appliedText === guideText.trim() ? '已应用到本书' : '写作仍使用上次确认的规范') : '待确认应用' }}{{ dirty ? ' · 草稿未保存' : '' }}</span></div>
+        <div v-if="state.pendingMerge" class="reference-analysis" aria-label="待确认的合并稿">
+          <details><summary>对照原规范草稿</summary><p class="reference-excerpt-text">{{ state.guide.draft_text }}</p></details>
+          <label><span class="reference-label">合并后的规范（可编辑）</span><textarea v-model="mergeText" rows="12" maxlength="8000" :disabled="busy" /></label>
+          <div><button type="button" :disabled="busy || !mergeText.trim()" @click="reviewMerge(false)">保存合并稿</button> <button type="button" :disabled="busy" @click="reviewMerge(true)">保留原草稿</button></div>
+        </div>
         <p v-if="outdated" class="reference-warning">参考书或参考重点已变化。请重新分析，或核对并保存现有规范后再应用。</p>
-        <label><span class="reference-label">可直接编辑，确认后用于后续写作</span><textarea v-model="guideText" :disabled="busy" rows="18" maxlength="8000" placeholder="分析结果会出现在这里。你可以调整语气、描写详略、用词、对白和审稿检查项。" /></label>
-        <div class="reference-guide-footer"><small>{{ guideText.length.toLocaleString() }} / 8,000 字符</small><div><button type="button" :disabled="busy || !guideText.trim()" @click="saveGuide">保存规范草稿</button><button class="reference-primary" type="button" :disabled="busy || !guideText.trim() || dirty || outdated || booksDirty || settingsDirty" @click="applyGuide(false)">确认应用到本书</button><button v-if="state.applied" type="button" :disabled="busy" @click="applyGuide(true)">停用参考规范</button></div></div>
+        <label v-if="!state.pendingMerge"><span class="reference-label">可直接编辑，确认后用于后续写作</span><textarea v-model="guideText" :disabled="busy || Boolean(state.pendingMerge)" rows="18" maxlength="8000" placeholder="分析结果会出现在这里。你可以调整语气、描写详略、用词、对白和审稿检查项。" /></label>
+        <div v-if="!state.pendingMerge" class="reference-guide-footer"><small>{{ guideText.length.toLocaleString() }} / 8,000 字符</small><div><button type="button" :disabled="busy || state.pendingMerge || !guideText.trim()" @click="saveGuide">保存规范草稿</button><button class="reference-primary" type="button" :disabled="busy || state.pendingMerge || !guideText.trim() || dirty || outdated || booksDirty || settingsDirty" @click="applyGuide(false)">确认应用到本书</button><button v-if="state.applied" type="button" :disabled="busy" @click="applyGuide(true)">停用参考规范</button></div></div>
         <p class="reference-hint">应用后，带【通用】【对白】【详略】【冲突】【视角】【情绪】【改稿】标签的规则按场景选取，最多四条。旧版无标签规范沿用全文。可在生成记录的任务凭证中核对本次发送的规则。</p>
       </section>
       <ReferenceComparison :key="project.id" :project-id="project.id" :guide="state.guide?.draft_text" :history="state.comparisons" :model-id="modelId" :model-label="modelLabel" :disabled="busy || !canCalibrate" @changed="refreshComparisons" />
@@ -84,6 +94,10 @@ const state = ref(null), bookDrafts = ref([]), guideText = ref(''), guideSource 
 const error = ref(''), notice = ref(''), preference = ref(''), conflictPolicy = ref(''), modelId = ref(''), samplePacket = ref(null), pickerBookId = ref('')
 const importing = ref(false), saving = ref(false), analyzing = ref(false), trialDrafts = ref([])
 let generation = null, epoch = 0, disposed = false
+const analysisPreset = ref('reference-language'), importMode = ref('app_model'), mergeText = ref('')
+function rememberOptions() {
+  localStorage.setItem('reference-import:' + props.project.id, JSON.stringify({ importMode: importMode.value, analysisPreset: analysisPreset.value }))
+}
 const busy = computed(() => importing.value || saving.value || analyzing.value)
 const profiles = computed(() => (props.modelSettings.profiles || []).filter(profile => profile.enabled !== false && profile.enabled !== 0))
 const defaultMode = computed(() => props.project.default_execution_mode === 'codex' ? 'codex' : 'app_model')
@@ -95,7 +109,7 @@ const voiceBook = ref(''), voicePurpose = ref('auto')
 const voiceBooks = computed(() => (state.value?.books || []).filter(b => b.enabled && b.excerpts.some(s => s.use === '底色')))
 const settingsDirty = computed(() => voicePurpose.value !== (state.value?.settings?.voicePurpose || 'auto') || voiceBook.value !== (state.value?.settings?.voiceBook || '') || preference.value !== (state.value?.settings?.preference || '') || conflictPolicy.value !== (state.value?.settings?.conflictPolicy || ''))
 const pickerBook = computed(() => bookDrafts.value.find(book => book.id === pickerBookId.value))
-const canCalibrate = computed(() => Boolean(state.value?.guide?.draft_text) && !dirty.value && !outdated.value && !booksDirty.value && !settingsDirty.value)
+const canCalibrate = computed(() => Boolean(state.value?.guide?.draft_text) && !state.value?.pendingMerge && !dirty.value && !outdated.value && !booksDirty.value && !settingsDirty.value)
 const hasSavedFeedback = computed(() => state.value?.comparisons.some(row => row.verdict && row.guide_digest === state.value.guideDigest && row.source_digest === state.value.sourceDigest) || state.value?.trials.some(trial => trial.guide_digest === state.value.guideDigest && trial.source_digest === state.value.sourceDigest && trial.author_feedback.trim()))
 const trialsDirty = computed(() => trialDrafts.value.some(trial => trial.text && (trialOutputChanged(trial) || trial.feedback !== (storedTrial(trial.kind)?.author_feedback || ''))))
 function bookFields(book) { return [book.title, book.focus, Boolean(book.enabled), book.priority, book.sample_mode, book.excerpts] }
@@ -110,6 +124,7 @@ function accept(value, { replaceGuide = true, replaceSettings = false, savedBook
   const unsavedBooks = bookDrafts.value.filter(book => book.id !== savedBookId && bookChanged(book))
   const unsavedTrials = trialDrafts.value.filter(trial => trial.kind !== savedTrialKind && (trialOutputChanged(trial) || trial.feedback !== (storedTrial(trial.kind)?.author_feedback || '')))
   if (voiceBook.value && !value.books.some(book => book.enabled && book.content_digest === voiceBook.value && book.excerpts.some(sample => sample.use === '底色'))) voiceBook.value = ''
+  if (state.value?.pendingMerge?.id !== value.pendingMerge?.id) mergeText.value = value.pendingMerge?.text || ''
   state.value = value
   emit('count', value.books.length)
   bookDrafts.value = value.books.map(book => unsavedBooks.find(draft => draft.id === book.id) || ({ ...book, enabled: Boolean(book.enabled), excerpts: book.excerpts.map(sample => ({ ...sample })) }))
@@ -144,12 +159,16 @@ async function refreshComparisons() {
   } catch (e) { if (valid(projectId, token)) error.value = e.message }
 }
 async function importBooks() {
+  const project = props.project.id, token = epoch
   importing.value = true
-  const result = await operation(projectId => appService.importReferenceNovels({ projectId }))
+  const result = await operation(projectId => appService.importReferenceNovels({ projectId, analyzeWith: importMode.value, analysisPreset: analysisPreset.value, modelProfileId: modelId.value }))
+  if (!valid(project, token)) return
   if (result && !result.cancelled) {
     if (voiceBook.value === (state.value?.settings.voiceBook || '')) voiceBook.value = result.settings.voiceBook || ''
-    accept(result, { replaceGuide: false })
+    accept(result, { replaceGuide: Boolean(result.generatedDraft) })
     notice.value = `已导入 ${result.added} 本${result.skipped.length ? `，跳过 ${result.skipped.length} 本重复内容` : ''}`
+    if (result.generatedDraft) notice.value += result.pendingMerge ? '。已结合原草稿生成合并稿，请对照后保存。' : '。文风规范草稿已保存，可核对后应用。'
+    if (result.analysisError) error.value = '书籍已导入，分析未完成：' + result.analysisError
   }
   importing.value = false
 }
@@ -186,6 +205,10 @@ async function previewSamples() {
   const value = await operation(projectId => appService.referenceAnalysisPacket({ projectId }))
   if (value) samplePacket.value = value
 }
+async function reviewMerge(discardMerge) {
+  const value = await operation(projectId => appService.saveReferenceGuide({ projectId, revision: state.value.guide.revision, mergeId: state.value.pendingMerge.id, text: mergeText.value, discardMerge }))
+  if (value) { accept(value); notice.value = discardMerge ? '已保留原规范草稿' : '合并稿已保存，可核对后应用到本书' }
+}
 async function saveGuide() {
   const value = await operation(projectId => appService.saveReferenceGuide({ projectId, text: guideText.value,
     sourceDigest: state.value.sourceDigest, revision: state.value.guide?.revision || 0 }))
@@ -209,43 +232,49 @@ async function analyze(executionMode, mode = 'analysis', trial = null) {
   const projectId = props.project.id, token = epoch, kind = trial?.kind || '', brief = trial?.brief || ''
   error.value = ''; notice.value = ''; analyzing.value = true; pickerBookId.value = ''
   try {
-    const packet = await appService.referenceAnalysisPacket({ projectId, mode, kind, brief })
+    const preset = mode === 'analysis' ? analysisPreset.value : ''
+    const packet = await appService.referenceAnalysisPacket({ projectId, mode, kind, brief, analysisPreset: preset })
     if (!valid(projectId, token)) return
     if (packet.books) samplePacket.value = packet
-    if (mode !== 'trial' && guideText.value.trim() && !window.confirm('新规范会替换当前规范草稿，核对并确认应用后用于写作。继续生成？')) return
     if (mode === 'trial' && trial.text && !window.confirm('生成新的试写片段会替换这类场景的上次试写和反馈，继续？')) return
     const currentTrial = () => trialDrafts.value.find(item => item.kind === kind)
     const fill = text => {
       if (mode === 'trial') Object.assign(currentTrial(), { text, feedback: '', guideDigest: packet.guideDigest, sourceDigest: packet.sourceDigest })
       else { guideText.value = text; guideSource.value = packet.sourceDigest }
     }
+    const guideRevision = state.value.guide?.revision || 0, trialRevision = storedTrial(kind)?.revision || 0
     if (executionMode === 'codex') {
       const snapshot = () => draftDigest({ guide: guideText.value, books: bookDrafts.value, preference: preference.value, conflictPolicy: conflictPolicy.value, trials: trialDrafts.value, projectId: props.project.id })
       emit('codex-action', {
         request: { projectId, task: 'planning_field', intent: 'analysis', instruction: packet.instruction,
           target: { kind: mode === 'trial' ? 'reference_trial_draft' : 'reference_style_draft', targetId: projectId, fieldKey: mode === 'trial' ? kind : 'referenceGuide', fieldLabel: mode === 'trial' ? '文风试写片段' : mode === 'refine' ? '根据反馈校准文风规范' : '参考小说文风规范', draftDigest: snapshot() } },
         getDraftDigest: snapshot, getDraftValue: () => mode === 'trial' ? currentTrial()?.text || '' : guideText.value,
-        applyDraft: text => { if (valid(projectId, token)) { fill(text); notice.value = mode === 'trial' ? '试写候选已填入，请保存试写片段后填写反馈' : '候选已填入，请核对并保存规范草稿' } },
+        applyDraft: async text => { if (valid(projectId, token)) {
+          if (mode !== 'trial' && state.value.guide?.draft_text) {
+            const value = await operation(() => appService.saveReferenceGuide({ projectId, text, mode, analysisPreset: preset, inputDigest: packet.inputDigest, sourceDigest: packet.sourceDigest, revision: guideRevision }))
+            if (value) { accept(value); notice.value = '已生成合并稿，请对照后保存' }
+            return
+          }
+          fill(text); notice.value = mode === 'trial' ? '试写候选已填入，请保存试写片段后填写反馈' : '候选已填入，请核对并保存规范草稿' } },
       })
       return
     }
-    const guideRevision = state.value.guide?.revision || 0, trialRevision = storedTrial(kind)?.revision || 0
     generation = appService.startGeneration({ task: 'planning_field', intent: 'analysis', projectId,
       modelProfileId: modelId.value || props.modelSettings.routes?.planning_field,
-      referenceStyleAnalysis: true, referenceMode: mode, referenceKind: kind, referenceBrief: brief, referenceInputDigest: packet.inputDigest, referenceSourceDigest: packet.sourceDigest,
+      referenceStyleAnalysis: true, referenceAnalysisPreset: preset, referenceMode: mode, referenceKind: kind, referenceBrief: brief, referenceInputDigest: packet.inputDigest, referenceSourceDigest: packet.sourceDigest,
       planning: { targetType: 'renderer_draft', fieldKey: mode === 'trial' ? kind : 'referenceGuide', fieldLabel: mode === 'trial' ? '文风试写片段' : '参考小说文风规范', scopeType: 'project', scopeId: projectId } })
     const result = await generation.promise
     if (!valid(projectId, token)) return
     if (result.cancelled) { notice.value = '本次生成已停止'; return }
     const text = result.text?.trim()
     if (!text) throw new Error('模型没有返回内容，请切换模型后重试')
-    fill(text)
+    if (mode === 'trial' || !state.value.guide?.draft_text) fill(text)
     const value = mode === 'trial'
       ? await appService.saveReferenceTrial({ projectId, kind, brief, text, guideDigest: packet.guideDigest, sourceDigest: packet.sourceDigest, revision: trialRevision })
-      : await appService.saveReferenceGuide({ projectId, text, mode, inputDigest: packet.inputDigest, sourceDigest: packet.sourceDigest, revision: guideRevision })
+      : await appService.saveReferenceGuide({ projectId, text, mode, analysisPreset: preset, inputDigest: packet.inputDigest, sourceDigest: packet.sourceDigest, revision: guideRevision })
     if (valid(projectId, token)) {
       accept(value, { replaceGuide: mode !== 'trial', savedTrialKind: kind })
-      notice.value = mode === 'trial' ? '试写片段已保存，可以填写反馈' : mode === 'refine' ? '校准后的规范草稿已保存，核对后可确认应用' : '分析完成，规范草稿已保存。核对后可应用到本书'
+      notice.value = mode === 'trial' ? '试写片段已保存，可以填写反馈' : value.pendingMerge ? '已生成合并稿，请对照后保存' : '分析完成，规范草稿已保存。核对后可应用到本书'
     }
   } catch (e) { if (valid(projectId, token)) error.value = e.message }
   finally { if (valid(projectId, token)) { generation = null; analyzing.value = false } }
@@ -255,6 +284,11 @@ watch(() => props.project.id, () => {
   void generation?.cancel(); generation = null; state.value = null; samplePacket.value = null; pickerBookId.value = ''
   bookDrafts.value = []; trialDrafts.value = []
   importing.value = false; saving.value = false; analyzing.value = false; preference.value = ''; conflictPolicy.value = ''; notice.value = ''; error.value = ''
+  let options = {}
+  try { options = JSON.parse(localStorage.getItem('reference-import:' + props.project.id) || '{}') } catch {}
+  importMode.value = ['off', 'codex', 'app_model'].includes(options.importMode) ? options.importMode : defaultMode.value
+  analysisPreset.value = options.analysisPreset === '' ? '' : 'reference-language'
+  guideText.value = ''; guideSource.value = ''; mergeText.value = ''; modelId.value = ''
   void load()
 }, { immediate: true })
 onBeforeUnmount(() => { disposed = true; epoch++; void generation?.cancel() })

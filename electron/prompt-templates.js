@@ -124,7 +124,14 @@ export const LEGACY_PROMPT_TEMPLATE_VERSIONS = Object.freeze({
   },
 })
 
+export const REFERENCE_WRITING_PROFILE = 'reference-scene'
 export const REWRITE_PRESETS = Object.freeze([
+  {
+    id: 'reference-selection',
+    name: '按参考文风改稿',
+    shortLabel: '参考文风',
+    content: '只修订选区，保留原有事实、信息揭示顺序、人物所知、场景结果和已经写得好的句子。按本书适用的文风规范和随稿选段调整叙述距离、句子节奏与用词搭配。让每句答话接住上句的话头或言外之意，区分人物口吻。删去复述动作和对白含义的旁白。返回可原位替换的文字。',
+  },
   {
     id: 'dialogue',
     name: '对白有效化',

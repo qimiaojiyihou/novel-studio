@@ -124,7 +124,7 @@ export function createReferenceNovelRepository(db, { now = () => new Date().toIS
     const guide = db.prepare('SELECT * FROM reference_style_guides WHERE project_id=?').get(projectId) || null
     const section = guideSection(current.style || '')
     const trials = db.prepare('SELECT * FROM reference_style_trials WHERE project_id=? ORDER BY kind').all(projectId)
-    return { books: books(projectId), guide, comparisons: comparisonHistory(projectId), settings: settings(projectId), trials, guideDigest: digest(guide?.draft_text || ''), sourceDigest: sourceDigest(projectId),
+    return { books: books(projectId), guide, pendingMerge: guide?.pending_merge_json ? JSON.parse(guide.pending_merge_json) : null, comparisons: comparisonHistory(projectId), settings: settings(projectId), trials, guideDigest: digest(guide?.draft_text || ''), sourceDigest: sourceDigest(projectId),
       referenceDigest: digest([sourceDigest(projectId), guide?.draft_text || '', trials.map(trial => [trial.kind, trial.brief, trial.output_text, trial.author_feedback, trial.guide_digest, trial.source_digest])]),
       applied: Boolean(section), appliedText: section?.text || '', projectStyle: current.style || '' }
   }
@@ -199,7 +199,7 @@ export function createReferenceNovelRepository(db, { now = () => new Date().toIS
       return state(projectId)
     })
   }
-  function analysisPacket({ projectId, preference = '' }) {
+  function analysisPacket({ projectId, preference = '', analysisPreset = '' }) {
     const currentProject = project(projectId)
     const preferences = settings(projectId)
     const selected = books(projectId).filter(book => book.enabled)
@@ -224,19 +224,43 @@ export function createReferenceNovelRepository(db, { now = () => new Date().toIS
     })
     const sampledChars = sampled.reduce((total, book) => total + book.excerpts.reduce((sum, part) => sum + part.text.length, 0), 0)
     if (sampledChars > REFERENCE_SAMPLE_LIMIT) throw new Error('所选场景与抽样合计超过48000字符，请减少场景后再分析')
-    return { sourceDigest: sourceDigest(projectId), books: sampled, sampledChars,
-      instruction: referenceAnalysisInstruction(sampled, preference || preferences.preference, preferences.conflictPolicy, currentProject.genre) }
+    const instructions = []
+    if (analysisPreset === 'reference-language') {
+      const profile = db.prepare("SELECT style_json FROM style_profiles WHERE project_id=? AND scope_type='project' AND scope_id=?").get(projectId, projectId)
+      const perspective = JSON.parse(profile?.style_json || '{}').pointOfView
+      instructions.push(`【按选段提炼文风】当前作品《${clean(currentProject.title, 200)}》${perspective ? '，叙事视角为' + clean(perspective, 120) : ''}。`,
+        '先标明书名、样本位置与材料类型。连续正文可用于判断叙述节奏；零散原句只用于局部观察；读书笔记或内容概述只提示关注方向。缺少原文依据时说明缺口。',
+        '用原文证据区分普通应答与另有所求的接话，指出哪一步值得展开、哪一步可以带过。每条规则写清何时用、具体怎么写、写到哪里停。')
+    }
+    instructions.push(referenceAnalysisInstruction(sampled, preference || preferences.preference, preferences.conflictPolicy, currentProject.genre))
+    return { sourceDigest: sourceDigest(projectId), books: sampled, sampledChars, instruction: instructions.join('\n') }
   }
   function saveGuide(input) {
     return transaction(() => {
       project(input.projectId)
       const current = db.prepare('SELECT * FROM reference_style_guides WHERE project_id=?').get(input.projectId)
       if (Number(input.revision || 0) !== Number(current?.revision || 0)) throw new Error('规范草稿已更新，请刷新后重试')
+      const pending = current?.pending_merge_json ? JSON.parse(current.pending_merge_json) : null
+      if (input.mergeId || pending) {
+        if (!pending || pending.id !== input.mergeId) throw new Error('请先核对当前待确认的合并稿')
+        if (input.discardMerge) {
+          db.prepare("UPDATE reference_style_guides SET pending_merge_json='' WHERE id=?").run(current.id)
+          return state(input.projectId)
+        }
+        input = { ...input, mode: pending.mode || 'analysis', inputDigest: pending.inputDigest, sourceDigest: pending.sourceDigest, analysisPreset: pending.analysisPreset }
+      }
+      if (input.mode === 'analysis' && input.inputDigest !== taskPacket(input).inputDigest) throw new Error('参考资料或作品信息已变化，请重新分析')
       if (input.mode === 'refine' && input.inputDigest !== taskPacket({ projectId: input.projectId, mode: 'refine' }).inputDigest) throw new Error('试写或反馈已变化，请重新校准规范')
       const text = String(input.text || '').trim()
+      if ((input.mergeId || input.mode === 'analysis' || input.mode === 'refine') && !text) throw new Error('规范内容为空，请重新分析')
       if (text.length > REFERENCE_GUIDE_LIMIT) throw new Error(`规范最多${REFERENCE_GUIDE_LIMIT}字符，请精简后保存`)
+      if (['analysis', 'refine'].includes(input.mode) && current?.draft_text?.trim() && !input.mergeId) {
+        const merge = { id: randomUUID(), mode: input.mode, text, analysisPreset: input.analysisPreset || '', inputDigest: input.inputDigest, sourceDigest: input.sourceDigest }
+        db.prepare('UPDATE reference_style_guides SET pending_merge_json=? WHERE id=?').run(JSON.stringify(merge), current.id)
+        return state(input.projectId)
+      }
       const time = now()
-      if (current) db.prepare('UPDATE reference_style_guides SET draft_text=?,source_digest=?,revision=revision+1,updated_at=? WHERE id=?')
+      if (current) db.prepare("UPDATE reference_style_guides SET pending_merge_json='',draft_text=?,source_digest=?,revision=revision+1,updated_at=? WHERE id=?")
         .run(text, String(input.sourceDigest || ''), time, current.id)
       else db.prepare('INSERT INTO reference_style_guides (id,project_id,draft_text,source_digest,created_at,updated_at) VALUES (?,?,?,?,?,?)')
         .run(`reference-guide-${randomUUID()}`, input.projectId, text, String(input.sourceDigest || ''), time, time)
@@ -284,6 +308,12 @@ export function createReferenceNovelRepository(db, { now = () => new Date().toIS
       ].join('\n') }
     } else {
       packet = analysisPacket(input)
+      if (mode === 'analysis' && current.guide?.draft_text?.trim()) {
+        packet.instruction += [
+          '\n【已有文风规范草稿】', JSON.stringify(current.guide.draft_text),
+          '在这份草稿上整合本次样本。逐条核对已有判断，保留仍适用的规则、作者措辞与例外；新证据只用于补缺、去重或缩小规则的适用范围。遇到相反写法时交代各自适用的场景。维持标签结构，直接返回完整的合并稿。',
+        ].join('\n')
+      }
       if (mode === 'refine') {
         const usable = current.trials.filter(trial => trial.guide_digest === current.guideDigest && trial.source_digest === current.sourceDigest && trial.author_feedback.trim())
         reviewedComparisons = db.prepare(`SELECT task,brief,source_text,output_a,output_b,sample_trial_json,rule,model_json,verdict,guided_slot,feedback,json_extract(sample_trial_json,'$.order') AS variant_order FROM reference_comparisons
@@ -312,7 +342,7 @@ export function createReferenceNovelRepository(db, { now = () => new Date().toIS
     }
     if (packet.instruction.length > 140000) throw new Error('参考场景、规范与反馈合计过长，请减少选样或精简规范后重试')
     return { ...packet, mode, sourceDigest: current.sourceDigest, guideDigest: current.guideDigest,
-      inputDigest: digest([mode, current.referenceDigest, input.kind || '', brief, reviewedComparisons]) }
+      inputDigest: digest([mode, current.referenceDigest, input.kind || '', brief, reviewedComparisons, ...(mode === 'analysis' ? [packet.instruction] : [])]) }
   }
   function saveTrial(input) {
     return transaction(() => {

@@ -8,7 +8,7 @@ import {
   PLANNING_PROMPT_PROFILES,
   PROMPT_SNAPSHOT_SCHEMA_VERSION,
   PROTECTED_OUTPUT_CONTRACTS,
-  resolveRewritePreset,
+  REFERENCE_WRITING_PROFILE, resolveRewritePreset,
 } from './prompt-templates.js'
 import { planningPromptProfile, renderScenePlan } from './creative-quality.js'
 import { COMPACT_HANDOFF_MODE, COMPACT_HANDOFF_CONTRACT } from './chapter-handoff.js'
@@ -515,6 +515,16 @@ export function compilePrompt(input = {}) {
     addons.length ? '\n【叠加写作要求】\n' + addons.map((addon) => `- ${addon.name}：${addon.content}`).join('\n') : '',
     voiceText,
     detailDirection,
+    task === 'chapter' && input.promptProfile === REFERENCE_WRITING_PROFILE ? [
+      '【参考文风写作】',
+      `作品《${input.project?.title || '未命名'}》 · 第${input.chapter?.chapter_no || 1}章《${input.chapter?.title || '未命名'}》`,
+      input.chapter?.card?.protagonistGoal && `人物目标：${input.chapter.card.protagonistGoal}`,
+      input.chapter?.card?.resistance && `阻力：${input.chapter.card.resistance}`,
+      input.chapter?.card?.ending && `章末落点：${input.chapter.card.ending}`,
+      '按本书已有场景安排和本次要求落笔。根据时间地点、人物各自想促成的结果、掌握的物件和消息，写出他们此刻会做的动作或说的话；视角人物只能据自己所知作出判断。',
+      '沿用本书文风和本次选段体现的语气、用词与停顿。决定结果的动作与答话写足，经过和重复流程从简。按本次生成方式衔接原稿，在规定的落点收住，篇幅遵循本章目标。',
+    ].filter(Boolean).join('\n') : '',
+    task === 'rewrite' && rewritePreset?.id === 'reference-selection' ? `当前作品《${input.project?.title || '未命名'}》 · ${input.chapter?.title || '当前章节'}` : '',
     details ? '\n【当前任务细节】\n' + details : '',
     instruction ? '\n【本次补充要求】\n' + instruction : '',
     '\n【执行任务】\n' + [template.content.request, planningProfile?.request].filter(Boolean).join('\n'),

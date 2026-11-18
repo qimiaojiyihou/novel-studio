@@ -200,6 +200,7 @@ test('trial calibration pins the saved guide, requires author feedback and rejec
   assert.throws(() => r.saveGuide({ projectId: 'a', mode: 'refine', inputDigest: refinement.inputDigest, text: '旧反馈生成的新规范', sourceDigest: current.sourceDigest, revision: current.guide.revision }), /反馈已变化/)
   const latest = r.taskPacket({ projectId: 'a', mode: 'refine' })
   current = r.saveGuide({ projectId: 'a', mode: 'refine', inputDigest: latest.inputDigest, text: '保留停顿，省略重复动作。', sourceDigest: current.sourceDigest, revision: current.guide.revision })
+  current = r.saveGuide({ projectId: 'a', mergeId: current.pendingMerge.id, text: current.pendingMerge.text, revision: current.guide.revision })
   assert.notEqual(current.trials[0].guide_digest, current.guideDigest)
   assert.throws(() => r.taskPacket({ projectId: 'a', mode: 'refine' }), /当前规范/)
   assert.throws(() => r.saveTrial({ projectId: 'a', kind: 'daily', feedbackOnly: true, feedback: '旧片段反馈', revision: current.trials[0].revision }), /规范已变化/)
@@ -608,4 +609,47 @@ test('local scene, document ownership and the actual answer constrain probing in
       }
     }
   }
+})
+
+test('an imported guide merge survives reload, preserves original and applied text, and rejects stale inputs', t => {
+  const { repo } = fixture(t)
+  const r = repo(), projectId = 'a', analysisPreset = 'reference-language'
+  r.importBooks(projectId, [input('旧参考')])
+  const old = '【通用】沿用作者手调的叙述距离。'
+  let state = r.saveGuide({ projectId, text: old, sourceDigest: r.state(projectId).sourceDigest })
+  state = r.applyGuide({ projectId, revision: state.guide.revision, expectedStyle: state.projectStyle })
+  r.importBooks(projectId, [input('新参考')])
+  function stage() {
+    const packet = r.taskPacket({ projectId, analysisPreset })
+    assert.ok(packet.instruction.includes(old))
+    assert.ok(packet.instruction.includes('新参考'))
+    return r.saveGuide({ projectId, mode: 'analysis', analysisPreset, text: old + '\n【详略】换手时写清谁松的手。', inputDigest: packet.inputDigest, sourceDigest: packet.sourceDigest, revision: r.state(projectId).guide.revision })
+  }
+  state = stage()
+  assert.equal(repo().state(projectId).pendingMerge.text, state.pendingMerge.text)
+  assert.equal(state.guide.draft_text, old)
+  assert.equal(state.appliedText, old)
+  assert.equal(repo().state('b').pendingMerge, null)
+  r.importBooks(projectId, [input('另一本')])
+  const review = { projectId, revision: state.guide.revision, mergeId: state.pendingMerge.id, text: state.pendingMerge.text }
+  assert.throws(() => r.saveGuide(review), /重新分析/)
+  assert.equal(r.saveGuide({ ...review, discardMerge: true }).guide.draft_text, old)
+  state = stage()
+  state = r.saveGuide({ ...review, mergeId: state.pendingMerge.id })
+  assert.equal(state.pendingMerge, null)
+  assert.equal(state.guide.draft_text, review.text)
+  assert.equal(state.appliedText, old)
+})
+
+test('chapter and selection presets use current context without changing scene sample matching', () => {
+  const base = { project: { title: '水巷', genre: '悬疑' }, chapter: { chapter_no: 7, title: '夜渡' }, instruction: '他只想收回船票。' }
+  const normal = compilePrompt({ ...base, task: 'chapter' })
+  const chapter = compilePrompt({ ...base, task: 'chapter', promptProfile: 'reference-scene' })
+  assert.match(chapter.messages[1].content, /【参考文风写作】\n作品《水巷》 · 第7章《夜渡》/)
+  assert.ok(!normal.messages[1].content.includes('【参考文风写作】'))
+  assert.deepEqual(chapter.snapshot.voiceSamples, normal.snapshot.voiceSamples)
+  const rewrite = compilePrompt({ ...base, task: 'rewrite', rewriteMode: 'reference-selection', selectedText: '船家把票递回来。' })
+  assert.match(rewrite.messages[1].content, /待处理文字：船家把票递回来。/)
+  assert.match(rewrite.messages[1].content, /保留原有事实、信息揭示顺序/)
+  assert.match(rewrite.messages[1].content, /当前作品《水巷》 · 夜渡/)
 })

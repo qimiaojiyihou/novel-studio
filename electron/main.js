@@ -31,7 +31,7 @@ import { AgentEventBuffer } from './agent-event-buffer.js'
 import { createAuthoringRepository } from './authoring-repository.js'
 import { sentReferenceRules } from './reference-rules.js'
 import { generateComparison, generateComparisonCodex } from './reference-comparison.js'
-import { createReferenceNovelRepository } from './reference-novels.js'
+import { createReferenceNovelRepository, REFERENCE_GUIDE_LIMIT } from './reference-novels.js'
 import { readReferenceNovel, browseReferenceNovel } from './reference-import.js'
 import { TEXT_PATCH_SCHEMA, assertProtectedText, inlineRevisionMessages } from './manuscript-patches.js'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -699,6 +699,7 @@ async function prepareCodexPrompt({ run, step, extra = {} }) {
       revision: inlineRevision || undefined,
     } : undefined,
     promptProfile: target?.promptProfile || '',
+    rewriteMode: target?.kind === 'manuscript_selection' ? target.promptProfile : '',
     selectedText: target?.kind === 'manuscript_selection' ? manuscript.slice(selectionFrom, selectionTo) : '',
     manuscriptPrefix: intent === 'continue' ? manuscript.slice(0, cursorOffset) : '',
     manuscriptSuffix: intent === 'continue' ? manuscript.slice(cursorOffset) : '',
@@ -1525,6 +1526,7 @@ function generationRequestSnapshot(payload = {}) {
     referenceKind: payload.referenceStyleAnalysis ? payload.referenceKind : undefined,
     referenceBrief: payload.referenceStyleAnalysis ? payload.referenceBrief : undefined,
     referenceInputDigest: payload.referenceStyleAnalysis ? payload.referenceInputDigest : undefined,
+    referenceAnalysisPreset: payload.referenceStyleAnalysis ? payload.referenceAnalysisPreset : undefined,
     referencePreference: payload.referenceStyleAnalysis ? String(payload.referencePreference || '') : undefined,
     referenceSourceDigest: payload.referenceStyleAnalysis ? String(payload.referenceSourceDigest || '') : undefined,
     creativeExecution: isReferenceDraftTarget(payload.creativeExecution?.target) ? { target: { kind: payload.creativeExecution.target.kind } } : undefined,
@@ -1565,7 +1567,7 @@ function compactGenerationEvent(event = {}) {
 async function runGenerationTask(event, payload = {}, { retryOfId = '' } = {}) {
   if (payload.referenceStyleAnalysis) {
     if (payload.task !== 'planning_field') throw new Error('参考小说分析任务类型不匹配')
-    const packet = createReferenceNovelRepository(openDatabase()).taskPacket({ projectId: payload.projectId, preference: payload.referencePreference, mode: payload.referenceMode, kind: payload.referenceKind, brief: payload.referenceBrief })
+    const packet = createReferenceNovelRepository(openDatabase()).taskPacket({ projectId: payload.projectId, preference: payload.referencePreference, analysisPreset: payload.referenceAnalysisPreset, mode: payload.referenceMode, kind: payload.referenceKind, brief: payload.referenceBrief })
     if (packet.sourceDigest !== payload.referenceSourceDigest) throw new Error('参考书资料已变化，请重新开始分析')
     if (payload.referenceInputDigest && packet.inputDigest !== payload.referenceInputDigest) throw new Error('参考资料、规范或反馈已变化，请重新开始')
     payload = { ...payload, instruction: packet.instruction }
@@ -2458,7 +2460,7 @@ function registerIpc() {
   })
   ipcMain.handle('authoring:samples', (_event, payload) => createAuthoringRepository(openDatabase()).listSamples(payload))
   ipcMain.handle('references:load', (_event, payload) => createReferenceNovelRepository(openDatabase()).state(payload.projectId))
-  ipcMain.handle('references:import', async (_event, payload) => {
+  ipcMain.handle('references:import', async (event, payload) => {
     createReferenceNovelRepository(openDatabase()).state(payload.projectId)
     const selected = await dialogOptions('showOpenDialog', {
       title: '导入参考小说', properties: ['openFile', 'multiSelections'],
@@ -2468,7 +2470,37 @@ function registerIpc() {
     if (selected.filePaths.length > 12) throw new Error('每次最多导入12本参考小说')
     const imported = []
     for (const filePath of selected.filePaths) imported.push(await readReferenceNovel(filePath))
-    return creativeMutationQueue.run(payload.projectId, () => createReferenceNovelRepository(openDatabase()).importBooks(payload.projectId, imported))
+    const projectId = payload.projectId
+    const repo = createReferenceNovelRepository(openDatabase())
+    const result = await creativeMutationQueue.run(projectId, () => repo.importBooks(projectId, imported))
+    if (!result.added || !['app_model', 'codex'].includes(payload.analyzeWith)) return result
+    try {
+      const analysisPreset = payload.analysisPreset
+      const revision = result.guide?.revision || 0
+      const packet = repo.taskPacket({ projectId, analysisPreset })
+      let text
+      if (payload.analyzeWith === 'codex') {
+        const defaults = loadCodexSettings()
+        const { messages } = compilePrompt({ task: 'planning_field', referenceStyleAnalysis: true, instruction: packet.instruction })
+        text = await generateComparisonCodex(codexGateway, {
+          model: agentProviderModel(defaults, 'codex'), reasoningEffort: agentProviderReasoningEffort(defaults, 'codex'), fastMode: Boolean(defaults.fastMode),
+        }, messages, AbortSignal.timeout(5 * 60 * 1000))
+      } else {
+        const generated = await runGenerationTask(event, {
+          taskId: 'reference-import-' + randomBytes(16).toString('hex'), task: 'planning_field', intent: 'analysis',
+          projectId, modelProfileId: payload.modelProfileId, referenceStyleAnalysis: true, referenceAnalysisPreset: analysisPreset,
+          referenceMode: 'analysis', referenceInputDigest: packet.inputDigest, referenceSourceDigest: packet.sourceDigest,
+        })
+        if (generated.execution === 'mock') throw new Error('请配置分析模型或选择 Codex 后再分析')
+        text = generated.text
+      }
+      text = String(text || '').trim()
+      if (!text || text.length > REFERENCE_GUIDE_LIMIT) throw new Error('模型返回内容为空或超过规范字数限制，请重新分析')
+      const draft = { projectId, mode: 'analysis', analysisPreset, inputDigest: packet.inputDigest, sourceDigest: packet.sourceDigest, revision, text }
+      return { ...result, ...repo.saveGuide(draft), generatedDraft: true }
+    } catch (error) {
+      return { ...result, analysisError: error.message }
+    }
   })
   ipcMain.handle('references:book-update', (_event, payload) => createReferenceNovelRepository(openDatabase()).updateBook(payload))
   ipcMain.handle('references:book-delete', (_event, payload) => createReferenceNovelRepository(openDatabase()).removeBook(payload))

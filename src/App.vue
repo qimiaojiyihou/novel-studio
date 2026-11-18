@@ -197,6 +197,9 @@
               </button>
             </div>
             <div class="editor-generation-actions" aria-label="正文生成">
+              <select v-model="chapterPromptProfile" class="generation-intent" aria-label="章节写作提示词" :disabled="taskIsRunning()">
+                <option value="">常规写作</option><option :value="REFERENCE_WRITING_PROFILE">参考文风写作</option>
+              </select>
               <select v-model="generationIntent" class="generation-intent" aria-label="正文生成方式" :disabled="taskIsRunning()">
                 <option v-if="!editorText.trim()" value="draft">生成首稿</option>
                 <option v-if="editorText.trim()" value="continue">从光标续写</option>
@@ -628,7 +631,7 @@ import ProjectTransfer from './components/ProjectTransfer.vue'
 import ChatGPTWorkSync from './components/ChatGPTWorkSync.vue'
 import PromptCenter from './components/PromptCenter.vue'
 import VersionHistory from './components/VersionHistory.vue'
-import { REWRITE_PRESETS } from '../electron/prompt-templates.js'
+import { REFERENCE_WRITING_PROFILE, REWRITE_PRESETS } from '../electron/prompt-templates.js'
 import { appService } from './services/app-service.js'
 import { countChinese, formatRelativeTime } from './services/format.js'
 import { chapterPageIndexFor, chapterPages } from './utils/chapter-navigation.js'
@@ -700,6 +703,7 @@ const planningCenterRef = ref(null)
 const knowledgeCenterRef = ref(null)
 const novelEditorRef = ref(null)
 const instruction = ref('')
+const chapterPromptProfile = ref('')
 const runningTask = ref('')
 const generationCancelPending = ref(false)
 const generationIntent = ref('draft')
@@ -838,6 +842,7 @@ const runtime = reactive({ goServiceStatus: 'embedded-fallback', mode: 'embedded
 provide('creative-agent-provider', computed(() => runtime.agentProvider || 'codex'))
 const agentLabel = computed(() => creativeAgentLabel(runtime.agentProvider))
 const project = reactive({ title: '', genre: '', idea: '', style: '', work_format: 'novel', target_word_count: 8000, default_execution_mode: 'app_model' })
+watch(() => project.id, () => { chapterPromptProfile.value = '' })
 const isShortStory = computed(() => projectIsShortStory(project))
 const cardLabel = computed(() => isShortStory.value ? '故事卡' : '章节卡')
 const modelSettings = reactive({ profiles: [], routes: {} })
@@ -1807,7 +1812,7 @@ async function runCreativeTask(task, mode = defaultExecutionMode.value) {
     }
     const intent = task === 'chapter' ? generationIntent.value : task === 'quality_review' ? 'analysis' : 'draft'
     const target = task === 'chapter'
-      ? { kind: 'manuscript', targetId: activeChapter.value.id, cursorOffset: cursorOffset.value, fieldLabel: generationIntentLabel.value }
+      ? { kind: 'manuscript', targetId: activeChapter.value.id, cursorOffset: cursorOffset.value, fieldLabel: generationIntentLabel.value, promptProfile: chapterPromptProfile.value }
       : task === 'chapter_card'
         ? { kind: 'chapter_card', targetId: activeChapter.value.id, fieldLabel: '章节卡' }
         : task === 'scene_plan'
@@ -1999,6 +2004,7 @@ async function runGeneration(task) {
       task,
       intent,
       cursorOffset: insertionOffset,
+      promptProfile: task === 'chapter' ? chapterPromptProfile.value : '',
       projectId: project.id,
       chapterId: activeChapter.value.id,
       instruction: instruction.value,
