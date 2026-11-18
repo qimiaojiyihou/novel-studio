@@ -29,14 +29,16 @@ const server = createServer(async (request, response) => {
     response.end(JSON.stringify({ error: { message: 'fixture interruption' } }))
     return
   }
-  const content = JSON.stringify(input.messages).includes('本次场景类型') ? (JSON.stringify(input.messages).includes('日常互动') ? dailyText : conflictText) : JSON.stringify(input.messages).includes('根据作者对试写的具体反馈') ? refinedGuide : guide
+  const content = JSON.stringify(input.messages).includes('fixture-pending-manuscript')
+    ? JSON.stringify({ manuscript: '他捡起地上的书。' })
+    : JSON.stringify(input.messages).includes('本次场景类型') ? (JSON.stringify(input.messages).includes('日常互动') ? dailyText : conflictText) : JSON.stringify(input.messages).includes('根据作者对试写的具体反馈') ? refinedGuide : guide
   response.writeHead(200, { 'content-type': 'application/json' })
   response.end(JSON.stringify({ choices: [{ message: { content }, finish_reason: 'stop' }] }))
 })
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
 let app
 try {
-  app = await _electron.launch({ executablePath: require('electron'), args: ['.'], cwd: root, env, timeout: 60000 })
+  app = await _electron.launch({ executablePath: process.env.NOVEL_STUDIO_TEST_APP || require('electron'), args: process.env.NOVEL_STUDIO_TEST_APP ? [] : ['.'], cwd: root, env, timeout: 60000 })
   app.process().stderr.on('data', data => { if (/Error|Unhandled|constraint/i.test(String(data))) process.stderr.write(data) })
   const page = await app.firstWindow()
   page.on('pageerror', e => errors.push(e.message))
@@ -170,8 +172,26 @@ try {
   await panel.getByText('规范已应用，后续写作会使用本书文风', { exact: true }).waitFor()
   const preview = await page.evaluate(({ projectId, chapterId }) => window.novelStudio.previewPrompt({ projectId, chapterId, task: 'chapter' }), { projectId: a.project.id, chapterId: a.chapters[0].id })
   assert.ok(JSON.stringify(preview.messages).includes('检查词语搭配'))
-  assert.ok(preview.messages.some(message => message.content.includes(base)))
+  assert.ok(!preview.messages.some(message => message.content.includes(base)))
   assert.ok(!JSON.stringify(preview.messages).includes('“还去吗？”'))
+  const writingTarget = { projectId: a.project.id, chapterId: a.chapters[0].id }
+  await page.evaluate(({ chapterId }) => window.novelStudio.updateChapter({
+    id: chapterId, scenePlan: { scenes: [
+      { title: '交账', goal: '学徒替师父解围。' },
+      { title: '关门', goal: '把钥匙挂上墙。' },
+    ] }, manuscript: '学徒替师父解围。\n\n他把钥匙挂上墙。',
+  }), writingTarget)
+  for (const intent of ['draft', 'continue']) {
+    await page.evaluate(payload => window.novelStudio.startGeneration(payload), {
+      ...writingTarget, taskId: 'scene-reference-' + intent, task: 'chapter', intent,
+      modelProfileId: 'reference-fixture', instruction: 'fixture-pending-manuscript',
+    })
+    const messages = calls.at(-1).messages.map(message => message.content).join('\n')
+    assert.ok(messages.includes('检查词语搭配'))
+    assert.ok(!messages.includes(base))
+    assert.equal(messages.includes(spare), intent === 'draft')
+    assert.equal(messages.includes('第1场 · 交账'), intent === 'draft')
+  }
   for (const width of [1440, 1080]) {
     await page.setViewportSize({ width, height: 960 })
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `No document overflow at ${width}`)
@@ -235,6 +255,16 @@ try {
   assert.equal(await calibration.getByText('这段试写使用的规范或参考资料已变化，请重新试写后再参与校准。', { exact: true }).count(), 2)
   await calibration.scrollIntoViewIfNeeded()
   await page.screenshot({ path: path.join(directory, 'reference-calibration.png'), fullPage: true })
+  const externalManuscript = await page.evaluate(({ projectId, chapterId }) => window.novelStudio.startInlineAgent({
+    projectId, chapterId, task: 'chapter', intent: 'draft', executionMode: 'app_model', modelProfileId: 'reference-fixture',
+    _creativeRequestId: 'fixture-external-chapter', instruction: 'fixture-pending-manuscript',
+    target: { kind: 'manuscript', targetId: chapterId },
+  }), { projectId: a.project.id, chapterId: a.chapters[0].id })
+  await page.waitForFunction(async id => {
+    const run = await window.novelStudio.getAgentRun(id)
+    if (run.status === 'failed') throw new Error(run.error)
+    return run.status === 'waiting_confirmation'
+  }, externalManuscript.id)
   const agentRun = await page.evaluate(async ({ projectId, chapterId }) => {
     const packet = await window.novelStudio.referenceAnalysisPacket({ projectId })
     return window.novelStudio.startInlineAgent({ projectId, chapterId, task: 'planning_field', intent: 'analysis', executionMode: 'app_model', modelProfileId: 'reference-fixture', instruction: packet.instruction,
@@ -245,6 +275,14 @@ try {
     if (run.status === 'failed') throw new Error(run.error)
     return run.status === 'waiting_confirmation'
   }, agentRun.id)
+  assert.equal(agentRun.chapterId, '')
+  const reopened = await page.evaluate(({ projectId, chapterId }) => window.novelStudio.startInlineAgent({
+    projectId, chapterId, task: 'planning_field', executionMode: 'app_model', modelProfileId: 'reference-fixture',
+    target: { kind: 'reference_style_draft', targetId: projectId, fieldKey: 'referenceGuide', draftDigest: 'fixture-draft' },
+  }), { projectId: a.project.id, chapterId: a.chapters[0].id })
+  assert.equal(reopened.focusedExisting, true)
+  assert.equal(reopened.id, agentRun.id)
+  assert.equal((await page.evaluate(id => window.novelStudio.getAgentRun(id), externalManuscript.id)).candidates[0].status, 'pending')
   const candidateRun = await page.evaluate(id => window.novelStudio.getAgentRun(id), agentRun.id)
   assert.equal(candidateRun.candidates[0].artifactType, 'renderer_draft')
   assert.equal(candidateRun.candidates[0].payload.text, guide)

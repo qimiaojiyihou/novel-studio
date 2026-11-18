@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
+import { isReferenceDraftTarget } from './inline-creative.js'
 import { createCodexRepository } from './codex-repository.js'
 import { createFinalizationRepository } from './chapter-finalization.js'
 import { createZhuqueDetectionService } from './zhuque-detection.js'
@@ -262,6 +263,8 @@ export class CreativeInterface {
   }
 
   targetKey(input) {
+    // Older desktop runs stored the open chapter alongside a book's reference draft.
+    if (isReferenceDraftTarget(input.target)) return JSON.stringify(['reference', input.target.kind, input.target.targetId, input.target.fieldKey || ''])
     if (input.chapterId) return `chapter:${input.chapterId}`
     if (chapterKinds.has(input.target?.kind)) return `chapter:${input.target.targetId}`
     if (input.target) return `${input.target.kind.startsWith('planning_entity') ? 'entity' : 'document'}:${input.target.targetId}`
@@ -285,7 +288,7 @@ export class CreativeInterface {
     }
   }
 
-  assertTargetAvailable(projectId, input, exceptRunId = '', skipFinalization = false) {
+  assertTargetAvailable(projectId, input, { exceptRunId = '', skipFinalization = false, focusReference = false } = {}) {
     const key = this.targetKey(input)
     const rows = this.db.prepare(`SELECT r.*, s.input_json FROM agent_runs r
       LEFT JOIN agent_steps s ON s.run_id=r.id AND s.position=1 WHERE r.project_id=?`).all(projectId)
@@ -294,10 +297,12 @@ export class CreativeInterface {
       const pending = this.db.prepare("SELECT 1 FROM agent_candidates WHERE run_id=? AND status='pending' LIMIT 1").get(row.id)
       if (row.status === 'waiting_confirmation' && row.workflow_id === 'inline-action' && !pending) continue
       const other = this.targetKey({ chapterId: row.chapter_id, target: parse(row.input_json).target })
+      // The desktop repository focuses an existing inline run for the same draft.
+      if (focusReference && other === key && isReferenceDraftTarget(input.target) && row.workflow_id === 'inline-action') continue
       if (other === key || other === 'project' || key === 'project') fail('TARGET_BUSY', '该创作目标已有运行，请读取并继续已有任务', { runId: row.id, status: row.status })
     }
     const finalization = input.chapterId || (chapterKinds.has(input.target?.kind) && input.target.targetId)
-    if (finalization && !skipFinalization) {
+    if (finalization && !isReferenceDraftTarget(input.target) && !skipFinalization) {
       const row = this.db.prepare("SELECT id,status FROM chapter_finalizations WHERE project_id=? AND chapter_id=? AND status NOT IN ('completed','cancelled','stale','blocked') ORDER BY rowid DESC LIMIT 1").get(projectId, finalization)
       if (row) fail('TARGET_BUSY', '该章节有未结束的定稿，请先完成或取消定稿', { finalizationId: row.id, status: row.status })
     }
@@ -387,7 +392,7 @@ export class CreativeInterface {
     if (['run.continue','run.resume','run.retry'].includes(operation)) {
       const run=this.owned('agent_runs',input.runId,projectId)
       const step=this.db.prepare('SELECT input_json FROM agent_steps WHERE run_id=? ORDER BY position LIMIT 1').get(run.id)
-      this.assertTargetAvailable(projectId,{chapterId:run.chapter_id,target:parse(step?.input_json).target},run.id,Boolean(parse(run.model_routes_json).finalizationId))
+      this.assertTargetAvailable(projectId,{chapterId:run.chapter_id,target:parse(step?.input_json).target}, { exceptRunId: run.id, skipFinalization: Boolean(parse(run.model_routes_json).finalizationId) })
     }
     const call = (channel, value) => this.invoke(channel, value)
     if (directContentOperations.has(operation)) {
@@ -465,7 +470,7 @@ export class CreativeInterface {
       this.owned('chapters', input.chapterId, projectId)
       const existing=this.db.prepare("SELECT id FROM chapter_finalizations WHERE project_id=? AND chapter_id=? AND status NOT IN ('completed','cancelled','stale','blocked') ORDER BY rowid DESC LIMIT 1").get(projectId,input.chapterId)
       if (existing) return call('chapter:finalize-get',{id:existing.id})
-      this.assertTargetAvailable(projectId,input,'',true)
+      this.assertTargetAvailable(projectId,input,{ skipFinalization: true })
       return call('chapter:finalize-start', { ...pick(input, ['projectId','chapterId','targetLength','reviewer']), _creativeRequestId:journalId, deferReview: true })
     }
     if (operation === 'finalization.act') {

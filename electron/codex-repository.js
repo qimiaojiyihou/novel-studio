@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { INLINE_CONVERSATION_STEP_LIMIT, inlineTargetKey, normalizeInlineCreativeAction } from './inline-creative.js'
+import { INLINE_CONVERSATION_STEP_LIMIT, inlineTargetKey, isReferenceDraftTarget, normalizeInlineCreativeAction } from './inline-creative.js'
 import { cleanPlanningFieldText } from './generated-text.js'
 import { createPromptRepository } from './prompt-repository.js'
 import { contentDigest } from './chapter-finalization.js'
@@ -411,7 +411,7 @@ export function createCodexRepository(database, {
     const stepId = createId('agent-step')
     const createdAt = now()
     const chapterTargetKinds = new Set(['chapter_field', 'planning_chapter_bundle', 'chapter_card', 'scene_plan', 'manuscript', 'manuscript_selection', 'chapter_state', 'continuity_audit', 'quality_review'])
-    const chapterId = input.chapterId || (chapterTargetKinds.has(action.target.kind) ? action.target.targetId : '')
+    const chapterId = isReferenceDraftTarget(action.target) ? '' : input.chapterId || (chapterTargetKinds.has(action.target.kind) ? action.target.targetId : '')
     database.exec('BEGIN IMMEDIATE')
     try {
       database.prepare(`

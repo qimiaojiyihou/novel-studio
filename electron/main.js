@@ -676,6 +676,7 @@ async function prepareCodexPrompt({ run, step, extra = {} }) {
   qualityRepairInstruction, zhuqueRepair?.instruction, lengthInstruction, repairInstruction].filter(Boolean)
   const promptInput = {
     task: step.task,
+    localRevision,
     sceneInstruction: inlineRevision?.instruction || inlineAction?.instruction || step.input?.instruction || '',
     intent,
     project: promptProject,
@@ -2327,7 +2328,7 @@ function registerAppHandler(channel, handler) {
       // external run should be continued rather than duplicated from the UI.
       if (['agent:start','agent:start-inline'].includes(channel) && creativeInterface
         && openDatabase().prepare("SELECT 1 FROM agent_runs WHERE project_id=? AND json_extract(model_routes_json,'$.creativeRequestId') IS NOT NULL AND status NOT IN ('completed','cancelled','failed','stale')").get(projectId)) {
-        creativeInterface.assertTargetAvailable(projectId, value)
+        creativeInterface.assertTargetAvailable(projectId, value, { focusReference: channel === 'agent:start-inline' && !value.freshStart })
       }
       return handler(event, payload)
     })

@@ -12,7 +12,7 @@
       <button type="button" :disabled="busy || booksDirty || dirty" @click="runImportAnalysis(true)">{{ resuming ? '正在分析…' : '继续分析已导入资料' }}</button>
     </div>
     <p v-if="notice" class="reference-notice" role="status">{{ notice }}</p>
-    <p class="reference-hint">支持 TXT、Markdown、Word DOCX，可多选，每本最大 10 MB。导入时在本机自动选取写作样本。首次设置的底色和匹配本场用途的选段，会随正文写作和改稿发送给所选模型。</p>
+    <p class="reference-hint">支持 TXT、Markdown、Word DOCX，可多选，每本最大 10 MB。导入时在本机自动选取写作样本。自动匹配时，只发送适合当前场景的原文选段。</p>
     <div v-if="!state" class="reference-empty">正在读取参考资料…</div>
     <template v-else>
       <div v-if="!state.books.length" class="reference-empty"><strong>从你喜欢的写法开始</strong><p>导入完整小说或精选片段，再为每本书注明想参考的部分，例如日常对白、动作描写、轻松语气。</p></div>
@@ -33,7 +33,7 @@
         <label><span class="reference-label">偏好与需要改善的用词</span><textarea v-model="preference" :disabled="busy" rows="3" maxlength="1200" placeholder="例如：用词别扭、对白太像书面语，希望接近热门小说那种顺畅、自然的表达。也可以粘贴你觉得生硬的一两句。" /></label>
         <label><span class="reference-label">参考冲突时如何取舍</span><textarea v-model="conflictPolicy" :disabled="busy" rows="2" maxlength="1200" placeholder="例如：以甲书的对白和情绪为主，乙书补充环境描写；冲突场景加快，日常场景保留趣味。" /></label>
         <label><span class="reference-label">贴近参考文风 · 底色来源</span><select v-model="voiceBook" :disabled="busy"><option value="">关闭选段随稿发送</option><option v-for="book in voiceBooks" :key="book.id" :value="book.content_digest">{{ book.title }}</option></select></label>
-        <label><span class="reference-label">补充选段用途</span><select v-model="voicePurpose" :disabled="busy"><option value="auto">按本场叙述功能匹配</option><option value="base">只用底色</option><option v-for="purpose in purposes" :key="purpose">{{ purpose }}</option></select></label><p class="reference-hint">首次导入时，第一本选出底色的参考小说会成为底色来源。正文写作和改稿使用一段底色，按本次要求、选区和章节安排最多再选一段。用途不明确时只用底色。可在上方更换来源或关闭随稿发送。已有参考书可点「按用途自动补选」，再保存参考重点。</p>
+        <label><span class="reference-label">补充选段用途</span><select v-model="voicePurpose" :disabled="busy"><option value="auto">按本场叙述功能匹配</option><option value="base">只用底色</option><option v-for="purpose in purposes" :key="purpose">{{ purpose }}</option></select></label><p class="reference-hint">首次导入时，第一本选出底色的参考小说会成为底色来源。自动匹配时，整章按场景计划选段，续写看光标附近，改稿看选区。没有合适的选段时，沿用本书文风和前文。若每次都要带固定片段，可选「只用底色」。可在上方更换来源或关闭随稿发送。已有参考书可点「按用途自动补选」，再保存参考重点。</p>
         <div><button type="button" :disabled="busy || !settingsDirty || booksDirty" @click="saveSettings">保存分析偏好</button><small v-if="settingsDirty" class="reference-hint"> 分析时会自动保存本次偏好。</small></div>
         <div class="reference-analyze-actions">
           <label v-if="showModelOverrides" class="reference-model"><span class="reference-label">分析模型</span><select v-model="modelId" :disabled="busy"><option value="">跟随规划模型</option><option v-for="profile in profiles" :key="profile.id" :value="profile.id">{{ profile.name }} · {{ profile.model }}</option></select></label>

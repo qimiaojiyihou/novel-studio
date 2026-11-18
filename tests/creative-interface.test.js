@@ -257,6 +257,36 @@ test('direct content writes require confirmation and a fresh project snapshot; q
   assert.notEqual(f.workspace.loadWorkspaceSnapshot(f.a.project.id).project.style,'第二个外接任务的过期写入')
 })
 
+test('a pending manuscript and a book reference draft can coexist and the desktop can reopen the draft', async t => {
+  const f = setup(t)
+  const projectId = f.a.project.id, chapterId = f.a.chapters[0].id
+  const manuscript = await f.start(0)
+  await waitFor(() => f.gates.has(manuscript.id))
+  f.gates.get(manuscript.id)()
+  await Promise.all([...f.runtime.active.values()])
+  const pending = f.repository.getRun(manuscript.id).candidates[0]
+  assert.equal(pending.status, 'pending')
+
+  const reference = { projectId, chapterId, task: 'planning_field', target: {
+    kind: 'reference_style_draft', targetId: projectId, fieldKey: 'referenceGuide', draftDigest: 'test-draft',
+  } }
+  const focus = { focusReference: true }
+  f.api.assertTargetAvailable(projectId, reference, focus)
+  const draft = f.repository.createInlineRun(reference)
+  assert.equal(draft.chapterId, '')
+  // The previous desktop version persisted the open chapter on reference runs.
+  f.db.prepare('UPDATE agent_runs SET chapter_id=? WHERE id=?').run(chapterId, draft.id)
+  f.api.assertTargetAvailable(projectId, reference, focus)
+  const reopened = f.repository.createInlineRun(reference)
+  assert.equal(reopened.focusedExisting, true)
+  assert.equal(reopened.id, draft.id)
+  assert.throws(() => f.api.assertTargetAvailable(projectId, reference), { code: 'TARGET_BUSY' })
+  const trial = { ...reference, target: { ...reference.target, kind: 'reference_trial_draft', fieldKey: 'daily' } }
+  f.api.assertTargetAvailable(projectId, trial, focus)
+  assert.throws(() => f.api.assertTargetAvailable(projectId, { chapterId }, focus), { code: 'TARGET_BUSY' })
+  assert.equal(f.repository.getRun(manuscript.id).candidates[0].status, 'pending')
+})
+
 test('same-target competition is rejected; concurrent duplicates and lost responses reuse one run and one formal write',async t=>{
   const f=setup(t)
   const [first,duplicate]=await Promise.all([f.start(0),f.start(0)])

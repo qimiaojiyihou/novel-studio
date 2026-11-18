@@ -621,6 +621,7 @@ import ManuscriptFormatMenu from './components/ManuscriptFormatMenu.vue'
 import ProjectBriefFields from './components/ProjectBriefFields.vue'
 import QualityCenter from './components/QualityCenter.vue'
 import { composeGenerationCandidate } from './utils/generation-intents.js'
+import { isReferenceDraftTarget } from '../electron/inline-creative.js'
 import { creativeRoutePresentation, draftDigest, projectExecutionMode } from './utils/inline-creative.js'
 import { creativeAgentLabel } from './utils/agent-provider.js'
 import { formatManuscript, MANUSCRIPT_FORMAT_OPTIONS } from './utils/manuscript-formatting.js'
@@ -1850,7 +1851,7 @@ async function startInlineCodex(action = {}) {
     run = await appService.startInlineAgent({
       ...request,
       projectId: project.id,
-      chapterId: request.chapterId || activeChapter.value?.id || '',
+      chapterId: isReferenceDraftTarget(request.target) ? '' : request.chapterId || activeChapter.value?.id || '',
     })
   } catch (error) {
     showToast(`AI 任务启动失败：${error.message}`)

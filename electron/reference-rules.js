@@ -1,3 +1,5 @@
+import { localVoiceFocus } from './reference-voice.js'
+
 export const GUIDE_START = '【参考小说文风规范】'
 export const GUIDE_END = '【参考小说文风规范结束】'
 const cues = {
@@ -33,9 +35,11 @@ export function selectReferenceStyle(style, input) {
   const rules = referenceRules(section.text)
   if (!rules.length) return style
   const chapter = input.chapter || {}
-  const scene = [input.sceneInstruction ?? input.instruction, chapter.title, JSON.stringify(chapter.card ?? chapter.card_json ?? ''),
+  const local = localVoiceFocus(input)
+  const scene = [input.sceneInstruction ?? input.instruction, ...(local === null ? [
+    chapter.title, JSON.stringify(chapter.card ?? chapter.card_json ?? ''),
     JSON.stringify(chapter.scenePlan ?? chapter.scene_plan ?? ''), input.sourceText?.slice(0, 1500),
-    ['rewrite','repair'].includes(input.intent) || ['rewrite','quality_review'].includes(input.task) ? '改稿' : ''].filter(Boolean).join('\n')
+  ] : [local]), ['rewrite','repair'].includes(input.intent) || ['rewrite','quality_review'].includes(input.task) ? '改稿' : ''].filter(Boolean).join('\n')
   const matches = rules.filter(rule => rule.tag !== '通用' && cues[rule.tag].test(scene))
   const common = rules.filter(rule => rule.tag === '通用')
   const selected = [...common.slice(0, 2), ...matches, ...common.slice(2)].slice(0, 4)

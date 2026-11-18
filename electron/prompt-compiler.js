@@ -506,7 +506,8 @@ export function compilePrompt(input = {}) {
   const rewritePreset = task === 'rewrite' ? resolveRewritePreset(input.rewriteMode) : null
   const voiceSamples = selectVoiceSamples(input.promptContext?.voiceLibrary, { ...input, task })
   const detailDirection = hasReferenceStyle || voiceSamples.length ? sceneDetailDirection({ ...input, task }, voiceSamples) : ''
-  const voiceText = voicePassage(voiceSamples, input.promptContext?.voiceLibrary?.previousEnding)
+  const writing = ['chapter', 'rewrite'].includes(task) && (input.intent || input.creativeExecution?.intent) !== 'analysis'
+  const voiceText = writing ? voicePassage(voiceSamples, input.promptContext?.voiceLibrary?.previousEnding) : ''
   const instruction = String(input.instruction || '').trim()
   const userContent = [
     '【已确认参考上下文】',
@@ -522,7 +523,7 @@ export function compilePrompt(input = {}) {
       input.chapter?.card?.resistance && `阻力：${input.chapter.card.resistance}`,
       input.chapter?.card?.ending && `章末落点：${input.chapter.card.ending}`,
       '按本书已有场景安排和本次要求落笔。根据时间地点、人物各自想促成的结果、掌握的物件和消息，写出他们此刻会做的动作或说的话；视角人物只能据自己所知作出判断。',
-      '沿用本书文风和本次选段体现的语气、用词与停顿。决定结果的动作与答话写足，经过和重复流程从简。按本次生成方式衔接原稿，在规定的落点收住，篇幅遵循本章目标。',
+      '沿用本书文风和前文的语气、用词与停顿。决定结果的动作与答话写足，经过和重复流程从简。按本次生成方式衔接原稿，在规定的落点收住，篇幅遵循本章目标。',
     ].filter(Boolean).join('\n') : '',
     task === 'rewrite' && rewritePreset?.id === 'reference-selection' ? `当前作品《${input.project?.title || '未命名'}》 · ${input.chapter?.title || '当前章节'}` : '',
     details ? '\n【当前任务细节】\n' + details : '',
@@ -548,7 +549,7 @@ export function compilePrompt(input = {}) {
       template: { id: template.id, name: template.name, task, version: template.version },
       styles,
       detailDirection,
-      voiceSamples: voiceSamples.map(({ title, label, use }) => ({ title, label, use })),
+      voiceSamples: voiceSamples.map(({ title, label, use, scenes }) => ({ title, label, use, ...(scenes && { scenes }) })),
       referenceRules: sentReferenceRules(messages),
       addons: addons.map((addon) => ({
         id: addon.id,

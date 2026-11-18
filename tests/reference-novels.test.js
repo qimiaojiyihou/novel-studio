@@ -326,23 +326,24 @@ test('reference voice crosses settings, stays scoped to writing, and clears when
   db.prepare("UPDATE chapters SET manuscript=? WHERE id='chapter-a'").run('前'.repeat(350) + '自己的尾句')
   db.prepare("INSERT INTO chapters(id,project_id,chapter_no,title,status,card_json,scene_plan,manuscript,updated_at) VALUES('next','a',2,'航天站','draft','{}','','','now')").run()
   for (const [task, instruction, expected] of [
-    ['chapter','航天站更换氧气泵。',['底色']],
-    ['chapter','他在直播中替前一位报时员解围。',['底色','留有余地']],
-    ['rewrite','交接遗物，不要开玩笑。',['底色']],
-    ['rewrite','师姐妹碰面打趣。',['底色','轻松打趣']],
+    ['chapter','航天站更换氧气泵。',[]],
+    ['chapter','他在直播中替前一位报时员解围。',['留有余地']],
+    ['rewrite','交接遗物，不要开玩笑。',[]],
+    ['rewrite','师姐妹碰面打趣。',['轻松打趣']],
   ]) {
     const promptContext = resolve(task, 'a', 'next')
     assert.equal(promptContext.voiceLibrary.previousEnding.length, 320)
     const output = compilePrompt({ task, chapter: { chapter_no: 2 }, instruction, promptContext })
     assert.deepEqual(output.snapshot.voiceSamples.map(s => s.use), expected)
     const sent = output.messages[1].content
-    assert.ok(sent.includes('自己的尾句') && sent.includes(parts[0]))
+    assert.ok(sent.includes('自己的尾句'))
+    assert.equal(sent.includes(parts[0]), false)
     assert.equal(sent.includes(parts[1]), expected.includes('留有余地'))
     assert.equal(sent.includes(parts[2]), expected.includes('轻松打趣'))
   }
   const frozen = resolve('chapter', 'a', 'next')
   const systemOnly = compilePrompt({ task: 'chapter', instruction: '写作约束里偶然提及解围', sceneInstruction: '', promptContext: frozen })
-  assert.deepEqual(systemOnly.snapshot.voiceSamples.map(s => s.use), ['底色'])
+  assert.deepEqual(systemOnly.snapshot.voiceSamples.map(s => s.use), [])
   const discussing = compilePrompt({ task: 'chapter', intent: 'analysis', promptContext: frozen })
   assert.deepEqual(discussing.snapshot.voiceSamples, [])
   assert.equal(resolve('chapter', 'b', 'chapter-b').voiceLibrary, null)
@@ -387,10 +388,10 @@ test('voice matching honors prohibitions and current requirements over repeated 
   const { selectVoiceSamples } = await import('../electron/reference-voice.js')
   const samples = [{ main: true, use: '底色', text: '普通底色' }, { main: true, use: '底色', primary: true, text: '固定底色' }, { use: '轻松打趣', text: '打趣样本' }, { use: '留有余地', text: '解围样本' }]
   const pick = input => selectVoiceSamples({ samples }, { task: 'chapter', ...input })
-  assert.deepEqual(pick({ instruction: '这里不要出现任何玩笑，保持严肃。' }).map(s => s.text), ['固定底色'])
-  assert.deepEqual(pick({ instruction: '正文只写调侃', chapter: { card: { goal: '解围' }, scenePlan: '解围', title: '解围' } }).map(s => s.use), ['底色', '轻松打趣'])
-  assert.deepEqual(pick({ instruction: '按原稿润色', sourceText: '葬礼上他的玩笑令众人怒不可遏。' }).map(s => s.use), ['底色'])
-  for (const chapter_no of [1, 2, 3]) assert.equal(pick({ chapter: { chapter_no } })[0].text, '固定底色')
+  assert.deepEqual(pick({ instruction: '这里不要出现任何玩笑，保持严肃。' }).map(s => s.text), [])
+  assert.deepEqual(pick({ instruction: '正文只写调侃', chapter: { card: { goal: '解围' }, scenePlan: '解围', title: '解围' } }).map(s => s.use), ['轻松打趣'])
+  assert.deepEqual(pick({ instruction: '按原稿润色', sourceText: '葬礼上他的玩笑令众人怒不可遏。' }).map(s => s.use), [])
+  for (const chapter_no of [1, 2, 3]) assert.equal(pick({ voicePurpose: 'base', chapter: { chapter_no } })[0].text, '固定底色')
   assert.equal(pick({ voicePurpose: '留有余地', instruction: '他把难听的话咽回去。' })[1].text, '解围样本')
   assert.equal(pick({ voicePurpose: '轻松打趣', instruction: '不要出现任何玩笑。' }).length, 1)
   assert.equal(pick({ voicePurpose: 'base', instruction: '打趣' }).length, 1)
@@ -459,12 +460,12 @@ test('a different setting can use a functional excerpt and apply its pacing to t
   const input = { task: 'chapter', sceneInstruction: '在旧书摊商量分工', instruction: '生成正文',
     promptContext: { voiceLibrary: { samples } } }
   const result = compilePrompt(input)
-  assert.deepEqual(result.snapshot.voiceSamples.map(s => s.use), ['底色', '熟人商量'])
+  assert.deepEqual(result.snapshot.voiceSamples.map(s => s.use), ['熟人商量'])
   const sent = result.messages[1].content
   assert.ok(sent.includes(samples[1].text) && !sent.includes(samples[2].text))
   assert.ok(result.snapshot.detailDirection.includes('谈妥后的执行'))
   const veto = compilePrompt({ ...input, sceneInstruction: '不要商量分工', chapter: { title: '商量分工' } })
-  assert.equal(veto.snapshot.voiceSamples.length, 1)
+  assert.equal(veto.snapshot.voiceSamples.length, 0)
   assert.ok(!veto.snapshot.detailDirection.includes('谈妥后的执行'))
   const withGuide = compilePrompt({ task: 'rewrite', instruction: '写清她怎样查清原因',
     project: { style: '【参考小说文风规范】\n【通用】允许一句心里话。\n【参考小说文风规范结束】' } })
@@ -472,6 +473,51 @@ test('a different setting can use a functional excerpt and apply its pacing to t
   assert.equal(withGuide.snapshot.voiceSamples.length, 0)
   const disabled = compilePrompt({ task: 'chapter', instruction: '在旧书摊商量分工' })
   assert.ok(!disabled.messages[1].content.includes('【本场详略】'))
+})
+
+test('whole chapters assign and deduplicate excerpts by scene, while local edits use only nearby evidence', () => {
+  const library = { samples: [
+    { main: true, use: '底色', text: '固定底色样文。' },
+    { use: '判断修正', text: '他把那句话改口了。' },
+    { use: '判断修正', text: '原以为是墨，凑近才明白是灰。' },
+    { use: '轻松打趣', text: '打趣的样文。' },
+  ], previousEnding: '本书上一章结尾。' }
+  const scenes = [
+    { title: '进沟', goal: '走到田边' },
+    { title: '辨图', goal: '原以为是旧纸，才明白看错，重新判断' },
+    { title: '屋檐下', goal: '两人打趣' },
+    { title: '再看', goal: '原以为看错了，需要重新判断' },
+  ]
+  const input = { task: 'chapter', intent: 'draft', chapter: { scenePlan: { scenes } },
+    project: { style: '【参考小说文风规范】\n【通用】旁白贴近许照。\n【参考小说文风规范结束】' },
+    promptContext: { voiceLibrary: library } }
+  const full = compilePrompt(input)
+  assert.deepEqual(full.snapshot.voiceSamples.map(s => s.scenes), [['第2场 · 辨图', '第4场 · 再看'], ['第3场 · 屋檐下']])
+  const sent = full.messages[1].content
+  assert.equal(sent.split(library.samples[2].text).length - 1, 1)
+  assert.ok(!sent.includes(library.samples[1].text) && !sent.includes(library.samples[0].text))
+  assert.ok(sent.includes('"适用场景":["第3场 · 屋檐下"]'))
+  const run = extra => compilePrompt({ ...input, ...extra })
+  const neutral = '许照提着鞋走上田埂。'
+  const unrelated = '两人在岸边打趣。'
+  for (const local of [
+    { intent: 'continue', manuscriptPrefix: unrelated + '\n\n' + neutral },
+    { intent: 'continue', manuscriptPrefix: neutral, manuscriptSuffix: '\n***\n' + unrelated },
+    { task: 'rewrite', selectedText: neutral, sourceText: unrelated },
+    { localRevision: { text: neutral + unrelated, scope: { kind: 'selection', from: 0, to: neutral.length } } },
+  ]) {
+    const result = run(local)
+    assert.deepEqual(result.snapshot.voiceSamples, [])
+    assert.ok(result.messages[1].content.includes('旁白贴近许照。') && result.messages[1].content.includes('本书上一章结尾。'))
+    assert.ok(!result.messages[1].content.includes('【贴近参考文风】'))
+  }
+  for (const local of [{ task: 'rewrite', selectedText: unrelated }, { intent: 'continue', manuscriptPrefix: '', manuscriptSuffix: unrelated }]) {
+    assert.deepEqual(run(local).snapshot.voiceSamples.map(s => s.use), ['轻松打趣'])
+  }
+  const veto = run({ instruction: '不要打趣。' })
+  assert.deepEqual(veto.snapshot.voiceSamples.map(s => s.use), ['判断修正'])
+  const legacy = run({ chapter: { card_json: JSON.stringify({ requiredScenes: scenes }) } })
+  assert.deepEqual(legacy.snapshot.voiceSamples, full.snapshot.voiceSamples)
 })
 
 test('file import selects continuous passages and immediately uses them in writing without a guide', async t => {
@@ -496,7 +542,7 @@ test('file import selects continuous passages and immediately uses them in writi
   for (const task of ['chapter', 'rewrite']) {
     const promptContext = prompts.resolvePromptContext({ projectId: 'a', chapterId: 'chapter-a', task })
     const result = compilePrompt({ task, instruction: '让人物重新判断眼前的局势。', promptContext })
-    assert.deepEqual(result.snapshot.voiceSamples.map(s => s.use), ['底色', '判断修正'])
+    assert.deepEqual(result.snapshot.voiceSamples.map(s => s.use), ['判断修正'])
     assert.ok(result.messages.some(m => m.content.includes(imported.excerpts.find(s => s.use === '判断修正').text)))
   }
   r.saveSettings({ projectId: 'a', revision: state.guide.settings_revision, voiceBook: '' })
@@ -515,7 +561,7 @@ test('writing and rewrite prompts infer an exchange from goals while preserving 
       promptContext: { voiceLibrary: library }, ...changes })
     const used = output.snapshot.voiceSamples.map(sample => sample.use)
     assert.equal(output.messages.some(m => m.content.includes(samples[1].text)), used.includes('熟人商量'))
-    return used.slice(1)
+    return used.filter(use => use !== '底色')
   }
   const goals = '社区旧书摊，两元一本。林沅第一次值摊，想在天黑前收好摊子，把三箱书送上三楼。熟人阿庆想帮她一把，也想把摊上那本厚词典带回家。'
   assert.deepEqual(pick(goals, { chapter: { card: { goal: '改口' } } }), ['熟人商量'])

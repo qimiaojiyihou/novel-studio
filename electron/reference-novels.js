@@ -86,8 +86,14 @@ export function createReferenceNovelRepository(db, { now = () => new Date().toIS
     if (!brief || brief.length > 1200 || !['draft', 'rewrite'].includes(input.task) ||
         sourceText.length > 6000 || (input.task === 'rewrite' && !sourceText)) throw new Error('请填写有效的场景要求，修稿还需提供原稿')
     if (!rule || !current.guide.draft_text.split(/\r?\n/).some(line => line.trim() === rule)) throw new Error('请选择当前已保存规范中的一条规则')
-    const samples = input.includeSamples ? selectVoiceSamples(voiceLibrary(db, input.projectId),
-      { task: input.task === 'draft' ? 'chapter' : 'rewrite', instruction: brief, selectedText: sourceText }) : []
+    let samples = []
+    if (input.includeSamples) {
+      // A three-way blind trial explicitly requests an excerpt arm, even for a neutral brief.
+      const library = voiceLibrary(db, input.projectId)
+      const target = { task: input.task === 'draft' ? 'chapter' : 'rewrite', instruction: brief, selectedText: sourceText }
+      const base = selectVoiceSamples(library, { ...target, voicePurpose: 'base' })
+      samples = [...base, ...selectVoiceSamples(library, target).filter(sample => sample.use !== '底色')]
+    }
     if (input.includeSamples && !samples.length) throw new Error('请先保存底色选段并指定底色来源，再进行三稿盲评')
     return { project: project(input.projectId), task: input.task, brief, sourceText, rule, samples,
       guideDigest: current.guideDigest, sourceDigest: current.sourceDigest }

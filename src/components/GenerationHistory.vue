@@ -50,7 +50,7 @@
                 <div><dt>提示词模板</dt><dd>{{ record.promptSnapshot?.template?.name || record.promptTemplateId || '内置模板' }} · v{{ record.promptTemplateVersion || 1 }}</dd></div>
                 <div v-if="sentRules(record)"><dt>本次发送的参考规则</dt><dd><ul v-if="sentRules(record).length"><li v-for="rule in sentRules(record)" :key="rule">{{ rule }}</li></ul><span v-else>本次提示词未附参考规则</span></dd></div>
                 <div v-if="record.promptSnapshot?.detailDirection"><dt>本场详略</dt><dd>{{ record.promptSnapshot.detailDirection.replace(/^【本场详略】/, '') }}</dd></div>
-                <div v-if="record.promptSnapshot?.voiceSamples?.length"><dt>本次文风选段</dt><dd v-for="sample in record.promptSnapshot.voiceSamples" :key="sample.use">{{ sample.use }} · 《{{ sample.title }}》{{ sample.label }}</dd></div>
+                <div v-if="record.promptSnapshot?.voiceSamples?.length"><dt>本次文风选段</dt><dd v-for="(sample, index) in record.promptSnapshot.voiceSamples" :key="index">{{ sample.use }} · 《{{ sample.title }}》{{ sample.label }}{{ sample.scenes?.length ? ' · ' + sample.scenes.join('、') : '' }}</dd></div>
                 <div><dt>采样参数</dt><dd><code>{{ compactJson(record.parameters) }}</code></dd></div>
                 <div v-if="record.events?.length"><dt>执行轨迹</dt><dd>{{ eventSummary(record.events) }}</dd></div>
               </dl>
