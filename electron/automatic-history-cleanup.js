@@ -11,7 +11,7 @@ export function readHistoryCleanupSettings(database) {
   let saved = {}
   try { saved = JSON.parse(database.prepare('SELECT value FROM app_settings WHERE key=?').get(SETTING)?.value || '{}') } catch { /* use defaults */ }
   return { ...saved, enabled: saved.enabled !== false,
-    retentionDays: Number.isInteger(saved.retentionDays) && saved.retentionDays >= 1 && saved.retentionDays <= 365 ? saved.retentionDays : 30 }
+    retentionDays: Number.isInteger(saved.retentionDays) && saved.retentionDays >= 1 && saved.retentionDays <= 365 ? saved.retentionDays : 10 }
 }
 
 export function saveHistoryCleanupSettings(database, patch) {
@@ -77,7 +77,7 @@ async function readSessionMeta(file) {
   }
 }
 
-export async function cleanAutomaticTaskHistory(database, { codexHome, retentionDays = 30, now = Date.now(), limit = 100, dryRun = false } = {}) {
+export async function cleanAutomaticTaskHistory(database, { codexHome, retentionDays = 10, now = Date.now(), limit = 100, dryRun = false } = {}) {
   if (!Number.isInteger(retentionDays) || retentionDays < 1 || retentionDays > 365) throw new Error('历史保留天数应为 1 至 365 天')
   if (!codexHome || !path.isAbsolute(codexHome)) throw new Error('Codex 历史目录应为绝对路径')
   const result = { scanned: 0, removed: 0, bytesFreed: 0, eligible: 0, skipped: 0, errors: 0, dryRun, batchLimited: false }

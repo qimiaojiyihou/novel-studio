@@ -46,9 +46,9 @@ function fixture(t) {
   return { root, archive, database, databasePath, own, file, options: { codexHome: root, now: NOW } }
 }
 
-test('periodic policy defaults to 30 days, persists disable/retention and validates bounds', t => {
+test('periodic policy defaults to 10 days, persists disable/retention and validates bounds', t => {
   const f = fixture(t)
-  assert.deepEqual(readHistoryCleanupSettings(f.database), { enabled: true, retentionDays: 30 })
+  assert.deepEqual(readHistoryCleanupSettings(f.database), { enabled: true, retentionDays: 10 })
   assert.equal(historyCleanupDue(readHistoryCleanupSettings(f.database), NOW), true)
   saveHistoryCleanupSettings(f.database, { enabled: false, retentionDays: 14 })
   assert.equal(historyCleanupDue(readHistoryCleanupSettings(f.database), NOW), false)
@@ -86,6 +86,19 @@ test('worker deletes only expired owned archived JSONL and Zstandard logs, keepi
   assert.ok(fs.existsSync(manual) && fs.existsSync(activeDirectory))
   assert.equal(hash(), before)
   assert.equal(f.database.prepare('SELECT payload_json FROM agent_candidates').get().payload_json, '候选全文')
+})
+
+test('default ten-day retention cleans an eleven-day log and protects logs within the retention window', async t => {
+  const f = fixture(t)
+  const elevenDays = new Date(NOW - 11 * 86_400_000).toISOString()
+  const nineDays = new Date(NOW - 9 * 86_400_000).toISOString()
+  const expired = f.file(f.own({ date: elevenDays }).id, { date: elevenDays })
+  const recent = f.file(f.own({ date: nineDays }).id, { date: nineDays })
+  const boundary = new Date(NOW - 10 * 86_400_000).toISOString()
+  const boundaryFile = f.file(f.own({ date: boundary }).id, { date: boundary })
+  assert.equal((await cleanAutomaticTaskHistory(f.database, f.options)).removed, 1)
+  assert.equal(fs.existsSync(expired), false)
+  assert.ok(fs.existsSync(recent) && fs.existsSync(boundaryFile))
 })
 
 test('pending candidates, active/shared/failed runs, recent archives and incomplete steps are protected', async t => {

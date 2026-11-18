@@ -28,7 +28,7 @@
       <p v-if="status?.historyCleanup?.lastRunAt">上次检查：{{ new Date(status.historyCleanup.lastRunAt).toLocaleString() }}<template v-if="status.historyCleanup.lastResult"> · 清理 {{ status.historyCleanup.lastResult.removed }} 个文件，释放 {{ (status.historyCleanup.lastResult.bytesFreed / 1024 ** 2).toFixed(1) }} MB<template v-if="status.historyCleanup.lastResult.errors"> · {{ status.historyCleanup.lastResult.errors }} 个文件未处理，将在下次检查重试</template></template></p>
       <p v-if="status?.historyCleanup?.lastError" role="alert">上次清理暂缓：{{ status.historyCleanup.lastError }}</p>
       <small v-if="status?.historyCleanup?.lastResult?.batchLimited">历史文件较多，后台会在空闲时继续分批清理。</small>
-      <small>保留期默认 30 天。未完成任务、待采纳候选和手动会话会跳过。清理后的 Codex 历史原文不再保留，应用内创作结果和记录保留。</small>
+      <small>保留期默认 10 天。未完成任务、待采纳候选和手动会话会跳过。清理后的 Codex 历史原文不再保留，应用内创作结果和记录保留。</small>
     </div>
   </section>
 </template>
@@ -37,13 +37,13 @@
 import { computed, onMounted, ref } from 'vue'
 import { appService } from '../services/app-service.js'
 const status = ref(null), busy = ref(false), message = ref('')
-const cleanupEnabled = ref(true), retentionDays = ref(30)
+const cleanupEnabled = ref(true), retentionDays = ref(10)
 const sizeLabel = computed(() => `${((status.value?.databaseBytes || 0) / 1024 ** 3).toFixed(2)} GB`)
 onMounted(async () => {
   try {
     status.value = await appService.getStorageStatus()
     cleanupEnabled.value = status.value.historyCleanup?.enabled !== false
-    retentionDays.value = status.value.historyCleanup?.retentionDays || 30
+    retentionDays.value = status.value.historyCleanup?.retentionDays || 10
   } catch (error) { message.value = error.message }
 })
 async function saveCleanup() {
