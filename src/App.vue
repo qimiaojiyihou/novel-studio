@@ -21,6 +21,7 @@
         </span>
         <span class="save-label" :class="saveState">{{ saveLabel }}</span>
         <button v-if="externalChange" type="button" class="topbar-tool" @click="refreshExternalWorkspace">{{ isDirty ? '处理正文冲突' : '本书任务有更新' }}</button>
+        <button v-if="project.id" type="button" class="topbar-tool" title="查看本书候选稿与历史版本" @click="inlineHistoryOpen = true">候选稿</button>
         <button v-if="inlineRunId" class="topbar-tool inline-run-top-button" :class="inlineRunStatus" title="打开当前 Agent 就地任务" @click="inlinePanelOpen = true"><AppIcon name="codex" :size="15" /><span>{{ creativeAgentLabel(inlineRun?.modelRoutes?.agentProvider) }}</span></button>
         <button class="topbar-tool story-change-top-button" :class="storyChangeRunStatus" title="设定联动修改与历史" @click="openStoryChangeHistory"><AppIcon name="change" :size="15" /><span>联动</span></button>
         <button class="topbar-tool quality-top-button" title="创作质量中心" @click="qualityCenterOpen = true"><AppIcon name="quality" :size="15" /><span>质检</span></button>
@@ -412,7 +413,7 @@
       :current-draft-digest="inlineCurrentDraftDigest"
       :current-draft-value="inlineCurrentDraftValue"
       :source-manuscript="inlineSourceManuscript"
-      :current-chapter-card="activeChapter?.card || {}"
+      :current-chapter-card="chapters.find(chapter => chapter.id === inlineRun?.chapterId)?.card || {}"
       @close="inlinePanelOpen = false"
       @accepted="handleInlineAccepted"
       @rejected="handleInlineRejected"
@@ -429,6 +430,7 @@
       @toast="showToast"
       @run-updated="handleStoryChangeRunUpdated"
     />
+    <InlineCandidateHistory v-if="inlineHistoryOpen" :project-id="project.id" :chapters="chapters" @close="inlineHistoryOpen = false" @open-run="openInlineHistoryRun" />
     <GenerationHistory
       :visible="generationHistoryOpen"
       :records="generationRecords"
@@ -614,8 +616,10 @@
 
 <script setup>
 import { showModelOverrides } from './composables/model-controls.js'
+import { useInlineRunSelection } from './composables/useInlineRunSelection.js'
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, provide, reactive, ref, watch } from 'vue'
 const DiffReview = defineAsyncComponent(() => import('./components/DiffReview.vue'))
+const InlineCandidateHistory = defineAsyncComponent(() => import('./components/InlineCandidateHistory.vue'))
 import AppIcon from './components/AppIcon.vue'
 import ApprovalDrawer from './components/ApprovalDrawer.vue'
 import CreativeAssistant from './components/CreativeAssistant.vue'
@@ -802,10 +806,10 @@ async function reloadAfterFinalization(record) {
   if (project.id === projectId && activeChapter.value?.id === chapterId) replaceChapter(chapter)
   showToast(record?.checks?.manualFinalization ? '本章已人工定稿；本次未审稿，交接未更新' : '本章已定稿，交接记录已确认')
 }
-const inlinePanelOpen = ref(false)
-const inlineRunId = ref('')
-const inlineRunStatus = ref('')
-const inlineRun = ref(null)
+const inlineSelection = useInlineRunSelection()
+const { panelOpen: inlinePanelOpen, runId: inlineRunId, status: inlineRunStatus, run: inlineRun } = inlineSelection
+const inlineHistoryOpen = ref(false)
+let inlineHistoryRequest = 0
 const inlineDraftDigest = ref('')
 const storyChangePanelOpen = ref(false)
 const storyChangeTarget = ref(null)
@@ -895,7 +899,7 @@ let scenePlanSaveTimer = null
 const inlineBindings = new Map()
 
 const activeChapter = computed(() => chapters.value.find((chapter) => chapter.id === activeChapterId.value) || chapters.value[0])
-watch(() => [inlineRun.value?.chapterId, project.id], async ([chapterId, projectId]) => {
+watch(() => [inlineRun.value?.chapterId, project.id, chapters.value.find(chapter => chapter.id === inlineRun.value?.chapterId)?.detailLoaded], async ([chapterId, projectId]) => {
   if (!chapterId || !projectId || inlineRun.value?.projectId !== projectId) return
   if (chapters.value.find(chapter => chapter.id === chapterId)?.detailLoaded !== false) return
   try {
@@ -982,11 +986,7 @@ function applyWorkspace(loaded) {
   revisions.value = []
   projectActionId.value = ''
   chapterActionId.value = ''
-  if (inlineRunId.value && inlineRunStatus.value && !['running', 'waiting_approval', 'waiting_confirmation', 'paused', 'pending'].includes(inlineRunStatus.value)) {
-    inlineRunId.value = ''
-    inlineRun.value = null
-    inlinePanelOpen.value = false
-  }
+  inlineSelection.syncProject(loaded.project?.id)
 }
 
 onMounted(async () => {
@@ -1023,7 +1023,7 @@ async function refreshWorkspaceFromAgent() {
   showToast('Agent 候选已确认并写入项目')
 }
 
-watch(() => project.id, () => { externalChange.value = false })
+watch(() => project.id, () => { externalChange.value = false; inlineHistoryOpen.value = false; inlineHistoryRequest++ })
 async function prepareManuscriptConflict(chapterId = activeChapter.value?.id, content = editorText.value) {
   if (!chapterId || manuscriptConflict.busy) return
   const projectId = project.id
@@ -1159,13 +1159,16 @@ onBeforeUnmount(() => {
 })
 
 async function restoreInlineRun() {
-  if (!project.id) return
-  const runs = await appService.listAgentRuns({ projectId: project.id, limit: 100 })
+  const projectId = project.id
+  if (!projectId) return
+  const runs = await appService.listAgentRuns({ projectId, limit: 100 })
+  if (project.id !== projectId) return
   const activeRuns = runs.filter((run) => run.workflowId === 'inline-action' && ['pending', 'waiting_approval', 'running', 'waiting_confirmation', 'paused'].includes(run.status))
   const latestStory = activeRuns.find(run => run.inlineTargetKind === 'story_change_set')
   const latestInline = activeRuns.find(run => run.inlineTargetKind !== 'story_change_set')
   for (const active of [latestStory, latestInline].filter(Boolean)) {
     const detailed = await appService.getAgentRun(active.id)
+    if (project.id !== projectId || detailed?.projectId !== projectId) return
     const storyStep = detailed?.steps?.find((step) => step.input?.target?.kind === 'story_change_set')
     if (storyStep && !storyChangeResumeRunId.value) {
       storyChangeResumeRunId.value = active.id
@@ -1176,11 +1179,26 @@ async function restoreInlineRun() {
       continue
     }
     if (!inlineRunId.value) {
-      inlineRunId.value = active.id
-      inlineRunStatus.value = active.status
-      inlineRun.value = detailed
+      inlineSelection.update(detailed, projectId)
     }
   }
+  if (!inlineRunId.value) {
+    const history = await appService.listAgentRuns({ projectId, candidateHistory: true, limit: 1 })
+    if (project.id !== projectId || inlineRunId.value || !history[0]) return
+    const detailed = await appService.getAgentRun(history[0].id)
+    if (project.id === projectId && !inlineRunId.value) inlineSelection.update(detailed, projectId)
+  }
+}
+
+async function openInlineHistoryRun(runId) {
+  const projectId = project.id, request = ++inlineHistoryRequest
+  try {
+    const detailed = await appService.getAgentRun(runId)
+    if (request !== inlineHistoryRequest || project.id !== projectId) return
+    if (!inlineSelection.update(detailed, projectId)) throw new Error('这份候选已不存在或不属于当前作品')
+    inlineHistoryOpen.value = false
+    inlinePanelOpen.value = true
+  } catch (error) { if (request === inlineHistoryRequest) showToast(`读取候选稿失败：${error.message}`) }
 }
 
 async function flushPlanningMemory() {
@@ -2083,7 +2101,7 @@ function handleInlineRejected({ run }) {
 }
 
 function handleInlineRunUpdated(run) {
-  if (!run) return
+  if (!run || run.projectId !== project.id) return
   if (run.id !== inlineRunId.value && inlineBindings.has(inlineRunId.value)) {
     inlineBindings.set(run.id, inlineBindings.get(inlineRunId.value))
   }

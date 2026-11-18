@@ -63,6 +63,9 @@ function mapRun(row) {
     updatedAt: row.updated_at,
     completedAt: row.completed_at,
     inlineTargetKind: row.inline_target_kind || '',
+    ...(row.candidate_count === undefined ? {} : {
+      candidateCount: Number(row.candidate_count), pendingCandidateCount: Number(row.pending_candidate_count),
+    }),
   } : null
 }
 
@@ -526,17 +529,27 @@ export function createCodexRepository(database, {
     return getRun(run.id)
   }
 
-  function listRuns({ projectId = '', limit = 50 } = {}) {
+  function listRuns({ projectId = '', limit = 50, offset = 0, candidateHistory = false, chapterId = '' } = {}) {
     const bounded = Math.max(1, Math.min(200, Number(limit || 50)))
-    const summary = `SELECT run.*,
+    const counts = candidateHistory ? `,
+      (SELECT COUNT(*) FROM agent_candidates c WHERE c.run_id=run.id) AS candidate_count,
+      (SELECT COUNT(*) FROM agent_candidates c WHERE c.run_id=run.id AND c.status='pending') AS pending_candidate_count` : ''
+    const summary = `SELECT run.*${counts},
       CASE WHEN run.workflow_id = 'inline-action' THEN
         (SELECT CASE WHEN json_valid(step.input_json) THEN json_extract(step.input_json, '$.target.kind') ELSE '' END FROM agent_steps step
           WHERE step.run_id = run.id ORDER BY step.position LIMIT 1)
       ELSE '' END AS inline_target_kind
       FROM agent_runs run`
-    const rows = projectId
-      ? database.prepare(`${summary} WHERE run.project_id = ? ORDER BY run.updated_at DESC, run.rowid DESC LIMIT ?`).all(projectId, bounded)
-      : database.prepare(`${summary} ORDER BY run.updated_at DESC, run.rowid DESC LIMIT ?`).all(bounded)
+    const where = [], values = []
+    if (projectId) { where.push('run.project_id=?'); values.push(projectId) }
+    if (candidateHistory) {
+      where.push(`run.workflow_id='inline-action'`, 'EXISTS(SELECT 1 FROM agent_candidates c WHERE c.run_id=run.id)',
+        `NOT EXISTS(SELECT 1 FROM agent_steps s WHERE s.run_id=run.id AND json_valid(s.input_json) AND json_extract(s.input_json,'$.target.kind')='story_change_set')`)
+      if (chapterId) { where.push('run.chapter_id=?'); values.push(chapterId) }
+    }
+    values.push(bounded, Math.max(0, Math.min(1_000_000, Math.floor(Number(offset) || 0))))
+    const rows = database.prepare(`${summary}${where.length ? ` WHERE ${where.join(' AND ')}` : ''}
+      ORDER BY run.updated_at DESC, run.rowid DESC LIMIT ? OFFSET ?`).all(...values)
     return rows.map(mapRun)
   }
 

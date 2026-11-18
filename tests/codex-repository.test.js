@@ -123,6 +123,49 @@ test('idle inline cleanup only selects old runs without candidates, work or appr
   database.close()
 })
 
+test('candidate history includes finished versions, paginates after filtering and remains scoped to the book and chapter', () => {
+  const { database, repository } = setup()
+  try {
+    database.prepare(`INSERT INTO chapters(id,project_id,chapter_no,title,status,updated_at)
+      VALUES('chapter-2','project-1',2,'第二章','draft',?)`).run(NOW)
+    database.prepare(`INSERT INTO projects(id,title,genre,idea,style,created_at,updated_at)
+      VALUES('project-2','另一本书','','','',?,?)`).run(NOW, NOW)
+    database.prepare(`INSERT INTO chapters(id,project_id,chapter_no,title,status,updated_at)
+      VALUES('chapter-other','project-2',1,'另一章','draft',?)`).run(NOW)
+    database.prepare(`INSERT INTO project_pack_bindings(id,project_id,pack_id,pack_version,bound_at,updated_at)
+      SELECT 'binding-2','project-2',pack_id,pack_version,bound_at,updated_at FROM project_pack_bindings WHERE project_id='project-1'`).run()
+    const create = ({ chapterId = 'chapter-1', projectId = 'project-1', status = 'completed', candidateStatus = 'accepted', withCandidate = true } = {}) => {
+      const run = repository.createInlineRun({ projectId, chapterId, task: 'chapter_card', freshStart: true,
+        executionMode: 'codex', target: { kind: 'chapter_card', targetId: chapterId, fieldLabel: '章节卡' } })
+      repository.updateStep(run.steps[0].id, { status: 'completed' })
+      if (withCandidate) {
+        const candidate = repository.createCandidate({ runId: run.id, stepId: run.steps[0].id, projectId, chapterId,
+          artifactType: 'chapter_card', sourceDigest: 'source', payload: { goal: `候选 ${run.id}` } })
+        database.prepare('UPDATE agent_candidates SET status=? WHERE id=?').run(candidateStatus, candidate.id)
+      }
+      repository.updateRun(run.id, { status })
+      return run
+    }
+    const first = create(), cancelled = create({ status: 'cancelled', candidateStatus: 'rejected' })
+    const pending = create({ status: 'waiting_confirmation', candidateStatus: 'pending' })
+    const secondChapter = create({ chapterId: 'chapter-2' })
+    create({ withCandidate: false })
+    create({ projectId: 'project-2', chapterId: 'chapter-other' })
+    const story = create()
+    database.prepare('UPDATE agent_steps SET input_json=? WHERE run_id=?').run(JSON.stringify({ target: { kind: 'story_change_set' } }), story.id)
+    const args = { projectId: 'project-1', candidateHistory: true, limit: 2 }
+    const page1 = repository.listRuns(args), page2 = repository.listRuns({ ...args, offset: 2 })
+    assert.deepEqual([...page1, ...page2].map(run => run.id), [secondChapter.id, pending.id, cancelled.id, first.id])
+    assert.equal(page1[1].pendingCandidateCount, 1)
+    assert.equal(page2[0].candidateCount, 1)
+    assert.equal(page2[0].pendingCandidateCount, 0)
+    assert.deepEqual(repository.listRuns({ ...args, chapterId: 'chapter-2' }).map(run => run.id), [secondChapter.id])
+    assert.equal(repository.listRuns({ ...args, offset: 4 }).length, 0)
+    assert.equal(repository.getRun(first.id).candidates[0].payload.goal, `候选 ${first.id}`)
+    assert.equal(database.prepare("SELECT manuscript FROM chapters WHERE id='chapter-1'").get().manuscript, '')
+  } finally { database.close() }
+})
+
 test('Codex approvals are per action, expire, and never persist secret fields', () => {
   const { database, repository } = setup()
   const run = repository.createRun({ projectId: 'project-1', chapterId: 'chapter-1', workflowId: 'chapter-creation', executionMode: 'codex' })
