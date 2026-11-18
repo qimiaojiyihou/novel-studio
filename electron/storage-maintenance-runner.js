@@ -1,10 +1,16 @@
 import { Worker } from 'node:worker_threads'
 
 export function runStorageMaintenanceBatch(databasePath) {
+  return runWorker('./storage-maintenance-worker.js', { databasePath })
+}
+
+export function runAutomaticHistoryCleanup(databasePath, options) {
+  return runWorker('./automatic-history-cleanup-worker.js', { ...options, databasePath })
+}
+
+function runWorker(modulePath, workerData) {
   return new Promise((resolve, reject) => {
-    const worker = new Worker(new URL('./storage-maintenance-worker.js', import.meta.url), {
-      workerData: { databasePath },
-    })
+    const worker = new Worker(new URL(modulePath, import.meta.url), { workerData })
     let settled = false
     const finish = (error, value) => {
       if (settled) return

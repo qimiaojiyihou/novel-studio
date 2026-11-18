@@ -18,6 +18,7 @@ export const appService = {
   },
   getWorkspaceChapter(payload) { return electronApi.getWorkspaceChapter(payload) },
   getStorageStatus() { return electronApi.getStorageStatus() },
+  saveHistoryCleanupSettings(payload) { return electronApi.saveHistoryCleanupSettings(toIpcPayload(payload)) },
   chooseStorageDirectory() { return electronApi.chooseStorageDirectory() },
   cancelStorageMigration() { return electronApi.cancelStorageMigration() },
   openStorageDirectory() { return electronApi.openStorageDirectory() },

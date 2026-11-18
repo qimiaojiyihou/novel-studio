@@ -34,6 +34,7 @@ contextBridge.exposeInMainWorld('novelStudio', {
   loadWorkspaceCatalog: (payload) => ipcRenderer.invoke('workspace:catalog', payload),
   getWorkspaceChapter: (payload) => ipcRenderer.invoke('workspace:chapter', payload),
   getStorageStatus: () => ipcRenderer.invoke('storage:status'),
+  saveHistoryCleanupSettings: payload => ipcRenderer.invoke('storage:history-cleanup-save', payload),
   chooseStorageDirectory: () => ipcRenderer.invoke('storage:choose'),
   cancelStorageMigration: () => ipcRenderer.invoke('storage:cancel'),
   openStorageDirectory: () => ipcRenderer.invoke('storage:open'),

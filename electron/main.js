@@ -5,7 +5,8 @@ import { applicationMenuTemplate } from './application-menu.js'
 import { CREATIVE_BUILD_ID } from './build-info.js'
 import { collaborativeWorkflow, collaborativeProfile, COLLABORATIVE_WORKFLOW_ID } from './collaborative-writing.js'
 import { deleteProjectOffMainThread } from './project-deletion.js'
-import { runStorageMaintenanceBatch } from './storage-maintenance-runner.js'
+import { runStorageMaintenanceBatch, runAutomaticHistoryCleanup } from './storage-maintenance-runner.js'
+import { readHistoryCleanupSettings, saveHistoryCleanupSettings, historyCleanupDue } from './automatic-history-cleanup.js'
 import { readStorageConfig, writeStorageConfig, queueStorageMigration, cancelStorageMigration, commitStorageMigration } from './storage-location.js'
 import { runStorageMigration } from './storage-migration-runner.js'
 import { CreativeInterface, CreativeMutationQueue } from './creative-interface.js'
@@ -3008,11 +3009,16 @@ function registerIpc() {
   })
   const storageStatus = () => ({ ...readStorageConfig(app.getPath('userData')),
     directory: getLibraryDirectory(), databasePath: getDatabaseInfo().path,
+    historyCleanup: readHistoryCleanupSettings(openDatabase()),
     bootstrapDirectory: app.getPath('userData'), databaseBytes: fs.statSync(getDatabaseInfo().path).size })
   const assertStorageIdle = () => {
     if (agentRuntime?.active?.size || modelGateway.hasActiveTasks() || activeBenchmarkControls.size || creativeMutationQueue.tails.size || pendingProjectDelete || creativeInterface?.inflight?.size || readerPublisher?.isBusy()) throw new Error('请等待当前创作、审稿、发布或保存删除操作结束，再迁移书库')
   }
   ipcMain.handle('storage:status', storageStatus)
+  ipcMain.handle('storage:history-cleanup-save', (_event, payload = {}) => {
+    saveHistoryCleanupSettings(openDatabase(), { enabled: payload.enabled, retentionDays: payload.retentionDays })
+    return storageStatus()
+  })
   ipcMain.handle('storage:choose', async () => {
     assertStorageIdle()
     const result = await dialogOptions('showOpenDialog', { title: '选择空的数据文件夹', properties: ['openDirectory', 'createDirectory'] })
@@ -3160,11 +3166,24 @@ app.whenReady().then(async () => {
     if (storageMaintenanceStopped) return
     storageMaintenanceTimer = setTimeout(async () => {
       if (storageMaintenanceStopped) return
-      if (agentRuntime?.active?.size || modelGateway.hasActiveTasks() || creativeMutationQueue.tails.size || creativeInterface?.inflight?.size || Date.now() - lastForegroundWriteAt < 30_000) {
+      if (agentRuntime?.active?.size || codexGateway?.sessions?.size || modelGateway.hasActiveTasks() || creativeMutationQueue.tails.size || creativeInterface?.inflight?.size || Date.now() - lastForegroundWriteAt < 30_000) {
         scheduleStorageMaintenance(30_000)
         return
       }
       try {
+        const policy = readHistoryCleanupSettings(openDatabase())
+        if (historyCleanupDue(policy)) {
+          try {
+            const cleanup = await runAutomaticHistoryCleanup(getDatabaseInfo().path, {
+              codexHome: path.resolve(process.env.CODEX_HOME || path.join(os.homedir(), '.codex')),
+              retentionDays: policy.retentionDays,
+            })
+            saveHistoryCleanupSettings(openDatabase(), { lastRunAt: new Date().toISOString(), lastResult: cleanup, lastError: '' })
+          } catch (error) {
+            saveHistoryCleanupSettings(openDatabase(), { lastRunAt: new Date().toISOString(), lastError: error.message })
+            console.warn('自动任务历史清理暂缓：', error)
+          }
+        }
         const result = await runStorageMaintenanceBatch(getDatabaseInfo().path)
         const hasMore = result.receipts.scanned > 0 || result.events.scanned > 0
         scheduleStorageMaintenance(hasMore ? 10_000 : 5 * 60_000)

@@ -680,6 +680,7 @@ export class CodexAgentGateway {
       if (signal?.aborted) throw new CodexCancelledError()
       const abort = () => { void this.cancelTurn(agentRunId) }
       signal?.addEventListener('abort', abort, { once: true })
+      let turnCompleted = false
       try {
         const response = await this.connection.prompt({ sessionId: session.sessionId, prompt: [{ type: 'text', text: promptText }] })
         if (response.stopReason === 'cancelled') throw new CodexCancelledError()
@@ -698,12 +699,14 @@ export class CodexAgentGateway {
           contextReuse: useContextDelta ? 'delta' : 'full',
         }
         this.repository?.completeApproval?.(approval.id, { result: { backend: result.backend, outputStarted: result.outputStarted } })
+        turnCompleted = true
         return result
       } finally {
         this.eventBuffer.flush(agentRunId)
         signal?.removeEventListener('abort', abort)
         session.activeStepId = ''
         session.onEvent = null
+        if (turnCompleted) await this.archiveAutomaticSession(agentRunId)
       }
     } catch (error) {
       const outputStarted = Boolean(session?.outputStarted)
@@ -737,6 +740,7 @@ export class CodexAgentGateway {
         })
         result.contextReuse = 'full'
         if (approval?.id) this.repository?.completeApproval?.(approval.id, { result: { backend: result.backend, fallbackReason: result.fallbackReason } })
+        await this.archiveAutomaticSession(agentRunId)
         return result
       } catch (fallbackError) {
         if (approval?.id && fallbackError.name !== 'CodexCancelledError') this.repository?.completeApproval?.(approval.id, { error: fallbackError.message })
@@ -766,11 +770,11 @@ export class CodexAgentGateway {
     const schemaPath = path.join(execDirectory, `${nonce}.schema.json`)
     if (outputSchema) fs.writeFileSync(schemaPath, JSON.stringify(outputSchema), { mode: 0o600 })
     const args = [
-      'exec', '--json', '--output-last-message', outputPath,
+      'exec', '--ephemeral', '--json', '--output-last-message', outputPath,
       '--sandbox', 'read-only', '--cd', workspaceRoot,
       ...(path.resolve(workspaceRoot) === path.resolve(mirrorRoot) ? [] : ['--add-dir', mirrorRoot]),
       '--ignore-user-config', '--skip-git-repo-check',
-      ...(isolatedWriting ? ['--ephemeral', '--disable', 'shell_tool', '--disable', 'multi_agent', '-c', 'web_search="disabled"'] : []),
+      ...(isolatedWriting ? ['--disable', 'shell_tool', '--disable', 'multi_agent', '-c', 'web_search="disabled"'] : []),
       '-c', 'approval_policy="never"',
       ...execModelArgs({ model, reasoningEffort, fastMode }),
       ...(outputSchema && runtime.capabilities?.execOutputSchema ? ['--output-schema', schemaPath] : []),
@@ -841,11 +845,42 @@ export class CodexAgentGateway {
       if (this.initializeResult?.agentCapabilities?.sessionCapabilities?.close) {
         await this.connection.closeSession({ sessionId: session.sessionId })
       }
+      await this.archiveAutomaticSession(agentRunId)
     } finally {
       this.sessions.delete(agentRunId)
       this.sessionToRun.delete(session.sessionId)
       this.repository?.upsertSession?.({ agentRunId, status: 'closed', closedAt: new Date().toISOString() })
     }
+    return true
+  }
+
+  async archiveAutomaticSession(agentRunId) {
+    const session = this.sessions.get(agentRunId)
+    // Only the Codex sessions owned by this gateway, after the model turn has
+    // settled. Never enumerate a user's other desktop threads by title.
+    if (this.acpBackend !== 'codex_acp' || !session?.sessionId || session.activeStepId) return false
+    if (!this.initializeResult?.agentCapabilities?.sessionCapabilities?.delete || !this.connection?.deleteSession) {
+      this.onGlobalEvent({ type: 'session_archive_unavailable', agentRunId })
+      return false
+    }
+    try {
+      // codex-acp session/delete first closes/unsubscribes the writer, then
+      // invokes thread/archive. It does not permanently delete the transcript.
+      await this.connection.deleteSession({ sessionId: session.sessionId })
+    } catch (error) {
+      const event = { agentRunId, type: 'session_archive_failed', summary: '自动会话归档失败；候选与生成记录仍保留',
+        payload: { error: String(error.message || error) } }
+      this.repository?.appendEvent?.(event)
+      this.onGlobalEvent(event)
+      return false
+    }
+    this.sessions.delete(agentRunId)
+    this.sessionToRun.delete(session.sessionId)
+    this.repository?.upsertSession?.({ agentRunId, backend: this.acpBackend, sessionId: session.sessionId,
+      status: 'closed', closedAt: new Date().toISOString() })
+    const event = { agentRunId, type: 'session_archived', summary: '已归档自动创作会话；候选与生成记录保留', payload: { sessionId: session.sessionId } }
+    this.repository?.appendEvent?.(event)
+    this.onGlobalEvent(event)
     return true
   }
 

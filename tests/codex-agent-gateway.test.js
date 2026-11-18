@@ -5,7 +5,7 @@ import path from 'node:path'
 import { test } from 'node:test'
 import { CodexAgentGateway, safeToolLocations } from '../electron/codex-agent-gateway.js'
 
-function createFakeGateway({ promptBehavior, repository, onGlobalEvent, shouldAutoApprove, onNewSession, sessionOptions = [] } = {}) {
+function createFakeGateway({ promptBehavior, repository, onGlobalEvent, shouldAutoApprove, onNewSession, sessionOptions = [], archiveSupported = false } = {}) {
   let handlers
   let newSessionCount = 0
   const newSessionRequests = []
@@ -13,7 +13,7 @@ function createFakeGateway({ promptBehavior, repository, onGlobalEvent, shouldAu
   const connection = {
     initialize: async () => ({
       protocolVersion: 1,
-      agentCapabilities: { loadSession: true, sessionCapabilities: { resume: {}, close: {} } },
+      agentCapabilities: { loadSession: true, sessionCapabilities: { resume: {}, close: {}, ...(archiveSupported ? { delete: {} } : {}) } },
       authMethods: [{ id: 'chat-gpt' }, { id: 'api-key' }],
     }),
     authenticate: async () => ({}),
@@ -25,6 +25,7 @@ function createFakeGateway({ promptBehavior, repository, onGlobalEvent, shouldAu
     resumeSession: async () => ({}),
     loadSession: async () => ({}),
     closeSession: async () => ({}),
+    deleteSession: async () => ({}),
     cancel: async () => ({}),
     prompt: async (request) => {
       promptRequests.push(request)
@@ -136,6 +137,79 @@ test('ACP gateway reuses one session for all steps in an AgentRun', async () => 
     await gateway.shutdown()
     fs.rmSync(root, { recursive: true, force: true })
   }
+})
+
+test('completed automatic Codex turns are archived while candidates remain available for a full-context resume', async () => {
+  let persisted
+  const updates = [], archived = [], notices = []
+  const { gateway, connection, getPromptRequests } = createFakeGateway({
+    archiveSupported: true,
+    repository: {
+      getRun: () => ({ session: persisted }),
+      upsertSession: patch => { persisted = { ...persisted, ...patch }; updates.push(patch) },
+    },
+    onGlobalEvent: event => notices.push(event),
+  })
+  connection.deleteSession = async ({ sessionId }) => {
+    assert.equal(gateway.sessions.get('automatic-book-run').activeStepId, '')
+    archived.push(sessionId)
+  }
+  const input = { agentRunId: 'automatic-book-run', agentStepId: 'first',
+    messages: [{ role: 'user', content: '完整上下文和当前候选' }], settings: { mirrorRoot: os.tmpdir() } }
+  try {
+    const first = await gateway.prompt(input)
+    assert.deepEqual(first.structuredOutput, { goal: '进入医院' })
+    assert.deepEqual(archived, [first.sessionId])
+    assert.equal(gateway.sessions.size, 0)
+    assert.equal(gateway.sessionToRun.size, 0)
+    assert.equal(persisted.status, 'closed')
+    let resumed
+    connection.resumeSession = async params => { resumed = params.sessionId; return {} }
+    const next = await gateway.prompt({ ...input, agentStepId: 'next',
+      continuationMessages: [{ role: 'user', content: '只有本轮增量' }] })
+    assert.equal(resumed, first.sessionId)
+    assert.equal(next.contextReuse, 'full')
+    assert.match(getPromptRequests()[1].prompt[0].text, /完整上下文和当前候选/)
+    assert.doesNotMatch(getPromptRequests()[1].prompt[0].text, /只有本轮增量/)
+    assert.equal(archived.length, 2)
+    assert.equal(notices.filter(event => event.type === 'session_archived').length, 2)
+  } finally { await gateway.shutdown() }
+})
+
+test('archive failure never fails generation and closing the idle session retries it', async () => {
+  const events = []
+  const { gateway, connection } = createFakeGateway({ archiveSupported: true, onGlobalEvent: event => events.push(event) })
+  let attempts = 0
+  connection.deleteSession = async () => { if (++attempts === 1) throw new Error('writer temporarily busy') }
+  try {
+    const result = await gateway.prompt({ agentRunId: 'retry-archive', agentStepId: 'step',
+      messages: '生成候选', settings: { mirrorRoot: os.tmpdir() } })
+    assert.deepEqual(result.structuredOutput, { goal: '进入医院' })
+    assert.equal(gateway.sessions.size, 1)
+    assert.ok(events.some(event => event.type === 'session_archive_failed'))
+    await gateway.closeSession('retry-archive')
+    assert.equal(attempts, 2)
+    assert.equal(gateway.sessions.size, 0)
+  } finally { await gateway.shutdown() }
+})
+
+test('automatic archival ignores active, unknown and non-Codex sessions', async () => {
+  const { gateway, connection } = createFakeGateway({ archiveSupported: true })
+  await gateway.startAdapter()
+  let archived = 0
+  connection.deleteSession = async () => { archived++ }
+  try {
+    gateway.sessions.set('active', { sessionId: 'owned-active', activeStepId: 'writing' })
+    assert.equal(await gateway.archiveAutomaticSession('active'), false)
+    assert.equal(await gateway.archiveAutomaticSession('user-created-thread'), false)
+    gateway.sessions.delete('active')
+    gateway.acpBackend = 'qoder_acp'
+    const result = await gateway.prompt({ agentRunId: 'other-provider', agentStepId: 'step',
+      messages: '候选', settings: { mirrorRoot: os.tmpdir() } })
+    assert.equal(result.backend, 'qoder_acp')
+    assert.equal(archived, 0)
+    assert.equal(gateway.sessions.size, 1)
+  } finally { await gateway.shutdown() }
 })
 
 test('ACP groups book tasks by a stable workspace while isolating each AgentRun mirror', async () => {
