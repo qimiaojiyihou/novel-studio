@@ -1,3 +1,6 @@
+import { hasDeflectedExchange, sceneUnits } from './reference-dialogue.js'
+import { opposedOutcomeGoals, opposedSigningActions } from './reference-outcomes.js'
+
 // The labels also appear in the scene picker. Match expression, not setting or genre.
 export const voicePurposes = {
   旁白评说: /旁白|叙述者插话|自嘲|顺口评说/,
@@ -117,7 +120,8 @@ function matchScenePurpose(input, purposes) {
     const matches = new Set(purposes.filter(key => !excluded.has(key) && voicePurposes[key].test(target)))
     if (matches.has('判断修正')) matches.delete('关键转折')
     if (matches.size) return matches.size === 1 ? [...matches][0] : ''
-    const probing = purposes.includes('对白试探') && !excluded.has('对白试探') && opposedInformationGoals(target)
+    const probing = purposes.includes('对白试探') && !excluded.has('对白试探') &&
+      sceneUnits(target).some(scene => opposedInformationGoals(scene) || opposedOutcomeGoals(scene) || hasDeflectedExchange(scene) || opposedSigningActions(scene))
     const bargaining = purposes.includes('熟人商量') && !excluded.has('熟人商量') && hasReciprocalGoals(target)
     if (probing && bargaining) return ''
     if (probing) return '对白试探'

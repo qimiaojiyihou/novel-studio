@@ -555,3 +555,57 @@ test('a newly imported evasive exchange reaches the writing prompt from opposed 
   for (const other of ['她想知道是谁来过。', '她想弄清是谁来过，但也想瞒住消息。',
     '掌柜想核实消息，伙计不想瞒住事实。', request + '不要写对白。', request + '避免试探。']) assert.equal(pick(other), false)
 })
+
+test('opposed outcomes for a shared record or notice select a probing passage in the actual prompt', () => {
+  const samples = [{ main: true, use: '底色', text: '底色样本' }, { use: '对白试探', text: '问句后岔开话的样本' }]
+  const costume = '县剧团的服装库明早交接。青缎戏衣的木架空着。小陶希望下班前能在领用单上填上一个名字。门房许伯的外孙昨晚穿着那件戏衣去拍毕业照了。许伯只盼外孙把衣裳送回来时，领用单上那一格还空着。'
+  const selected = (sceneInstruction, task = 'chapter', library = { samples }) => {
+    const result = compilePrompt({ task, sceneInstruction, promptContext: { voiceLibrary: library } })
+    const sent = result.messages.some(m => m.content.includes(samples[1].text))
+    assert.equal(sent, result.snapshot.voiceSamples.some(s => s.use === '对白试探'))
+    return sent
+  }
+  for (const text of [costume, '一个要填名字、一个要留空。', '小叶希望留空，老李要填名字。',
+    '老秦希望让末班船靠岸，阿珍只盼让末班船先别靠岸。',
+    '阿琪希望名单只供内部。阿恒想把名单贴出去。', '小叶想在回执上签字。老周希望那一栏空着。']) {
+    for (const task of ['chapter', 'rewrite']) assert.equal(selected(text, task), true, text)
+  }
+  for (const text of [costume + '全程沉默。', '老秦希望让末班船靠岸，阿珍只盼让巡逻船先别靠岸。', '小叶想在领用单上填名字。老周希望借用单留空。',
+    '小叶希望在工时单上填名字。老周希望报销单上那一格还空着。',
+    '小叶希望填名字。老周希望木架空着。', '小叶想在回执上填日期。老周希望回执的姓名栏空着。',
+    '小叶想在回执上签字。小叶也希望回执留空。', '小叶想填名字。她又希望留空。',
+    '小陶想在领用单上填名字。许伯也希望领用单上填名字。', '小陶不想在领用单上填名字。许伯希望领用单留空。',
+    '老李要填名字。第二天一早，雨停了。小叶希望留空。', '老李想在回执上填名字。旧照片夹在回执里。回执还是空白。']) {
+    assert.equal(selected(text), false, text)
+  }
+  assert.equal(selected(costume, 'chapter', { samples, purpose: 'base' }), false)
+  assert.equal(selected(costume, 'chapter', { samples: samples.slice(0, 1) }), false)
+})
+
+test('local scene, document ownership and the actual answer constrain probing in writing and revision', () => {
+  const probe = '专用于问答节奏的连续片段'
+  const samples = [{ main: true, use: '底色', text: '通用片段' }, { use: '对白试探', text: probe }]
+  const costume = '小陶拔了笔帽，把领用单转向许伯：“昨晚谁拿的？”许伯把单子推回来：“衣裳五点就到。”'
+  const ferry = '河渡站最后一班船就要走了。阿岑把一把旧伞递到窗口：“昨晚是谁把它送来的？”老杜把伞推回来：“末班船六点开。”窗外响起第一声汽笛。'
+  const positive = ['小陶想在单子上记下经手人，许伯想等衣裳回来就把这一页揭过去。',
+    '小陶希望在一号库的领用单上填名字，许伯希望一号库的领用单那一格留空。', costume, ferry,
+    '小陶指着一号库的领用单的签名栏。许伯把一号库的领用单原样推回。']
+  const negative = ['小陶希望在一号库的领用单上填名字，许伯希望二号库的领用单那一格留空。',
+    '小陶希望在师姐的领用单上填名字，许伯希望师兄的领用单留空。',
+    '一号库里，小陶希望在领用单上填名字。二号库里，许伯希望领用单留空。',
+    '小陶希望在领用单上填名字。第二天，在另一个县的剧团里，老周希望领用单留空。',
+    '小陶希望在领用单上填名字。另一边，许伯希望领用单留空。',
+    costume.replace('衣裳五点就到', '是张师傅五点拿的'), ferry.replace('末班船六点开', '是卖早点的陈姐送来的'),
+    ferry.replace('末班船六点开', '老李六点送来的'), ferry.replace('老杜', '阿岑'), ferry.replace('老杜', '次日，老杜'),
+    '小陶指着一号库的领用单的签名栏。许伯把二号库的领用单原样推回。',
+    '小陶指着领用单的签名栏。许伯把签好的领用单推回。', ferry + '全程沉默。']
+  for (const task of ['chapter', 'rewrite']) {
+    for (const [expected, scenes] of [[true, positive], [false, negative]]) {
+      for (const scene of scenes) {
+        const result = compilePrompt({ task, sceneInstruction: scene, promptContext: { voiceLibrary: { samples } } })
+        assert.equal(result.snapshot.voiceSamples.some(s => s.use === '对白试探'), expected, scene)
+        assert.equal(result.messages.some(m => m.content.includes(probe)), expected, scene)
+      }
+    }
+  }
+})

@@ -1,3 +1,5 @@
+import { dialogueTurns, connected } from './reference-dialogue.js'
+
 // Match evidence in the prose itself. The writing prompt has a separate vocabulary
 // for matching an author's instructions to these same purposes.
 const evidence = {
@@ -20,22 +22,6 @@ const terms = /只要|条件是|除非|前提是|得先|你得|不过.{0,12}(?:�
 const assent = /^(?:那(?:就)?|嗯[，,])?(?:也行|行啊|行吧|行[，。！!]|成[，。！!]|好[，。！!]|好啊|可以[，。！!]|没问题|就这么办|一言为定|说定了|成交)|那就这么|我答应/
 // A concrete undertaking can accept a condition without an explicit yes.
 const undertaking = /^(?:那|嗯[，,])?(?:我|我们|咱们)(?:今晚|今早|明早|明天|这就|马上|现在就|一定会|保证|负责)/
-const topicBreak = /^(?:对了[，,]|换个话题|说到别的)|(?:第二天|次日|几天后|话题一转|转过天)/
-
-function dialogueTurns(chunk) {
-  return Array.from(chunk.matchAll(/“([^“”\n]{1,350})”|「([^「」\n]{1,350})」|『([^『』\n]{1,350})』|"([^"\n]{1,350})"/gu), match => ({
-    start: match.index, end: match.index + match[0].length, words: (match[1] ?? match[2] ?? match[3] ?? match[4]).trim(),
-  }))
-}
-
-function connected(chunk, a, b) {
-  if (b.start - a.end > 100) return false
-  const gap = chunk.slice(a.end, b.start)
-  // A speech tag inside one line often splits one speaker's sentence into two quotes.
-  if (!gap.includes('\n') && /(?:说|道|答|接着|继续)[^。！？]{0,8}[，,]$/u.test(gap.trim())) return false
-  return !/(?:^|\n)\s*[*＊—-]{3,}\s*(?:\n|$)/u.test(gap) && !topicBreak.test(gap) && !topicBreak.test(b.words)
-}
-
 function negotiationSample(chunk, label, turns) {
   let best
   for (let i = 0; i < turns.length - 1; i++) {
