@@ -505,3 +505,28 @@ test('file import selects continuous passages and immediately uses them in writi
   const later = r.importBooks('a', [{ ...imported, text: prose + '。' }])
   assert.ok(!later.settings.voiceBook)
 })
+
+test('writing and rewrite prompts infer an exchange from goals while preserving exclusions, priority and project choices', () => {
+  const samples = [{ main: true, use: '底色', text: '通用底色原文' },
+    { use: '熟人商量', text: '自动选出的帮工对白' }, { use: '判断修正', text: '修正判断的原文' }]
+  const pick = (instruction, changes = {}, library = { samples }) => {
+    const output = compilePrompt({ task: 'chapter', sceneInstruction: instruction,
+      promptContext: { voiceLibrary: library }, ...changes })
+    const used = output.snapshot.voiceSamples.map(sample => sample.use)
+    assert.equal(output.messages.some(m => m.content.includes(samples[1].text)), used.includes('熟人商量'))
+    return used.slice(1)
+  }
+  const goals = '社区旧书摊，两元一本。林沅第一次值摊，想在天黑前收好摊子，把三箱书送上三楼。熟人阿庆想帮她一把，也想把摊上那本厚词典带回家。'
+  assert.deepEqual(pick(goals, { chapter: { card: { goal: '改口' } } }), ['熟人商量'])
+  assert.deepEqual(pick('小乔想借走摄影棚的灯，愿意替剧组值夜作为交换。', { task: 'rewrite' }), ['熟人商量'])
+  assert.deepEqual(pick('摆渡人缺个掌舵的。她愿意替他掌舵，只求能搭到河对岸。'), ['熟人商量'])
+  assert.deepEqual(pick('船工想借走码头的手推车，也愿意替人卸货。'), ['熟人商量'])
+  assert.deepEqual(pick('按本章卡写', { chapter: { card: { goal: '阿宁肯顶班，但希望换来一天假。' } } }), ['熟人商量'])
+  assert.deepEqual(pick(goals + '重点写重新判断。'), ['判断修正'])
+  for (const text of [goals + '不要写商量。', '他想帮她搬东西。另一人想借走工具。',
+    '小乔不想帮剧组，也想借走摄影机。', '他肯顶班，也想早点睡。', '她一心想把词典带回家。']) {
+    assert.deepEqual(pick(text), [])
+  }
+  assert.deepEqual(pick(goals, {}, { samples, purpose: 'base' }), [])
+  assert.deepEqual(pick(goals, {}, { samples: [samples[0]] }), [])
+})

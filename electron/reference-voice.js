@@ -51,6 +51,39 @@ function excludedPurposes(input, targets) {
   return excluded
 }
 
+// A contribution and a linked personal objective give the characters something
+// to settle. Keep the two signals local so unrelated goals in a chapter do not pair.
+const contribution = /(?:愿意|肯|打算|可以|主动|想要?|希望)\s*(?:先|去|顺手|留下来)?(?:帮|替|搭把手|出力|出钱|顶班|接班|代班|接手|承担|借出|借给|让出|留下帮忙)/
+const benefit = /拿到|得到|拿走|带走|借到|借用|借走|想借|想买|想要(?:那|这)|买下|买走|换来|换到|换回|换取|争取|分到|带回|拿回|留给自己|(?:请|让|要)对方/
+const linkedWish = /(?:也|又|还|同时|但|却|不过|只是|顺便)(?:也|还)?(?:想要?|希望|打算|盼着)|作为回报|作为交换|好换|以换|为的是/
+const returnCondition = /^(?:作为回报|作为交换|前提是|只求|只要对方|条件是)/
+const exchange = /作为回报|作为交换|换取|换来|才肯|才愿意/
+const negativeGoal = /不(?:再)?(?:想|肯|愿|打算|希望|准备)|无意|不求|不指望|没打算|拒绝|用不着/
+
+function hasReciprocalGoals(target) {
+  for (const sentence of target.split(/[。！？!?；;\n"]/u)) {
+    const clauses = sentence.split(/[，,]/u)
+    for (const [i, clause] of clauses.entries()) {
+      const offer = contribution.exec(clause)
+      if (!offer || negativeGoal.test(clause)) continue
+      // The helper may state their own wish in the same clause or continue
+      // it after a comma. A new, unrelated subject does not establish a link.
+      const tail = clause.slice(offer.index + offer[0].length)
+      const link = linkedWish.exec(tail)
+      const next = clauses[i + 1]?.trim() || ''
+      const wish = link ? tail.slice(link.index) : next
+      if (!negativeGoal.test(wish) && (returnCondition.test(wish) || (wish.search(linkedWish) === 0 && benefit.test(wish)))) return true
+
+      // Conversely, someone can first ask for something and offer a service in return.
+      const previous = clauses[i - 1] || ''
+      const continuesSameGoal = /^(?:也|还|为此|因此|于是)?(?:愿意|肯|主动)/u.test(clause.trimStart())
+      if (/想|希望|盼|需要/.test(previous) && !negativeGoal.test(previous) &&
+        (exchange.test(clause) || (continuesSameGoal && benefit.test(previous)))) return true
+    }
+  }
+  return false
+}
+
 // Current instructions take precedence over earlier plans. A revised judgment is
 // a more precise cue than a generic turning point; unrelated ties stay unresolved.
 function matchScenePurpose(input, purposes) {
@@ -60,6 +93,7 @@ function matchScenePurpose(input, purposes) {
     const matches = new Set(purposes.filter(key => !excluded.has(key) && voicePurposes[key].test(target)))
     if (matches.has('判断修正')) matches.delete('关键转折')
     if (matches.size) return matches.size === 1 ? [...matches][0] : ''
+    if (purposes.includes('熟人商量') && !excluded.has('熟人商量') && hasReciprocalGoals(target)) return '熟人商量'
   }
   return ''
 }
