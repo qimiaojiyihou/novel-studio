@@ -81,6 +81,7 @@ function sourceLabel(source) {
     'ai-rewrite-accepted': '局部候选已接受',
     'before-manuscript-format': '正文排版前',
     'before-version-restore': '版本恢复前',
+    'conflict-draft': '冲突时保留的编辑稿',
   }[source] || source || '历史版本'
 }
 

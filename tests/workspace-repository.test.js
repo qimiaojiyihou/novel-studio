@@ -219,6 +219,27 @@ test('restoring a revision atomically preserves the current manuscript', () => {
   database.close()
 })
 
+test('a stale editor draft can be preserved as a revision without replacing the newer manuscript', () => {
+  const { database, repository } = testRepository()
+  const workspace = repository.createProject({ title: '并发正文' })
+  const chapterId = workspace.chapters[0].id
+  repository.updateChapter({ id: chapterId, manuscript: '原正文' })
+  const editorDraft = '原正文加上手工修改'
+  repository.updateChapter({ id: chapterId, manuscript: '创作任务的新正文', expectedManuscript: '原正文' })
+
+  assert.throws(
+    () => repository.updateChapter({ id: chapterId, manuscript: editorDraft, expectedManuscript: '原正文' }),
+    /正文已被另一创作任务更新/,
+  )
+  repository.createRevision({ chapterId, content: editorDraft, source: 'conflict-draft' })
+  assert.equal(repository.loadWorkspaceSnapshot(workspace.project.id).chapters[0].manuscript, '创作任务的新正文')
+  assert.equal(repository.listRevisions(chapterId)[0].content, editorDraft)
+
+  repository.updateChapter({ id: chapterId, manuscript: '人工合并正文', expectedManuscript: '创作任务的新正文' })
+  assert.equal(repository.loadWorkspaceSnapshot(workspace.project.id).chapters[0].manuscript, '人工合并正文')
+  database.close()
+})
+
 test('a revision from another chapter cannot be restored', () => {
   const { database, repository } = testRepository()
   const workspace = repository.createProject({ title: '归属测试' })

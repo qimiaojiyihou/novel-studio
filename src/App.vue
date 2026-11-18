@@ -20,7 +20,7 @@
           <span class="status-dot"></span>{{ runtimeLabel }}
         </span>
         <span class="save-label" :class="saveState">{{ saveLabel }}</span>
-        <button v-if="externalChange" type="button" class="topbar-tool" @click="refreshExternalWorkspace">本书任务有更新</button>
+        <button v-if="externalChange" type="button" class="topbar-tool" @click="refreshExternalWorkspace">{{ isDirty ? '处理正文冲突' : '本书任务有更新' }}</button>
         <button v-if="inlineRunId" class="topbar-tool inline-run-top-button" :class="inlineRunStatus" title="打开当前 Agent 就地任务" @click="inlinePanelOpen = true"><AppIcon name="codex" :size="15" /><span>{{ creativeAgentLabel(inlineRun?.modelRoutes?.agentProvider) }}</span></button>
         <button class="topbar-tool story-change-top-button" :class="storyChangeRunStatus" title="设定联动修改与历史" @click="openStoryChangeHistory"><AppIcon name="change" :size="15" /><span>联动</span></button>
         <button class="topbar-tool quality-top-button" title="创作质量中心" @click="qualityCenterOpen = true"><AppIcon name="quality" :size="15" /><span>质检</span></button>
@@ -486,6 +486,18 @@
       @close="versionsOpen = false"
       @restore="restoreVersion"
     />
+    <ManuscriptConflict
+      v-if="manuscriptConflict.visible"
+      :chapter-title="manuscriptConflict.chapterTitle"
+      :local-text="manuscriptConflict.localText"
+      :latest-text="manuscriptConflict.latestText"
+      :backup-ready="manuscriptConflict.backupReady"
+      :latest-ready="manuscriptConflict.latestReady"
+      :busy="manuscriptConflict.busy"
+      :error="manuscriptConflict.error"
+      @keep-editing="keepConflictDraft"
+      @load-latest="loadLatestAfterConflict"
+    />
     <div v-if="newProjectOpen" class="project-dialog-backdrop" @mousedown.self="newProjectOpen = false">
       <form class="project-dialog project-brief-dialog" @submit.prevent="createNewProject">
         <span class="eyebrow copper">NEW MANUSCRIPT</span>
@@ -618,6 +630,7 @@ import ModelSettings from './components/ModelSettings.vue'
 import { boundChapterDetails, chapterChineseCount } from './utils/chapter-catalog.js'
 import NovelEditor from './components/NovelEditor.vue'
 import ManuscriptFormatMenu from './components/ManuscriptFormatMenu.vue'
+import ManuscriptConflict from './components/ManuscriptConflict.vue'
 import ProjectBriefFields from './components/ProjectBriefFields.vue'
 import QualityCenter from './components/QualityCenter.vue'
 import { composeGenerationCandidate } from './utils/generation-intents.js'
@@ -862,6 +875,19 @@ let closeRequestCleanup = null
 let runtimeInfoCleanup = null
 let creativeChangeCleanup = null
 const externalChange = ref(false)
+const manuscriptConflict = reactive({
+  visible: false,
+  projectId: '',
+  chapterId: '',
+  chapterTitle: '',
+  localText: '',
+  latestText: '',
+  backupReady: false,
+  latestReady: false,
+  busy: false,
+  error: '',
+})
+let conflictBackup = { chapterId: '', content: '' }
 let closeInProgress = false
 let activeGeneration = null
 let confirmationRunner = null
@@ -998,9 +1024,83 @@ async function refreshWorkspaceFromAgent() {
 }
 
 watch(() => project.id, () => { externalChange.value = false })
+async function prepareManuscriptConflict(chapterId = activeChapter.value?.id, content = editorText.value) {
+  if (!chapterId || manuscriptConflict.busy) return
+  const projectId = project.id
+  Object.assign(manuscriptConflict, {
+    visible: true,
+    projectId,
+    chapterId,
+    chapterTitle: activeChapter.value?.title || '当前章节',
+    localText: content,
+    latestText: '',
+    backupReady: false,
+    latestReady: false,
+    busy: true,
+    error: '',
+  })
+  try {
+    if (conflictBackup.chapterId !== chapterId || conflictBackup.content !== content) {
+      await appService.createRevision({ chapterId, content, source: 'conflict-draft' })
+      conflictBackup = { chapterId, content }
+    }
+    manuscriptConflict.backupReady = true
+    const loaded = await appService.loadWorkspaceSnapshot(projectId)
+    const latest = loaded.chapters.find(chapter => chapter.id === chapterId)
+    if (!latest) throw new Error('最新项目中已找不到这一章，请先保留编辑稿')
+    manuscriptConflict.latestText = latest.manuscript || ''
+    manuscriptConflict.latestReady = true
+  } catch (error) {
+    manuscriptConflict.error = `读取冲突版本失败：${error.message}。当前编辑稿仍在编辑器中。`
+  } finally {
+    manuscriptConflict.busy = false
+  }
+}
+
+function keepConflictDraft() {
+  if (manuscriptConflict.busy) return
+  manuscriptConflict.visible = false
+  showToast(manuscriptConflict.backupReady ? '当前编辑稿已存入版本历史，仍留在编辑器中' : '当前编辑稿仍留在编辑器中，请另存备份')
+}
+
+async function loadLatestAfterConflict() {
+  if (!manuscriptConflict.backupReady || !manuscriptConflict.latestReady || manuscriptConflict.busy) return
+  manuscriptConflict.busy = true
+  manuscriptConflict.error = ''
+  try {
+    const { projectId, chapterId, latestText } = manuscriptConflict
+    const loaded = await appService.loadWorkspaceSnapshot(projectId)
+    const latest = loaded.chapters.find(chapter => chapter.id === chapterId)
+    if (!latest) throw new Error('最新项目中已找不到这一章')
+    if ((latest.manuscript || '') !== latestText) {
+      manuscriptConflict.latestText = latest.manuscript || ''
+      manuscriptConflict.error = '创作任务又更新了正文。请重新核对右侧最新版本，再点击读取。'
+      return
+    }
+    if (project.id !== projectId || activeChapter.value?.id !== chapterId || editorText.value !== manuscriptConflict.localText) {
+      throw new Error('当前编辑稿已变化，请重新打开冲突对比')
+    }
+    const view = workspaceView.value
+    applyWorkspace(loaded)
+    activeChapterId.value = chapterId
+    workspaceView.value = view
+    externalChange.value = false
+    manuscriptConflict.visible = false
+    showToast('已读取最新正文；原编辑稿保存在版本历史中，可核对后合并')
+  } catch (error) {
+    manuscriptConflict.error = `读取最新正文失败：${error.message}。当前编辑稿仍在编辑器中。`
+  } finally {
+    manuscriptConflict.busy = false
+  }
+}
+
 async function refreshExternalWorkspace() {
-  if (isDirty.value || saveState.value === 'saving') {
-    showToast('当前编辑稿有待保存修改，请先核对并保存，再读取任务更新')
+  if (saveState.value === 'saving') {
+    showToast('正在保存正文，请稍候')
+    return
+  }
+  if (isDirty.value) {
+    await prepareManuscriptConflict()
     return
   }
   const projectId = project.id, chapterId = activeChapterId.value, view = workspaceView.value
@@ -1703,9 +1803,9 @@ async function saveManuscript({ createRevision = true, source = 'manual-save', f
   }
   saveState.value = 'saving'
   savePromise = (async () => {
+    const chapterId = activeChapter.value.id
+    const content = editorText.value
     try {
-      const chapterId = activeChapter.value.id
-      const content = editorText.value
       const updated = await appService.updateChapter({ id: chapterId, manuscript: content, expectedManuscript:activeChapter.value.manuscript || '' })
       replaceChapter(updated)
       if (createRevision || forceRevision) {
@@ -1717,7 +1817,12 @@ async function saveManuscript({ createRevision = true, source = 'manual-save', f
       return true
     } catch (error) {
       saveState.value = 'error'
-      showToast(`保存失败：${error.message}`)
+      if (String(error.message || '').includes('正文已被另一创作任务更新')) {
+        externalChange.value = true
+        await prepareManuscriptConflict(chapterId, activeChapter.value?.id === chapterId ? editorText.value : content)
+      } else {
+        showToast(`保存失败：${error.message}`)
+      }
       throw error
     }
   })()
