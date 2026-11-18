@@ -50,6 +50,12 @@ export function localVoiceFocus(input) {
   return (sceneUnits(left).at(-1) || '') + (sceneUnits(right)[0] || '')
 }
 
+function sceneEvidence(scene) {
+  if (typeof scene === 'string') return scene
+  return [scene.title, scene.entryState, scene.goal, scene.obstacle, ...(scene.actionBeats || []),
+    scene.turn, scene.exitState, scene.result].filter(Boolean).join('。')
+}
+
 function writingScopes(input) {
   const instruction = input.sceneInstruction ?? input.instruction ?? ''
   const focus = localVoiceFocus(input)
@@ -64,10 +70,7 @@ function writingScopes(input) {
   if (Array.isArray(scenes) && scenes.length) {
     return scenes.flatMap((scene, i) => scene ? [{
       label: `第${i + 1}场${scene.title ? ' · ' + scene.title : ''}`,
-      targets: [scenes.length === 1 ? instruction : '', typeof scene === 'string' ? scene : [
-        scene.title, scene.entryState, scene.goal, scene.obstacle, ...(scene.actionBeats || []),
-        scene.turn, scene.exitState, scene.result,
-      ].filter(Boolean).join('。')],
+      targets: [scenes.length === 1 ? instruction : '', sceneEvidence(scene)],
     }] : [])
   }
   return [{ targets: [instruction, input.sourceText, plan.legacyNotes || plan.summary,
@@ -205,6 +208,14 @@ function bestSample(candidates, use, evidence) {
     if (score > bestScore) { best = sample; bestScore = score }
   }
   return best
+}
+
+export function selectSceneSample(library, input, scene) {
+  if (!library) return null
+  const evidence = sceneEvidence(scene)
+  const use = matchScenePurpose(input, [evidence])
+  if (!use || (Object.hasOwn(voicePurposes, library.purpose) && library.purpose !== use) || library.purpose === 'base') return null
+  return bestSample(library.samples, use, evidence) || null
 }
 
 export function selectVoiceSamples(library, input) {

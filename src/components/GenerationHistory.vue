@@ -30,7 +30,7 @@
             <div class="proof-heading">
               <div>
                 <span class="proof-status" :class="record.status">{{ statusLabel(record.status) }}</span>
-                <strong>{{ taskLabel(record.task) }}</strong>
+                <strong>{{ taskLabel(record.task) }}{{ record.promptSnapshot?.scene ? ` · 第${record.promptSnapshot.scene.number}场 · ${record.promptSnapshot.scene.title}` : record.promptSnapshot?.sceneCount ? ` · ${record.promptSnapshot.sceneCount}场合稿` : '' }}</strong>
                 <small v-if="record.retryOfId">重试稿</small>
               </div>
               <time>{{ formatTime(record.createdAt) }}</time>
@@ -50,10 +50,15 @@
                 <div><dt>提示词模板</dt><dd>{{ record.promptSnapshot?.template?.name || record.promptTemplateId || '内置模板' }} · v{{ record.promptTemplateVersion || 1 }}</dd></div>
                 <div v-if="sentRules(record)"><dt>本次发送的参考规则</dt><dd><ul v-if="sentRules(record).length"><li v-for="rule in sentRules(record)" :key="rule">{{ rule }}</li></ul><span v-else>本次提示词未附参考规则</span></dd></div>
                 <div v-if="record.promptSnapshot?.detailDirection"><dt>本场详略</dt><dd>{{ record.promptSnapshot.detailDirection.replace(/^【本场详略】/, '') }}</dd></div>
+                <div v-if="record.promptSnapshot?.scene && !record.promptSnapshot.voiceSamples?.length"><dt>本场参考原文</dt><dd>无匹配选段</dd></div>
                 <div v-if="record.promptSnapshot?.voiceSamples?.length"><dt>本次文风选段</dt><dd v-for="(sample, index) in record.promptSnapshot.voiceSamples" :key="index">{{ sample.use }} · 《{{ sample.title }}》{{ sample.label }}{{ sample.scenes?.length ? ' · ' + sample.scenes.join('、') : '' }}</dd></div>
                 <div><dt>采样参数</dt><dd><code>{{ compactJson(record.parameters) }}</code></dd></div>
                 <div v-if="record.events?.length"><dt>执行轨迹</dt><dd>{{ eventSummary(record.events) }}</dd></div>
               </dl>
+              <details v-if="record.promptSnapshot?.scene" class="scene-request">
+                <summary>查看本场请求内容</summary>
+                <pre v-for="(message, index) in record.promptSnapshot.messages" :key="index">{{ message.content }}</pre>
+              </details>
             </details>
           </div>
           <div class="proof-actions">
@@ -145,10 +150,11 @@ function eventSummary(events) {
 }
 
 function canRetry(record) {
-  return record.status !== 'pending' && record.task !== 'rewrite' && Boolean(record.request?.task && record.request?.projectId)
+  return !record.promptSnapshot?.sceneCount && record.status !== 'pending' && record.task !== 'rewrite' && Boolean(record.request?.task && record.request?.projectId)
 }
 
 function retryTitle(record) {
+  if (record.promptSnapshot?.sceneCount || record.promptSnapshot?.scene) return '请从章节写作入口重新生成'
   if (record.status === 'pending') return '任务仍在执行'
   if (record.task === 'rewrite') return '局部重写需要在编辑器中重新选择文字'
   if (!record.request?.task) return '旧记录没有可重试任务快照'
@@ -170,4 +176,5 @@ function retryTitle(record) {
 .proof-meta{display:flex;flex-wrap:wrap;gap:7px 16px;margin:12px 0;color:#8e877f;font-size:11px}.proof-meta span:not(:last-child):after{content:"/";margin-left:16px;color:#4e4943}.proof-excerpt,.proof-error{margin:0;color:#c1bab1;font-size:12px;line-height:1.6}.proof-error{color:#e28a79}.proof-details{margin-top:13px;color:#8e877f;font-size:11px}.proof-details summary{cursor:pointer;color:#b99574}.proof-details dl{margin:12px 0 0;padding:12px 14px;background:#1e1d1b}.proof-details dl div{display:grid;grid-template-columns:86px 1fr;gap:12px;margin:7px 0}.proof-details dt{color:#756f68}.proof-details dd{margin:0;color:#aaa39a;word-break:break-word}.proof-details code{white-space:normal;color:#b7ad9f}
 .proof-actions{border-left:1px solid #3d3934;display:flex;align-items:center;justify-content:center}.proof-actions button{border:1px solid #71523a;background:#3b2d23;color:#dfb185;padding:9px 12px;cursor:pointer;font-size:12px}.proof-actions button:disabled{border-color:#4c4843;background:#2a2927;color:#68635d;cursor:not-allowed}
 @media (max-width:760px){.history-backdrop{padding:0}.history-panel{width:100vw;height:100vh}.history-header{padding:22px}.history-body,.history-filters{padding-left:16px;padding-right:16px}.proof-row{grid-template-columns:32px 1fr}.proof-actions{grid-column:2;border:0;justify-content:flex-start;padding:0 18px 18px}.proof-heading time{display:none}}
+.scene-request pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 32rem; overflow: auto; font: inherit; }
 </style>

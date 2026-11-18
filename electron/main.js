@@ -1,3 +1,4 @@
+import { chapterWritingScenes, compileChapterScene } from './chapter-scene-writing.js'
 import { selectVoiceSamples, voicePassage } from './reference-voice.js'
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell, safeStorage } from 'electron'
 import { createReaderPublisher } from './reader-publisher.js'
@@ -767,13 +768,18 @@ async function prepareCodexPrompt({ run, step, extra = {} }) {
   compiled.snapshot.continuationPromptHash = continuationMessages
     ? createHash('sha256').update(JSON.stringify(continuationMessages)).digest('hex')
     : ''
+  const scenes = chapterWritingScenes(promptInput, agentProvider, step)
+  const previousEnding = scenes.length ? workspace.chapters.find(item => item.chapter_no === chapter.chapter_no - 1)?.manuscript?.slice(-1800) || '' : ''
+  // The parent is a local assembly record. Only its children are model requests.
+  const recordSnapshot = scenes.length ? { schemaVersion: compiled.snapshot.schemaVersion, template: compiled.snapshot.template,
+    sceneCount: scenes.length, messages: [], referenceRules: [], voiceSamples: [], estimatedChars: 0 } : compiled.snapshot
   const generationRecord = startGenerationRecord({
     taskId: `codex-${run.id}-${step.id}-${Date.now()}`,
     projectId: run.projectId,
     chapterId: run.chapterId,
     task: step.task,
     model: { provider: codexRunSettings.agentProvider, name: `${agentLabel} Agent`, model: codexRunSettings.model },
-    promptSnapshot: compiled.snapshot,
+    promptSnapshot: recordSnapshot,
     request: {
       task: step.task,
       projectId: run.projectId,
@@ -795,7 +801,21 @@ async function prepareCodexPrompt({ run, step, extra = {} }) {
     retryOfId: extra.structuredRepair?.retryOfGenerationId || null,
   })
   return {
-    messages: executionMessages,
+    sceneCount: scenes.length,
+    prepareScene: scenes.length ? (index, preceding, retryOfId) => {
+      const snapshot = compileChapterScene({ input: promptInput, scenes, index, previousEnding, preceding, targetLength: lengthRange?.target })
+      const sceneTitle = `${displayTitle} · 第${index + 1}场 ${snapshot.scene.title}`
+      snapshot.outputSchema = compiled.snapshot.outputSchema
+      snapshot.displayTitle = sceneTitle
+      const sceneRecord = startGenerationRecord({ taskId: `scene-${run.id}-${step.id}-${index}-${Date.now()}`,
+        task: step.task, projectId: run.projectId, chapterId: run.chapterId, model: generationRecord.model,
+        agentRunId: run.id, agentStepId: step.id, executionBackend: 'codex_acp', intent, retryOfId,
+        parentGenerationId: generationRecord.id, promptSnapshot: snapshot,
+        request: { projectId: run.projectId, chapterId: run.chapterId, sceneNumber: index + 1 } })
+      return { isolatedScene: true, displayTitle: sceneTitle,
+        messages: snapshot.messages, continuationMessages: null, generationRecordId: sceneRecord.id, promptSnapshot: snapshot }
+    } : undefined,
+    messages: scenes.length ? [] : executionMessages,
     continuationMessages,
     outputSchema: inlineAction?.conversationMode === 'discuss' ? { type: 'object', required: ['text'], properties: { text: { type: 'string' } } }
       : inlineAction?.patchSource && inlineAction.modificationScope?.kind !== 'whole' ? TEXT_PATCH_SCHEMA
@@ -810,7 +830,7 @@ async function prepareCodexPrompt({ run, step, extra = {} }) {
       : (codexRunSettings.authMethod === 'environment' ? 'api-key' : 'chat-gpt'),
     displayTitle,
     generationRecordId: generationRecord.id,
-    promptSnapshot: compiled.snapshot,
+    promptSnapshot: recordSnapshot,
   }
 }
 
@@ -834,6 +854,9 @@ async function completeCodexGeneration({ prepared, result, error, status, attemp
       fallbackReason: result?.fallbackReason || '',
       contextReuse: result?.contextReuse || 'full',
       usage: result?.usage || {},
+      ...(result?.sceneRecords && { sceneRecords: result.sceneRecords }),
+      ...(result?.sentPromptHash && { sentPromptHash: result.sentPromptHash,
+        sessionFingerprint: result.sessionId ? createHash('sha256').update(result.sessionId).digest('hex') : '' }),
     },
   })
 }

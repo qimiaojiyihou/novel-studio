@@ -561,3 +561,25 @@ test('ACP command permissions reject paths outside the AgentRun mirror before ap
     fs.rmSync(root, { recursive: true, force: true })
   }
 })
+
+test('scene calls use separate empty working directories and never resume a previous transcript', async () => {
+  const { gateway, getNewSessionRequests, getPromptRequests } = createFakeGateway({
+    repository: { getRun: () => ({ session: { sessionId: 'old-session' } }) },
+  })
+  try {
+    for (const text of ['甲场独有样本', '乙场前文']) {
+      const result = await gateway.prompt({ agentRunId: 'run', agentStepId: 'chapter', messages: [{ role: 'user', content: text }],
+        continuationMessages: [{ role: 'user', content: '旧会话' }], settings: { isolatedScene: true, mirrorRoot: '/unused' } })
+      assert.equal(result.contextReuse, 'full')
+      assert.equal(result.sentPromptHash.length, 64)
+    }
+    const sessions = getNewSessionRequests()
+    assert.equal(sessions.length, 2)
+    assert.notEqual(sessions[0].cwd, sessions[1].cwd)
+    assert.ok(sessions.every(s => !fs.existsSync(s.cwd) && s.additionalDirectories.length === 0))
+    const requests = getPromptRequests()
+    assert.notEqual(requests[0].sessionId, requests[1].sessionId)
+    assert.match(requests[1].prompt[0].text, /乙场前文/)
+    assert.doesNotMatch(requests[1].prompt[0].text, /甲场独有样本|旧会话|受控创作目录/)
+  } finally { await gateway.shutdown() }
+})

@@ -494,6 +494,39 @@ export class AgentRuntime {
     }
     if (!mirror) mirror = await this.refreshMirror(run)
     const prepared = await this.prepareCodexPrompt({ run, step, mirror, extra })
+    if (!prepared.sceneCount) return this._sendCodex({ run, step, mirror, prepared, signal, extra })
+    const parts = [], sceneRecords = []
+    let result
+    try {
+      for (let index = 0; index < prepared.sceneCount; index++) {
+        let retryOfId = null
+        for (let attempt = 1; attempt <= 3; attempt++) {
+          if (signal.aborted) throw new CodexCancelledError()
+          const scene = { ...prepared, ...prepared.prepareScene(index, parts.join('\n\n'), retryOfId) }
+          try {
+            result = await this._sendCodex({ run, step, mirror, prepared: scene, signal, extra, attempt })
+            parts.push(result.structuredOutput.manuscript.trim())
+            sceneRecords.push(result.generationRecordId)
+            break
+          } catch (error) {
+            if (error.name !== 'InvalidSceneOutput' || attempt === 3) throw error
+            retryOfId = scene.generationRecordId
+          }
+        }
+      }
+      const manuscript = parts.join('\n\n')
+      const assembled = { backend: result.backend, modelSnapshot: result.modelSnapshot, outputStarted: true,
+        structuredOutput: { manuscript }, content: manuscript, sceneRecords, generationRecordId: prepared.generationRecordId }
+      await this.completeCodexGeneration({ prepared, result: assembled, status: 'completed', attempt: 1 })
+      return assembled
+    } catch (error) {
+      await this.completeCodexGeneration({ prepared, result: { sceneRecords }, error,
+        status: signal.aborted || error.name === 'CodexCancelledError' ? 'cancelled' : 'failed', attempt: 1 })
+      throw error
+    }
+  }
+
+  async _sendCodex({ run, step, mirror, prepared, signal, extra, attempt = extra.structuredRepair?.attempt || 1 }) {
     try {
       const result = await this.codexGateway.prompt({
         agentRunId: run.id,
@@ -506,6 +539,7 @@ export class AgentRuntime {
         // Re-emitting every token as agent:event made assistant views reread
         // the full run on every text fragment.
         settings: {
+          isolatedScene: Boolean(prepared.isolatedScene),
           mirrorRoot: mirror.root,
           workspaceRoot: mirror.workspaceRoot || mirror.root,
           projectId: run.projectId,
@@ -520,7 +554,10 @@ export class AgentRuntime {
         },
       })
       if (signal.aborted) throw new CodexCancelledError()
-      await this.completeCodexGeneration({ prepared, result, status: 'completed', attempt: extra.structuredRepair?.attempt || 1 })
+      if (prepared.isolatedScene && (typeof result.structuredOutput?.manuscript !== 'string' || !result.structuredOutput.manuscript.trim())) {
+        throw Object.assign(new Error('分场写作未返回本场正文'), { name: 'InvalidSceneOutput', codexPartialResult: result })
+      }
+      await this.completeCodexGeneration({ prepared, result, status: 'completed', attempt })
       if (prepared.generationRecordId) result.generationRecordId = prepared.generationRecordId
       result.contextDiagnostics = prepared.promptSnapshot?.contextDiagnostics || null
       return result
@@ -529,8 +566,8 @@ export class AgentRuntime {
         prepared,
         result: error.codexPartialResult || null,
         error,
-        status: error.name === 'CodexCancelledError' ? 'cancelled' : 'failed',
-        attempt: extra.structuredRepair?.attempt || 1,
+        status: signal.aborted || error.name === 'CodexCancelledError' ? 'cancelled' : 'failed',
+        attempt,
       })
       if (prepared.generationRecordId) error.generationRecordId = prepared.generationRecordId
       throw error

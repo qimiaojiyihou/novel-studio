@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { Readable, Writable } from 'node:stream'
@@ -498,14 +499,14 @@ export class CodexAgentGateway {
     return registration
   }
 
-  async createSession({ agentRunId, mirrorRoot, workspaceRoot = '', authMethod = '', backend = this.acpBackend }) {
+  async createSession({ agentRunId, mirrorRoot, workspaceRoot = '', authMethod = '', backend = this.acpBackend, isolatedScene = false }) {
     await this.startAdapter()
     try {
       const directories = sessionDirectories(workspaceRoot, mirrorRoot)
       if (workspaceRoot) await this.ensureDesktopWorkspace({ workspaceRoot: directories.cwd })
       const created = await this.connection.newSession({ ...directories, mcpServers: [] })
       const session = {
-        agentRunId, sessionId: created.sessionId, mirrorRoot, workspaceRoot: directories.cwd, activeStepId: '', onEvent: null,
+        agentRunId, sessionId: created.sessionId, mirrorRoot, isolatedScene, workspaceRoot: directories.cwd, activeStepId: '', onEvent: null,
         events: [], content: '', outputStarted: false, configKey: '', configOptions: created.configOptions || [],
       }
       this.configOptions = session.configOptions
@@ -514,7 +515,7 @@ export class CodexAgentGateway {
       this.repository?.upsertSession?.({
         agentRunId, backend, sessionId: created.sessionId, status: 'active',
         protocolVersion: this.initializeResult?.protocolVersion || '', adapterVersion: this.adapterVersion,
-        capabilities: this.initializeResult?.agentCapabilities || {}, authMethod,
+        capabilities: { ...this.initializeResult?.agentCapabilities, ...(isolatedScene && { isolatedScene: true }) }, authMethod,
       })
       return session
     } catch (error) {
@@ -606,6 +607,16 @@ export class CodexAgentGateway {
   }
 
   async prompt({ agentRunId, agentStepId, messages, continuationMessages = null, outputSchema = null, signal, onEvent = () => {}, allowExecFallback = true, settings = {} }) {
+    if (settings.isolatedScene) {
+      await this.closeSession(agentRunId)
+      const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'novel-scene-session-'))
+      try {
+        return await this.withRuntimeUsage(() => this._prompt({ agentRunId, agentStepId, messages, outputSchema, signal, onEvent, allowExecFallback,
+          settings: { ...settings, mirrorRoot: directory, workspaceRoot: '' } }))
+      } finally {
+        try { await this.closeSession(agentRunId) } finally { fs.rmSync(directory, { recursive: true, force: true }) }
+      }
+    }
     return this.withRuntimeUsage(() => this._prompt({ agentRunId, agentStepId, messages, continuationMessages, outputSchema, signal, onEvent, allowExecFallback, settings }))
   }
 
@@ -621,7 +632,7 @@ export class CodexAgentGateway {
       messages,
       outputSchema,
       displayTitle: settings.displayTitle,
-      mirrorRoot: settings.mirrorRoot,
+      mirrorRoot: settings.isolatedScene ? '' : settings.mirrorRoot,
     })
     const promptText = useContextDelta ? codexPromptText({
       messages: continuationMessages,
@@ -641,9 +652,10 @@ export class CodexAgentGateway {
         permission: `运行 ${this.agentName} 创作步骤：${settings.stepLabel || agentStepId}`,
         payload: { model: settings.model || '', reasoningEffort: settings.reasoningEffort || '', displayTitle: settings.displayTitle || '', promptDigest: createHash('sha256').update(promptText).digest('hex') },
       })
+      if (signal?.aborted) throw new CodexCancelledError()
       if (!session) {
         const persistedSession = this.repository?.getRun?.(agentRunId)?.session || null
-        session = persistedSession?.sessionId && (!collaborativeStage || persistedSession.capabilities?.novelStudioStage === collaborativeStage)
+        session = !settings.isolatedScene && !persistedSession?.capabilities?.isolatedScene && persistedSession?.sessionId && (!collaborativeStage || persistedSession.capabilities?.novelStudioStage === collaborativeStage)
           ? await this.resumeSession({
               agentRunId,
               mirrorRoot: settings.mirrorRoot,
@@ -651,12 +663,12 @@ export class CodexAgentGateway {
               authMethod: settings.authMethod,
               persistedSession,
             })
-          : await this.createSession({ agentRunId, mirrorRoot: settings.mirrorRoot, workspaceRoot: settings.workspaceRoot, authMethod: settings.authMethod })
+          : await this.createSession({ agentRunId, mirrorRoot: settings.mirrorRoot, workspaceRoot: settings.workspaceRoot, authMethod: settings.authMethod, isolatedScene: Boolean(settings.isolatedScene) })
       }
       if (collaborativeStage) {
         session.collaborativeStage = collaborativeStage
         this.repository?.upsertSession?.({ agentRunId, backend: this.acpBackend, sessionId: session.sessionId, status: 'active', closedAt: '',
-          capabilities: { ...this.initializeResult?.agentCapabilities, novelStudioStage: collaborativeStage } })
+          capabilities: { ...this.initializeResult?.agentCapabilities, novelStudioStage: collaborativeStage, ...(settings.isolatedScene && { isolatedScene: true }) } })
       }
       await this._configureSession(session, settings)
       const lockedRun = this.repository?.getRun?.(agentRunId)
@@ -687,6 +699,7 @@ export class CodexAgentGateway {
         const result = {
           schemaVersion: 1,
           backend: this.acpBackend,
+          ...(settings.isolatedScene && { sentPromptHash: createHash('sha256').update(promptText).digest('hex') }),
           sessionId: session.sessionId,
           content: session.content,
           structuredOutput: structuredFromContent(session.content),
@@ -732,12 +745,14 @@ export class CodexAgentGateway {
         const result = await this.runExecFallback({
           agentRunId, agentStepId, prompt: fullPromptText, outputSchema, signal, onEvent,
           mirrorRoot: settings.mirrorRoot || session?.mirrorRoot,
-          workspaceRoot: settings.workspaceRoot || session?.workspaceRoot,
+          workspaceRoot: settings.workspaceRoot || session?.workspaceRoot || settings.mirrorRoot,
+          isolatedWriting: Boolean(settings.isolatedScene),
           model: settings.model || '',
           reasoningEffort: settings.reasoningEffort || '',
           fastMode: Boolean(settings.fastMode),
           fallbackReason: `${error.codexPhase || 'prompt_transport'}: ${error.message}`,
         })
+        if (settings.isolatedScene) result.sentPromptHash = createHash('sha256').update(fullPromptText).digest('hex')
         result.contextReuse = 'full'
         if (approval?.id) this.repository?.completeApproval?.(approval.id, { result: { backend: result.backend, fallbackReason: result.fallbackReason } })
         await this.archiveAutomaticSession(agentRunId)
@@ -828,11 +843,11 @@ export class CodexAgentGateway {
 
   async cancelTurn(agentRunId) {
     const session = this.sessions.get(agentRunId)
-    if (!session?.sessionId || !this.connection) return false
-    await this.connection.cancel({ sessionId: session.sessionId })
     for (const [approvalId, pending] of this.pendingApprovals) {
       if (pending.agentRunId === agentRunId) this._settleApproval(approvalId, false, '运行已取消', true)
     }
+    if (!session?.sessionId || !this.connection) return false
+    await this.connection.cancel({ sessionId: session.sessionId })
     return true
   }
 
@@ -942,7 +957,7 @@ export class CodexAgentGateway {
   async _handlePermissionRequest(params) {
     const agentRunId = this.sessionToRun.get(params.sessionId)
     const session = this.sessions.get(agentRunId)
-    if (!session) return { outcome: { outcome: 'cancelled' } }
+    if (!session || session.isolatedScene) return { outcome: { outcome: 'cancelled' } }
     const kind = classifyTool(params.toolCall)
     try { safeToolLocations(session.mirrorRoot, params.toolCall) } catch (error) {
       this.eventBuffer.push({ agentRunId, agentStepId: session.activeStepId, type: 'permission', summary: '路径越界已拒绝', payload: { kind, error: error.message } })
@@ -971,14 +986,14 @@ export class CodexAgentGateway {
   async _readTextFile(params) {
     const agentRunId = this.sessionToRun.get(params.sessionId)
     const session = this.sessions.get(agentRunId)
-    if (!session) throw new Error('ACP 会话不存在')
+    if (!session || session.isolatedScene) throw new Error('当前会话没有文件访问权限')
     return { content: readMirrorText(session.mirrorRoot, params.path, { maxBytes: Number(params.limit || 2 * 1024 * 1024) }) }
   }
 
   async _writeTextFile(params) {
     const agentRunId = this.sessionToRun.get(params.sessionId)
     const session = this.sessions.get(agentRunId)
-    if (!session) throw new Error('ACP 会话不存在')
+    if (!session || session.isolatedScene) throw new Error('当前会话没有文件访问权限')
     const filePath = resolveMirrorPath(session.mirrorRoot, params.path)
     const relative = path.relative(session.mirrorRoot, filePath)
     const before = fs.existsSync(filePath) ? readMirrorText(session.mirrorRoot, relative) : ''
