@@ -13,8 +13,56 @@ const evidence = {
   轻松打趣: [/打趣|调侃|开玩笑|揶揄|笑骂/, /噗嗤|乐了|笑出声|憋着笑/],
 }
 
+// Read successive quoted turns before splitting prose into fixed-size samples.
+// A question alone is weak evidence: look for an offer followed by terms or assent.
+const offer = /要不|能不能|可不可以|能帮|肯不肯|借我|我替你|我帮你|你帮我|我来(?:搬|拿|做|跑|送|接|付|守|值|开|修|顶|换)|我出(?:钱|力|车|人|一半)|我负责|你负责|你看.{1,14}(?:怎么样|行不行)|换我|算我一个/
+const terms = /只要|条件是|除非|前提是|得先|你得|不过.{0,12}(?:得|要|先)|我可以.{0,15}(?:但|不过)|你先.{1,24}我|我.{1,20}[，,]你来|我.{1,20}[，,]你负责/
+const assent = /^(?:那(?:就)?|嗯[，,])?(?:也行|行啊|行吧|行[，。！!]|成[，。！!]|好[，。！!]|好啊|可以[，。！!]|没问题|就这么办|一言为定|说定了|成交)|那就这么|我答应/
+// A concrete undertaking can accept a condition without an explicit yes.
+const undertaking = /^(?:那|嗯[，,])?(?:我|我们|咱们)(?:今晚|今早|明早|明天|这就|马上|现在就|一定会|保证|负责)/
+const topicBreak = /^(?:对了[，,]|换个话题|说到别的)|(?:第二天|次日|几天后|话题一转|转过天)/
+
+function negotiationSample(chunk, label) {
+  const turns = Array.from(chunk.matchAll(/“([^“”\n]{1,350})”|「([^「」\n]{1,350})」|『([^『』\n]{1,350})』|"([^"\n]{1,350})"/gu), match => ({
+    start: match.index, end: match.index + match[0].length, words: (match[1] ?? match[2] ?? match[3] ?? match[4]).trim(),
+  }))
+  function connected(a, b) {
+    if (b.start - a.end > 100) return false
+    const gap = chunk.slice(a.end, b.start)
+    // A speech tag inside one line often splits one speaker's sentence into two quotes.
+    if (!gap.includes('\n') && /(?:说|道|答|接着|继续)[^。！？]{0,8}[，,]$/u.test(gap.trim())) return false
+    return !/(?:^|\n)\s*[*＊—-]{3,}\s*(?:\n|$)/u.test(gap) && !topicBreak.test(gap) && !topicBreak.test(b.words)
+  }
+  let best
+  for (let i = 0; i < turns.length - 1; i++) {
+    const proposal = turns[i]
+    if (!offer.test(proposal.words) && !terms.test(proposal.words)) continue
+    let hasTerms = terms.test(proposal.words)
+    for (let j = i + 1; j < Math.min(i + 5, turns.length); j++) {
+      const reply = turns[j]
+      if (!connected(turns[j - 1], reply) || reply.end - proposal.start > 600) break
+      const acceptedTerms = hasTerms && undertaking.test(reply.words)
+      hasTerms ||= terms.test(reply.words)
+      if (!assent.test(reply.words) && !acceptedTerms) continue
+      let first = i
+      // Include the initiating question and short reply when they lead into the offer.
+      for (let k = i - 1; k >= Math.max(0, i - 2); k--) {
+        if (!connected(turns[k], turns[k + 1]) || reply.end - turns[k].start > 600) break
+        if (/[？?]/u.test(turns[k].words)) { first = k; break }
+        if (turns[k].words.length > 12) break
+      }
+      const text = chunk.slice(turns[first].start, reply.end)
+      const score = 2 * Number(hasTerms) + Number(first < i) + Number(offer.test(proposal.words)) + Number(terms.test(reply.words))
+      if (text.length >= 24 && (!best || score > best.score)) best = { text, label, score }
+      break
+    }
+  }
+  return best
+}
+
 function proseWindows(text, chapters) {
   const windows = []
+  let negotiation
   const seen = new Set()
   const count = Math.min(chapters.length, 96)
   for (let i = 0; i < count; i++) {
@@ -31,6 +79,8 @@ function proseWindows(text, chapters) {
       }
       else if (chunk.split('\n', 1)[0].replace(/^#+\s*/, '').trim() === chapter.title) chunk = chunk.slice(chunk.indexOf('\n') + 1)
       if (offset + 4800 < length) chunk = chunk.replace(/[^。！？!?\n]*$/u, '')
+      const exchange = negotiationSample(chunk, '自动选段 · ' + chapter.title)
+      if (exchange && (!negotiation || exchange.score > negotiation.score)) negotiation = exchange
       let passage = ''
       function collect() {
         const value = passage.trim()
@@ -51,11 +101,11 @@ function proseWindows(text, chapters) {
       collect()
     }
   }
-  return windows
+  return { windows, negotiation }
 }
 
 export function selectImportExcerpts(text, chapters) {
-  const windows = proseWindows(text, chapters)
+  const { windows, negotiation } = proseWindows(text, chapters)
   if (!windows.length) return []
   const ranks = windows.map(sample => {
     const quotes = (sample.text.match(/[“「『]/g) || []).length
@@ -72,6 +122,11 @@ export function selectImportExcerpts(text, chapters) {
   const result = [{ ...base.sample, use: '底色', primary: true }]
   const taken = new Set([base])
   const purposes = new Set()
+  if (negotiation && negotiation.text !== base.sample.text) {
+    result.push({ text: negotiation.text, label: negotiation.label, use: '熟人商量' })
+    purposes.add('熟人商量')
+    for (const rank of ranks) if (negotiation.text === rank.sample.text) taken.add(rank)
+  }
   const candidates = ranks.flatMap(rank => rank.scored.filter(item => item.score >= 2)
     .map(item => ({ ...item, rank }))).sort((a, b) => b.score - a.score || b.rank.base - a.rank.base)
   for (const { use, rank } of candidates) {
