@@ -347,3 +347,72 @@ test('first draft prioritizes explicit scene links, current facts and real conti
   assert.ok(database.prepare("SELECT length(data_json) AS size FROM planning_entities WHERE id='active-volume'").get().size > 300000)
   assert.equal(database.prepare("SELECT manuscript FROM chapters WHERE id='chapter-5'").get().manuscript, '')
 })
+
+test('scene dependency checks fingerprint huge unsent whole-chapter plans without spending a scene request budget', t => {
+  const { database, repository } = setup()
+  t.after(() => database.close())
+  repository.updateContextProfile({ projectId: 'project-1', maxContextChars: 8000 })
+  const base = { task: 'chapter', intent: 'draft', projectId: 'project-1', chapterId: 'chapter-5', creativePackVersion: '1.3.0' }
+  const update = text => database.prepare("UPDATE projects SET style=? WHERE id='project-1'").run(text)
+  update('限知'.repeat(5000))
+  assert.throws(() => repository.buildGenerationContext(base), /必需事实超出/)
+  const digest = () => repository.buildGenerationContext({ ...base, sceneDependenciesOnly: true }).sources.find(s => s.targetKey === 'project:project-1:style').digest
+  const first = digest()
+  update('限知'.repeat(5000) + '修订')
+  assert.notEqual(digest(), first)
+})
+
+test('scene clue recall selects older open project clues, keeps knowledge boundaries and verifies each short quote', async t => {
+  const { loadSceneForeshadows, selectSceneForeshadows } = await import('../electron/scene-foreshadow.js')
+  const { fitSceneContext } = await import('../electron/scene-context.js')
+  const { database } = setup()
+  t.after(() => database.close())
+  const insert = database.prepare(`INSERT INTO knowledge_items
+    (id,project_id,kind,title,content_json,source_type,source_id,status,position,created_at,updated_at,effective_from_chapter,effective_to_chapter,knowledge_scope_json,evidence_json)
+    VALUES (?,'project-1','foreshadow',?,?,'manual',?,?,1,'a','a',?,?,?,?)`)
+  const old = '商贩收回空碗。\n井沿藏着一枚铜扣，背面錾着半个月牙。\n天黑后马车进了镇。'
+  for (const [id,status,from,to,data] of [
+    ['old','open',1,null,{ sourceChapterNumber: 2, seed: '井沿的铜扣', payoff: '真实来历', dueChapterNo: 501 }],
+    ['other','open',1,null,{ seed: '河口的纸灯', dueChapterNo: 400 }],
+    ['closed','resolved',1,null,{}], ['archived','archived',1,null,{}], ['early','open',430,null,{}],
+    ['expired','open',1,60,{}], ['future','open',1,null,{ sourceChapterId: 'chapter-5' , sourceChapterNumber: 430 }],
+    ['paid','open',1,null,{ payoffChapterNo: 201 }],
+  ]) insert.run(id, id==='other' ? '纸灯' : '井沿铜扣',JSON.stringify(data),id,status,from,to,'{"author":true,"characters":["老林"]}',
+      JSON.stringify([{quote:'假造的引文绝不能发送'},{quote:'背面錾着半个月牙。'}]))
+  const items=loadSceneForeshadows(database,'project-1',400)
+  assert.deepEqual(items.map(c=>c.id).sort(),['old','other'])
+  const positive=selectSceneForeshadows(items,{goal:'他从井沿捞起一枚铜扣，拿给铸工比对。'},400,()=>old)
+  assert.deepEqual(positive.map(c=>c.id),['old'])
+  assert.equal(positive[0].quote,'背面錾着半个月牙。')
+  assert.match(positive[0].text,/老林/)
+  assert.doesNotMatch(positive[0].text,/假造|真实来历|商贩|马车/)
+  assert.deepEqual(selectSceneForeshadows(items,{goal:'徒弟要烘干草席。',presentCharacters:['老林']},400,()=>old),[])
+  const opts={title:'任务',plan:'计划',system:'正文',instructions:[],directions:[],style:'',previous:'',history:'',reference:'',maxChars:8000}
+  const fitted=fitSceneContext({...opts,clues:positive})
+  assert.equal(fitted.clues.length,1)
+  assert.ok(fitted.messages[1].content.includes(positive[0].text))
+  const tight=fitSceneContext({...opts,clues:positive,maxChars:120})
+  assert.equal(tight.clues.length,0)
+  assert.ok(tight.diagnostics.shortened.includes('clues'))
+  assert.doesNotMatch(tight.messages[1].content,/铜扣/)
+})
+
+test('uncarded prose recall requires multiple nearby scene terms and only returns a bounded verbatim passage', async () => {
+  const { createManuscriptRecall } = await import('../electron/scene-foreshadow.js')
+  const clue = '他在渡口掀开竹匣，抠出夹层里压着的一枚铜扣。'
+  const history = new Map(Array.from({ length: 400 }, (_, i) => [i + 1, '账房在门外。他抄完账本便关门了。']))
+  history.set(4, '这是前段。\n他看中的那一角正对沟心，底下黑黑的一道。')
+  history.set(7, '渡口整日有小船出入。\n\n' + clue + '\n天色暗下去。')
+  const recall = createManuscriptRecall(history, ['周师傅'])
+  const scene = { goal: '周师傅要把竹匣的铜扣取出来。' }
+  const hit = recall(scene, [])
+  assert.equal(hit.sourceNo, 7)
+  assert.equal(hit.quote, clue)
+  assert.equal(hit.kind, 'manuscript')
+  assert.equal(recall(scene, [hit]), null)
+  assert.equal(recall({ goal: '周师傅又到了渡口。' }, []), null)
+  assert.equal(recall({ goal: '账房要抄完账本。' }, []), null)
+  assert.equal(recall({ goal: '她要再去摊前看看，想起当初看中的是哪一点。' }, []), null)
+  assert.equal(createManuscriptRecall(new Map([[1, clue]]))(scene, []), null)
+  assert.equal(createManuscriptRecall(new Map([[1, '竹匣' + '。'.repeat(200) + '铜扣']]))(scene, []), null)
+})

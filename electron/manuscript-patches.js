@@ -1,3 +1,4 @@
+import { FORESHADOW_WRITING_RULE } from './chapter-handoff.js'
 import { contentDigest } from './chapter-finalization.js'
 
 export function assertProtectedText(manuscript, protections = []) {
@@ -54,7 +55,7 @@ export function inlineRevisionMessages({ action, context, candidate, isDelta = f
   const protectedRanges = protections.filter(item => item.active !== 0)
     .map(({ start_offset, end_offset }) => ({ from: start_offset, to: end_offset }))
   return [
-    { role: 'system', content: `只修改作者要求涉及的局部，其他原文逐字保留。from/to 使用 UTF-16 偏移，before 必须与原文一致。以本轮原文和局部约束为准，不沿用其他章节的修订要求。遵守选区与保护段落；不扩大到整章。返回结构：${JSON.stringify(TEXT_PATCH_SCHEMA)}` },
+    { role: 'system', content: `${FORESHADOW_WRITING_RULE}只修改作者要求涉及的局部，其他原文逐字保留。from/to 使用 UTF-16 偏移，before 必须与原文一致。以本轮原文和局部约束为准，不沿用其他章节的修订要求。遵守选区与保护段落；不扩大到整章。返回结构：${JSON.stringify(TEXT_PATCH_SCHEMA)}` },
     { role: 'user', content: [
       `作者要求：${action.instruction}`,
       `正式约束${isDelta ? '增量' : ''}：\n${reference}`,

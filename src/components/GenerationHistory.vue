@@ -50,7 +50,13 @@
                 <div><dt>提示词模板</dt><dd>{{ record.promptSnapshot?.template?.name || record.promptTemplateId || '内置模板' }} · v{{ record.promptTemplateVersion || 1 }}</dd></div>
                 <div v-if="sentRules(record)"><dt>本次发送的参考规则</dt><dd><ul v-if="sentRules(record).length"><li v-for="rule in sentRules(record)" :key="rule">{{ rule }}</li></ul><span v-else>本次提示词未附参考规则</span></dd></div>
                 <div v-if="record.promptSnapshot?.detailDirection"><dt>本场详略</dt><dd>{{ record.promptSnapshot.detailDirection.replace(/^【本场详略】/, '') }}</dd></div>
-                <div v-if="record.promptSnapshot?.scene && !record.promptSnapshot.voiceSamples?.length"><dt>本场参考原文</dt><dd>无匹配选段</dd></div>
+                <div v-if="record.promptSnapshot?.recalledClues"><dt>本场发送的旧线索</dt><dd>{{ record.promptSnapshot.recalledClues.map(item => item.title + (item.quote ? '（第' + item.sourceNo + '章短引）' : '')).join('、') || '无' }}</dd></div>
+                <div v-if="record.promptSnapshot?.scene && record.promptSnapshot.contextDiagnostics?.budgetBytes">
+                  <dt>本场请求大小</dt><dd>{{ record.promptSnapshot.contextDiagnostics.usedChars }} / {{ record.promptSnapshot.contextDiagnostics.budgetChars }} 字符 · {{ record.promptSnapshot.contextDiagnostics.usedBytes }} / {{ record.promptSnapshot.contextDiagnostics.budgetBytes }} 字节</dd>
+                </div>
+                <div v-if="record.promptSnapshot?.contextDiagnostics?.shortened?.length"><dt>按预算节选或省略</dt><dd>{{ record.promptSnapshot.contextDiagnostics.shortened.map(key => sceneContextLabels[key] || key).join('、') }}</dd></div>
+                <div v-if="record.promptSnapshot?.execution?.lengthRepairNote"><dt>末场篇幅调整</dt><dd>{{ record.promptSnapshot.execution.lengthRepairNote }}</dd></div>
+                <div v-if="record.promptSnapshot?.scene && !record.promptSnapshot.voiceSamples?.length"><dt>本场参考原文</dt><dd>{{ record.promptSnapshot.contextDiagnostics?.shortened?.includes('reference') ? '匹配选段超出剩余预算，本次已省略' : '无匹配选段' }}</dd></div>
                 <div v-if="record.promptSnapshot?.voiceSamples?.length"><dt>本次文风选段</dt><dd v-for="(sample, index) in record.promptSnapshot.voiceSamples" :key="index">{{ sample.use }} · 《{{ sample.title }}》{{ sample.label }}{{ sample.scenes?.length ? ' · ' + sample.scenes.join('、') : '' }}</dd></div>
                 <div><dt>采样参数</dt><dd><code>{{ compactJson(record.parameters) }}</code></dd></div>
                 <div v-if="record.events?.length"><dt>执行轨迹</dt><dd>{{ eventSummary(record.events) }}</dd></div>
@@ -86,6 +92,7 @@ const props = defineProps({
 
 defineEmits(['close', 'refresh', 'retry'])
 
+const sceneContextLabels = { clues: '旧线索', earlierScenes: '本章较早场景', history: '本章前文', previous: '上一章章尾', style: '本书文风', reference: '参考原文' }
 const activeFilter = ref('all')
 const filters = [
   { id: 'all', label: '全部' },

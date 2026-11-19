@@ -11,7 +11,7 @@ import {
   REFERENCE_WRITING_PROFILE, resolveRewritePreset,
 } from './prompt-templates.js'
 import { planningPromptProfile, renderScenePlan } from './creative-quality.js'
-import { COMPACT_HANDOFF_MODE, COMPACT_HANDOFF_CONTRACT } from './chapter-handoff.js'
+import { COMPACT_HANDOFF_MODE, COMPACT_HANDOFF_CONTRACT, FORESHADOW_WRITING_RULE, FORESHADOW_HANDOFF_RULE } from './chapter-handoff.js'
 import { isShortStory, shortStoryGuidance } from './work-format.js'
 
 function compactJson(value, limit = 12000) {
@@ -307,7 +307,7 @@ function uniqueParts(parts) {
   return [...new Set(parts.map((part) => String(part || '').trim()).filter(Boolean))]
 }
 
-function normalizedTemplate(task, promptContext) {
+export function normalizedTemplate(task, promptContext) {
   const fallback = builtInPromptTemplate(task)
   const candidate = promptContext?.template
   const pack = promptContext?.creativePack
@@ -441,6 +441,7 @@ export function compilePrompt(input = {}) {
     const details = taskDetails(task, input)
     const systemContent = uniqueParts([
       template.content.system,
+      FORESHADOW_HANDOFF_RULE,
       shortStoryGuidance(input.project),
       template.content.outputContract,
       CORE_SYSTEM_RULES,
@@ -533,6 +534,7 @@ export function compilePrompt(input = {}) {
   const systemContent = uniqueParts([
     template.content.system,
     planningProfile?.system,
+    writing && FORESHADOW_WRITING_RULE,
     shortStoryGuidance(input.project),
     template.content.outputContract,
     CORE_SYSTEM_RULES,

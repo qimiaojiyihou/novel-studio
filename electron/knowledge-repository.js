@@ -113,6 +113,63 @@ export function planningEntityFactText(entity, data) {
   return contentText(data, planningEntityFactFields(entity.kind))
 }
 
+function candidateTitle(value, fallback) {
+  const text = cleanText(value, fallback)
+  return text.length > 34 ? `${text.slice(0, 34)}…` : text
+}
+
+function foreshadowDrafts(chapter, payload, threads = []) {
+  const scope = `第 ${chapter.chapter_no} 章《${chapter.title}》`
+  const drafts = []
+  const openForeshadows = [...(payload.foreshadow?.setups || []), ...threads]
+  const seenForeshadows = new Set()
+  for (const value of openForeshadows) {
+    const seed = cleanText(value)
+    if (!seed || seenForeshadows.has(seed)) continue
+    seenForeshadows.add(seed)
+    drafts.push({
+      kind: 'foreshadow', title: candidateTitle(seed, '正文新增伏笔'),
+      content: { seed, ...(typeof value?.evidence === 'string' && { evidence: value.evidence }), promise: '后文需要回应这项信息、异常或未解决问题', notes: `来自${scope}的章后状态提取` }, itemStatus: 'open',
+    })
+  }
+  for (const value of payload.foreshadow?.payoffs || []) {
+    const payoff = cleanText(value)
+    if (!payoff) continue
+    drafts.push({
+      kind: 'foreshadow', title: candidateTitle(`兑现：${payoff}`, '伏笔兑现'),
+      content: { seed: '待与既有伏笔记录核对', payoff, ...(typeof value?.evidence === 'string' && { evidence: value.evidence }), payoffChapterNo: chapter.chapter_no, notes: `来自${scope}；接受后建立一条已回收记录，可再与原伏笔合并。` }, itemStatus: 'resolved',
+    })
+  }
+  return drafts
+}
+
+function insertItemCandidates(database, sourceCandidate, drafts, timestamp, createId) {
+  const insert = database.prepare(`
+    INSERT INTO knowledge_item_candidates (
+      id, project_id, chapter_id, source_candidate_id, kind, title, content_json,
+      item_status, status, position, created_at, updated_at, resolved_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, '')
+  `)
+  drafts.forEach((draft, index) => {
+    insert.run(
+      createId('knowledge-item-candidate'), sourceCandidate.project_id, sourceCandidate.chapter_id,
+      sourceCandidate.id, draft.kind, draft.title, JSON.stringify(draft.content), draft.itemStatus,
+      index + 1, timestamp, timestamp,
+    )
+  })
+}
+
+// Called inside the same transaction as the author's confirmed chapter handoff.
+export function seedFinalizedForeshadows(database, chapter, state, sourceId, timestamp) {
+  const previous = database.prepare(`SELECT item_status, content_json FROM knowledge_item_candidates
+    WHERE project_id=? AND chapter_id=? AND kind='foreshadow'`).all(chapter.project_id, chapter.id)
+  const key = (status, value) => JSON.stringify([status, value.payoff || value.seed, value.evidence])
+  const existing = new Set(previous.map(row => key(row.item_status, parseJson(row.content_json))))
+  const drafts = foreshadowDrafts(chapter, state).filter(draft => !existing.has(key(draft.itemStatus, draft.content)))
+  insertItemCandidates(database, { project_id: chapter.project_id, chapter_id: chapter.id, id: sourceId },
+    drafts, timestamp, prefix => `${prefix}-${randomUUID()}`)
+}
+
 export function createKnowledgeRepository(database, {
   now = () => new Date().toISOString(),
   createId = (prefix) => `${prefix}-${randomUUID()}`,
@@ -223,11 +280,6 @@ export function createKnowledgeRepository(database, {
     }
   }
 
-  function candidateTitle(value, fallback) {
-    const text = cleanText(value, fallback)
-    return text.length > 34 ? `${text.slice(0, 34)}…` : text
-  }
-
   function stateItemDrafts(chapter, payload) {
     const scope = `第 ${chapter.chapter_no} 章《${chapter.title}》`
     const drafts = []
@@ -277,44 +329,14 @@ export function createKnowledgeRepository(database, {
         itemStatus: 'open',
       })
     }
-    const openForeshadows = [...(payload.foreshadow?.setups || []), ...(payload.openThreads || [])]
-    const seenForeshadows = new Set()
-    for (const value of openForeshadows) {
-      const seed = cleanText(value)
-      if (!seed || seenForeshadows.has(seed)) continue
-      seenForeshadows.add(seed)
-      drafts.push({
-        kind: 'foreshadow', title: candidateTitle(seed, '正文新增伏笔'),
-        content: { seed, promise: '后文需要回应这项信息、异常或未解决问题', notes: `来自${scope}的章后状态提取` }, itemStatus: 'open',
-      })
-    }
-    for (const value of payload.foreshadow?.payoffs || []) {
-      const payoff = cleanText(value)
-      if (!payoff) continue
-      drafts.push({
-        kind: 'foreshadow', title: candidateTitle(`兑现：${payoff}`, '伏笔兑现'),
-        content: { seed: '待与既有伏笔记录核对', payoff, payoffChapterNo: chapter.chapter_no, notes: `来自${scope}；接受后建立一条已回收记录，可再与原伏笔合并。` }, itemStatus: 'resolved',
-      })
-    }
+    drafts.push(...foreshadowDrafts(chapter, payload, payload.openThreads || []))
     return drafts
   }
 
   function seedStateItemCandidates(sourceCandidate, payload, timestamp) {
     const chapter = chapterById.get(sourceCandidate.chapter_id)
     if (!chapter) return
-    const insert = database.prepare(`
-      INSERT INTO knowledge_item_candidates (
-        id, project_id, chapter_id, source_candidate_id, kind, title, content_json,
-        item_status, status, position, created_at, updated_at, resolved_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, '')
-    `)
-    stateItemDrafts(chapter, payload).forEach((draft, index) => {
-      insert.run(
-        createId('knowledge-item-candidate'), sourceCandidate.project_id, sourceCandidate.chapter_id,
-        sourceCandidate.id, draft.kind, draft.title, JSON.stringify(draft.content), draft.itemStatus,
-        index + 1, timestamp, timestamp,
-      )
-    })
+    insertItemCandidates(database, sourceCandidate, stateItemDrafts(chapter, payload), timestamp, createId)
   }
 
   function derivedRecords(projectId) {

@@ -49,3 +49,87 @@ test('a malformed second scene retries only that scene and the merged chapter co
   assert.deepEqual(finished, [['scene-1','completed'],['scene-2','failed'],['scene-3','completed'],['merged','completed']])
   assert.ok(calls.every(call => call.settings.isolatedScene && !call.continuationMessages))
 })
+
+test('scene budgets use actual chapter text, exclude the previous chapter and reserve the closing cue for the last scene', () => {
+  const scenes = [{ title: '进门' }, { title: '看账' }, { title: '还钱' }]
+  const input = { project: { title: '旧账' }, chapter: {} }
+  const compile = (index, preceding) => compileChapterScene({ input, scenes, index, preceding,
+    previousEnding: '旧'.repeat(1800), targetLength: 2500 })
+  const first = compile(0, '')
+  assert.equal(first.scene.budget.target, 833)
+  assert.doesNotMatch(first.messages[1].content, /【章末收束】/)
+  const second = compile(1, '甲'.repeat(700) + '，。')
+  assert.deepEqual(second.scene.budget, { chapterTarget: 2500, written: 700, target: 900 })
+  const last = compile(2, '乙'.repeat(1530))
+  assert.equal(last.scene.budget.target, 970)
+  assert.match(last.messages[1].content, /【章末收束】/)
+})
+
+test('a length correction revisits only the closing scene and assembles the closer valid draft', async () => {
+  const { AgentRuntime } = await import('../electron/agent-runtime.js')
+  for (const [initial, revised, accepted] of [[80, 100, 100], [80, 50, 80], [80, 0, 80], [100, 0, 100], [130, 105, 105]]) {
+    const calls = []
+    const runtime = new AgentRuntime({
+      prepareCodexPrompt: () => ({
+        sceneCount: 2, generationRecordId: 'parent',
+        prepareScene(index, preceding, retryOfId, lengthDraft) {
+          calls.push({ index, preceding, retryOfId, lengthDraft })
+          return { isolatedScene: true, promptSnapshot: { scene: { budget: { chapterTarget: 200, written: preceding.length } } },
+            generationRecordId: 'child-' + calls.length, messages: [] }
+        },
+      }),
+      codexGateway: { prompt: async () => ({ backend: 'codex_acp', structuredOutput: {
+        manuscript: calls.length === 1 ? '甲'.repeat(100) : '乙'.repeat(calls.length === 2 ? initial : revised),
+      } }) },
+      completeCodexGeneration: async () => {},
+    })
+    const result = await runtime._executeTask({ run: { id: 'r', executionMode: 'codex', modelRoutes: {} },
+      step: { id: 's', task: 'chapter' }, mirror: { root: '/unused' }, signal: new AbortController().signal })
+    assert.equal(result.structuredOutput.manuscript, '甲'.repeat(100) + '\n\n' + '乙'.repeat(accepted))
+    assert.equal(calls.length, initial === 100 ? 2 : 3)
+    if (calls.length === 3) assert.deepEqual(calls[2], { index: 1, preceding: '甲'.repeat(100),
+      retryOfId: 'child-2', lengthDraft: '乙'.repeat(initial) })
+    assert.deepEqual(result.sceneRecords, ['child-1', accepted === initial ? 'child-2' : 'child-3'])
+  }
+})
+
+test('late multi-scene chapters bound the entire wire request including schema, without shortening the final chapter or leaking plans', async () => {
+  const { codexPromptText } = await import('../electron/codex-agent-gateway.js')
+  const scenes = Array.from({ length: 41 }, (_, i) => ({ title: '书院' + i, goal: '该场专属目标' + i + '号' }))
+  const parts = scenes.slice(0, -1).map((_, i) => '行'.repeat(2400) + '实际落点' + i)
+  const preceding = parts.join('\n\n')
+  const input = { project: { title: '旧账', style: '旧'.repeat(12000) + '注意人称' }, chapter: { chapter_no: 800, title: '归来' },
+    sceneInstruction: '只让他发现还款凭条', longContext: { text: '其他章节原文'.repeat(150000) } }
+  const outputSchema = { description: '格式说明'.repeat(150), properties: { manuscript: { type: 'string' } } }
+  const options = { input, scenes, preceding, precedingScenes: parts, previousEnding: '前章结尾', index: 40, displayTitle: '终场',
+    outputSchema, targetLength: 12000 }
+  for (const limit of [8000, 1000000, undefined]) {
+    const snap = compileChapterScene({ ...options, maxChars: limit })
+    const wire = codexPromptText({ messages: snap.messages, outputSchema, displayTitle: '终场' })
+    assert.equal(snap.contextDiagnostics.usedChars, wire.length)
+    assert.equal(snap.contextDiagnostics.usedBytes, Buffer.byteLength(wire))
+    assert.ok(wire.length <= Math.min(24000, limit || Infinity) && Buffer.byteLength(wire) <= 48000)
+    assert.ok(snap.contextDiagnostics.shortened.includes('earlierScenes'))
+    assert.match(wire, /实际落点39/)
+    assert.match(wire, /该场专属目标40号/)
+    assert.match(wire, /只让他发现还款凭条/)
+    assert.match(wire, /注意人称/)
+    assert.doesNotMatch(wire, /其他章节原文|该场专属目标39号/)
+    assert.equal(snap.scene.budget.written, 2400 * 40 + 4 * 40)
+    if (limit !== 8000) assert.match(wire, /第1场末尾原文/)
+  }
+  assert.equal(parts.length, 40)
+})
+
+test('oversize mandatory material is reported before sending; a matched quotation is never sent partially', () => {
+  const scene = { title: '算价钱', goal: '他舍不得这笔钱。' }
+  const input = { project: { title: '还钱', style: '节制' }, chapter: { title: '钱' }, task: 'chapter', intent: 'draft',
+    promptContext: { voiceLibrary: { samples: [{ use: '人物盘算', text: '不得泄露片段'.repeat(2000), title: '参考', label: '一' }] } } }
+  const opts = { scenes: [scene], index: 0, input, maxChars: 8000 }
+  const snap = compileChapterScene(opts)
+  assert.deepEqual(snap.voiceSamples, [])
+  assert.ok(snap.contextDiagnostics.shortened.includes('reference'))
+  assert.doesNotMatch(snap.messages[1].content, /不得泄露片段/)
+  assert.throws(() => compileChapterScene({ ...opts, lengthDraft: '全'.repeat(8400) }), { name: 'SceneRepairContextTooLarge' })
+  assert.throws(() => compileChapterScene({ ...opts, input: { ...input, sceneInstruction: '约定'.repeat(8000) } }), { name: 'SceneContextTooLarge' })
+})

@@ -150,3 +150,32 @@ test('delta retrieval keeps relevant earlier sources, excludes stale/future fact
   assert.equal(stateContext.text,'');assert.equal(contentDigest(manuscript).length,64)
   db.close()
 })
+
+test('writing requests carry the clue registration rule and confirmed handoffs produce reviewable, evidenced cards once', async () => {
+  const { createKnowledgeRepository } = await import('../electron/knowledge-repository.js')
+  const { FORESHADOW_WRITING_RULE, FORESHADOW_HANDOFF_RULE } = await import('../electron/chapter-handoff.js')
+  const db = setup()
+  const repository = createFinalizationRepository(db)
+  const knowledge = createKnowledgeRepository(db)
+  const chapter = { id: 'c1', chapter_no: 1, manuscript }
+  for (const task of ['chapter', 'rewrite']) {
+    assert.ok(compilePrompt({ task, chapter, project: { title: '测试' } }).messages[0].content.includes(FORESHADOW_WRITING_RULE))
+  }
+  for (const chapterStateMode of [undefined, COMPACT_HANDOFF_MODE]) {
+    assert.ok(compilePrompt({ task: 'chapter_state_extract', chapter, chapterStateMode }).messages[0].content.includes(FORESHADOW_HANDOFF_RULE))
+  }
+  const state = emptyState()
+  state.foreshadow.setups.push({ text: '背面的字是谁留下的', evidence: '她发现纸条背面还有字。' })
+  const record = repository.start({ projectId: 'p', chapterId: 'c1', reviewer, deferReview: true })
+  repository.storeState(record.id, state)
+  assert.equal(knowledge.loadKnowledgeCenter('p').itemCandidates.length, 0)
+  repository.confirm(record.id)
+  repository.confirm(record.id)
+  const [card, ...others] = knowledge.loadKnowledgeCenter('p').itemCandidates
+  assert.equal(others.length, 0)
+  assert.equal(card.status, 'pending')
+  assert.equal(card.content.evidence, state.foreshadow.setups[0].evidence)
+  const center = knowledge.resolveItemCandidate({ id: card.id, status: 'accepted' })
+  assert.equal(center.foreshadows[0].content.evidence, card.content.evidence)
+  db.close()
+})

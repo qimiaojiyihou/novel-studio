@@ -1,3 +1,7 @@
+export function manuscriptCharacterCount(value = '') {
+  return String(value).match(/[\u3400-\u4dbf\u4e00-\u9fff]/gu)?.length || 0
+}
+
 // Editorial findings are evidence, never instructions to silently rewrite a draft.
 export function checkManuscript(text = '', { targetLength = 0 } = {}) {
   const source = String(text)
@@ -19,7 +23,7 @@ export function checkManuscript(text = '', { targetLength = 0 } = {}) {
     if (seen.has(paragraph)) add('duplicate-paragraph', 'high', '发现重复长段落，请确认是否为有意复现。', match.index, match.index + match[0].length)
     seen.set(paragraph, match.index)
   }
-  const hanCount = [...source].filter((char) => /[\u3400-\u4dbf\u4e00-\u9fff]/u.test(char)).length
+  const hanCount = manuscriptCharacterCount(source)
   if (targetLength > 0 && (hanCount < targetLength * .9 || hanCount > targetLength * 1.2)) {
     add('length', 'warning', `当前 ${hanCount} 中文字，目标约 ${targetLength} 字；可局部扩写、删减或保留。`, 0, 0)
   }

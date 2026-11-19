@@ -7,11 +7,15 @@ export const HANDOFF_SECTIONS = [
   ['openThreads', '后续承接'],
 ]
 
+export const FORESHADOW_WRITING_RULE = '有意留给后章回应的线索都要进伏笔卡。埋设或兑现时，把可核对的物证、动作或话语自然写进正文，供章后提取候选、作者确认。日常细节按场景需要写，无需刻意设谜或在正文附卡片。'
+export const FORESHADOW_HANDOFF_RULE = '逐项检查本章有意留待后文回应的问题、承诺和异常，列入 foreshadow.setups；本章已给出回应的列入 payoffs。每项写清什么仍待回应或已经兑现，并逐字摘录本章证据。普通道具和已经当场交代完的细节略过。'
+
 export const COMPACT_HANDOFF_CONTRACT = `你是章节交接记录员。当前任务只提取本章有原文依据、会影响后续创作的变化，不评价文采，也不重述整个故事。
 返回一个 JSON 对象：summary（简短交接摘要）、facts、characterStates、relationshipChanges、timelineEvents、foreshadow（setups、payoffs 两个数组）、openThreads。所有数组元素为对象，每项带 evidence 字符串，逐字复制当前正文的一段短引句；多处不连续证据用换行分隔，不添加引号、解释或省略号。无变化的类别返回空数组。
 facts 使用 subject、predicate、object、certainty（confirmed/reported/suspected）、evidence；人物说法、猜测保留 reported/suspected，不当成已证实事实。
 characterStates 使用 character、location、physical、emotional、possessions、knows、evidence。只记录本章改变的状态；未提及的字段用空字符串或空数组，含义是本章未更新，不表示历史状态消失。possessions 仅记录关键证物或影响后续行动的物品变更，knows 仅记录本章明确新增的知情内容。
 relationshipChanges 使用 text、evidence；timelineEvents 使用 time、event、participants、consequence、evidence；伏笔和 openThreads 使用 text、evidence。悬而未决的问题仍是问题，不推断谜底，不编造下一章事件。
+${FORESHADOW_HANDOFF_RULE}
 不要复制前章人物全量清单或无变化的旧事实，不逐一登记毛巾、餐具等日常道具，除非其在本章承担关键证据或行动作用。同一变化只在最适合的类别记录，其他类别不要重复扩写。
 通常总计 6—12 项、摘要约 100—180 字就够；这是精简建议，不是配额。信息少时更少，确有重要变化时可超出，优先保留关键因果、知情变化与承接点。只返回交接 JSON，不返回解释、流程承诺或正文改写。`
 

@@ -2,7 +2,7 @@ import { isReferenceDraftTarget } from './inline-creative.js'
 import { validateChapterCard, validateScenePlan } from './creative-quality.js'
 import { CodexCancelledError } from './codex-agent-gateway.js'
 import { cleanPlanningFieldText } from './generated-text.js'
-import { checkManuscript } from './manuscript-checks.js'
+import { checkManuscript, manuscriptCharacterCount } from './manuscript-checks.js'
 import { applyTextPatches, assertProtectedText } from './manuscript-patches.js'
 import { normalizePlanningChapterBundleCandidate, normalizePlanningDocumentBundleCandidate, normalizePlanningEntityBundleCandidate } from './planning-bundle.js'
 import { COLLABORATIVE_WORKFLOW_ID, collaborativeExecution, collaborativeRepairInput, reviewedIssues } from './collaborative-writing.js'
@@ -16,9 +16,7 @@ function normalizedTargetLength(value) {
   return Number.isFinite(target) && target > 0 ? Math.round(target) : 0
 }
 
-export function manuscriptCharacterCount(value = '') {
-  return [...String(value)].filter((char) => /[\u3400-\u4dbf\u4e00-\u9fff]/u.test(char)).length
-}
+export { manuscriptCharacterCount }
 
 export function manuscriptLengthRange(targetLength) {
   const target = normalizedTargetLength(targetLength)
@@ -496,15 +494,30 @@ export class AgentRuntime {
     const prepared = await this.prepareCodexPrompt({ run, step, mirror, extra })
     if (!prepared.sceneCount) return this._sendCodex({ run, step, mirror, prepared, signal, extra })
     const parts = [], sceneRecords = []
-    let result
+    let result, lengthRepairNote
     try {
       for (let index = 0; index < prepared.sceneCount; index++) {
         let retryOfId = null
         for (let attempt = 1; attempt <= 3; attempt++) {
           if (signal.aborted) throw new CodexCancelledError()
-          const scene = { ...prepared, ...prepared.prepareScene(index, parts.join('\n\n'), retryOfId) }
+          const preceding = parts.join('\n\n')
+          const scene = { ...prepared, ...prepared.prepareScene(index, preceding, retryOfId, undefined, parts) }
           try {
             result = await this._sendCodex({ run, step, mirror, prepared: scene, signal, extra, attempt })
+            const budget = scene.promptSnapshot?.scene?.budget
+            if (index === prepared.sceneCount - 1 && budget && attempt < 3) {
+              const difference = draft => Math.abs(budget.written + manuscriptCharacterCount(draft.structuredOutput.manuscript) - budget.chapterTarget)
+              if (difference(result) > Math.max(1, Math.round(budget.chapterTarget * 0.05))) {
+                try {
+                  const repair = { ...prepared, ...prepared.prepareScene(index, preceding, result.generationRecordId, result.structuredOutput.manuscript, parts) }
+                  const adjusted = await this._sendCodex({ run, step, mirror, prepared: repair, signal, extra, attempt: attempt + 1 })
+                  if (difference(adjusted) < difference(result)) result = adjusted
+                } catch (error) {
+                  if (error.name === 'SceneRepairContextTooLarge') lengthRepairNote = '末场篇幅调整超出单场上下文预算，合稿采用完整首稿。'
+                  else if (error.name !== 'InvalidSceneOutput') throw error
+                }
+              }
+            }
             parts.push(result.structuredOutput.manuscript.trim())
             sceneRecords.push(result.generationRecordId)
             break
@@ -516,7 +529,7 @@ export class AgentRuntime {
       }
       const manuscript = parts.join('\n\n')
       const assembled = { backend: result.backend, modelSnapshot: result.modelSnapshot, outputStarted: true,
-        structuredOutput: { manuscript }, content: manuscript, sceneRecords, generationRecordId: prepared.generationRecordId }
+        structuredOutput: { manuscript }, content: manuscript, sceneRecords, lengthRepairNote, generationRecordId: prepared.generationRecordId }
       await this.completeCodexGeneration({ prepared, result: assembled, status: 'completed', attempt: 1 })
       return assembled
     } catch (error) {

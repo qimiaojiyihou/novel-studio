@@ -348,6 +348,7 @@ const fieldSets = {
   ],
   foreshadow: [
     { key: 'seed', label: '伏笔种子', hint: '读者先看到什么', type: 'textarea', wide: true, placeholder: '一个物件、动作、异常信息或未解释的选择' },
+    { key: 'evidence', label: '正文原句', hint: '核对这条伏笔在哪一句埋下或兑现', type: 'textarea', wide: true, placeholder: '摘录来源章节的一句原文' },
     { key: 'promise', label: '阅读承诺', hint: '它让读者等待什么答案', type: 'textarea', placeholder: '读者会期待它解释什么或改变什么' },
     { key: 'dueChapterNo', label: '预定回收章', hint: '超过后会进入连续性提醒', type: 'number', placeholder: '章节号' },
     { key: 'payoffChapterNo', label: '实际回收章', hint: '完成后补记', type: 'number', placeholder: '尚未回收可留空' },

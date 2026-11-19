@@ -1,3 +1,5 @@
+import { PROMPT_SNAPSHOT_SCHEMA_VERSION } from './prompt-templates.js'
+import { loadSceneForeshadows, createManuscriptRecall } from './scene-foreshadow.js'
 import { chapterWritingScenes, compileChapterScene } from './chapter-scene-writing.js'
 import { selectVoiceSamples, voicePassage } from './reference-voice.js'
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell, safeStorage } from 'electron'
@@ -166,7 +168,7 @@ import {
 import { manuscriptExport, parseManuscript } from './manuscript-formats.js'
 import { probeModelCapabilities } from './model-adapter.js'
 import { createModelGateway } from './model-gateway.js'
-import { compilePrompt } from './prompt-compiler.js'
+import { normalizedTemplate, compilePrompt } from './prompt-compiler.js'
 import {
   PROMPT_EVAL_BENCHMARK,
   URBAN_SUSPENSE_BENCHMARK,
@@ -543,7 +545,14 @@ async function prepareCodexPrompt({ run, step, extra = {} }) {
   const localRevision = inlineAction?.patchSource && inlineAction.modificationScope?.kind !== 'whole'
     ? { text: inlineAction.patchSource.text, scope: inlineAction.modificationScope }
     : undefined
-  const longContext = referenceAnalysis ? null : buildGenerationContext({
+  const codexSettings = loadCodexSettings()
+  const agentProvider = normalizeAgentProvider(run.modelRoutes?.agentProvider ?? codexSettings?.agentProvider)
+  const scenes = chapterWritingScenes({ task: step.task, intent, chapter }, agentProvider, step)
+  const foreshadows = scenes.length ? loadSceneForeshadows(openDatabase(), run.projectId, chapter.chapter_no) : []
+  const previousChapters = new Map(scenes.length ? workspace.chapters.filter(c => c.chapter_no < chapter.chapter_no).map(c => [c.chapter_no, c.manuscript]) : [])
+  const recallManuscript = scenes.length ? createManuscriptRecall(previousChapters, planningCenter?.characters?.map(c => c.title)) : null
+  const sceneProfile = scenes.length ? openDatabase().prepare('SELECT max_context_chars, context_budget_unlimited FROM context_profiles WHERE project_id=?').get(run.projectId) : null
+  const longContext = referenceAnalysis || scenes.length ? null : buildGenerationContext({
     projectId: run.projectId,
     chapterId: run.chapterId,
     creativePackVersion: run.creativePack?.version,
@@ -554,8 +563,6 @@ async function prepareCodexPrompt({ run, step, extra = {} }) {
     intent,
     localRevision,
   })
-  const codexSettings = loadCodexSettings()
-  const agentProvider = normalizeAgentProvider(run.modelRoutes?.agentProvider ?? codexSettings?.agentProvider)
   const codexRunSettings = {
     agentProvider,
     model: run.modelRoutes?.codexModel ?? agentProviderModel(codexSettings, agentProvider),
@@ -720,12 +727,16 @@ async function prepareCodexPrompt({ run, step, extra = {} }) {
     } : inlineAction ? inlinePlanningInput({ step, workspace, planningCenter, chapter }) : undefined,
     instruction: [...baseInstructionParts, inlineRevisionInstruction, extra.collaborativeRepair ? '仅修复作者勾选的问题；保留其他情节、人物声音、有效句子和结局。返回完整候选正文。' : ''].filter(Boolean).join('\n'),
   }
-  const compiled = compilePrompt(promptInput)
+  const sceneTemplate = scenes.length ? normalizedTemplate(step.task, promptContext) : null
+  const compiled = scenes.length ? { messages: [], snapshot: {
+    schemaVersion: PROMPT_SNAPSHOT_SCHEMA_VERSION,
+    template: { id: sceneTemplate.id, name: sceneTemplate.name, task: step.task, version: sceneTemplate.version },
+  } } : compilePrompt(promptInput)
   const previousStep = [...(run.steps || [])]
     .filter((candidateStep) => Number(candidateStep.position) < Number(step.position) && candidateStep.promptSnapshot?.contextSources?.length)
     .sort((left, right) => Number(right.position) - Number(left.position))[0]
   const conversationScopeKey = inlineAction?.conversationScope?.reusable ? inlineAction.conversationScope.key : ''
-  const deltaContext = !rendererDraftContext && conversationScopeKey ? buildContextDelta({
+  const deltaContext = !scenes.length && !rendererDraftContext && conversationScopeKey ? buildContextDelta({
     currentContext: effectiveLongContext,
     previousSnapshot: previousStep?.promptSnapshot,
     conversationScopeKey,
@@ -743,7 +754,7 @@ async function prepareCodexPrompt({ run, step, extra = {} }) {
     run,
     step,
   })
-  const patchVoice = [voicePassage(selectVoiceSamples(promptContext?.voiceLibrary, promptInput), promptContext?.voiceLibrary?.previousEnding), compiled.snapshot.detailDirection].filter(Boolean).join('\n')
+  const patchVoice = scenes.length ? '' : [voicePassage(selectVoiceSamples(promptContext?.voiceLibrary, promptInput), promptContext?.voiceLibrary?.previousEnding), compiled.snapshot.detailDirection].filter(Boolean).join('\n')
   const executionMessages = inlineRevisionMessages({ voicePassage: patchVoice, action: inlineAction, context: effectiveLongContext, candidate: revisionCandidate, repairInstruction }) || compiled.messages
   const continuationMessages = deltaContext
     ? inlineRevisionMessages({ voicePassage: patchVoice, action: inlineAction, context: deltaContext, isDelta: true, repairInstruction }) || continuationCompiled?.messages || null
@@ -768,7 +779,6 @@ async function prepareCodexPrompt({ run, step, extra = {} }) {
   compiled.snapshot.continuationPromptHash = continuationMessages
     ? createHash('sha256').update(JSON.stringify(continuationMessages)).digest('hex')
     : ''
-  const scenes = chapterWritingScenes(promptInput, agentProvider, step)
   const previousEnding = scenes.length ? workspace.chapters.find(item => item.chapter_no === chapter.chapter_no - 1)?.manuscript?.slice(-1800) || '' : ''
   // The parent is a local assembly record. Only its children are model requests.
   const recordSnapshot = scenes.length ? { schemaVersion: compiled.snapshot.schemaVersion, template: compiled.snapshot.template,
@@ -802,9 +812,11 @@ async function prepareCodexPrompt({ run, step, extra = {} }) {
   })
   return {
     sceneCount: scenes.length,
-    prepareScene: scenes.length ? (index, preceding, retryOfId) => {
-      const snapshot = compileChapterScene({ input: promptInput, scenes, index, previousEnding, preceding, targetLength: lengthRange?.target })
-      const sceneTitle = `${displayTitle} · 第${index + 1}场 ${snapshot.scene.title}`
+    prepareScene: scenes.length ? (index, preceding, retryOfId, lengthDraft, precedingScenes) => {
+      const sceneTitle = `${displayTitle} · 第${index + 1}场 ${String(scenes[index].title || `场景 ${index + 1}`).slice(0, 120)}`
+      const snapshot = compileChapterScene({ input: promptInput, scenes, index, previousEnding, preceding, precedingScenes, lengthDraft, foreshadows, recallManuscript, previousManuscript: no => previousChapters.get(no),
+        targetLength: lengthRange?.target, displayTitle: sceneTitle, outputSchema: compiled.snapshot.outputSchema,
+        maxChars: sceneProfile?.context_budget_unlimited ? undefined : sceneProfile?.max_context_chars })
       snapshot.outputSchema = compiled.snapshot.outputSchema
       snapshot.displayTitle = sceneTitle
       const sceneRecord = startGenerationRecord({ taskId: `scene-${run.id}-${step.id}-${index}-${Date.now()}`,
@@ -855,6 +867,7 @@ async function completeCodexGeneration({ prepared, result, error, status, attemp
       contextReuse: result?.contextReuse || 'full',
       usage: result?.usage || {},
       ...(result?.sceneRecords && { sceneRecords: result.sceneRecords }),
+      ...(result?.lengthRepairNote && { lengthRepairNote: result.lengthRepairNote }),
       ...(result?.sentPromptHash && { sentPromptHash: result.sentPromptHash,
         sessionFingerprint: result.sessionId ? createHash('sha256').update(result.sessionId).digest('hex') : '' }),
     },
@@ -1335,11 +1348,13 @@ async function initializeCodexIntegration() {
         loadKnowledgeCenter(run.projectId)
       }
       if (run.creativePack?.version !== '1.3.0') return mirrorForRun(run).sourceDigest
-      const context = buildGenerationContext({ projectId: run.projectId, chapterId: run.chapterId, instruction: step?.input?.instruction || '', creativePackVersion: run.creativePack.version,
-        task: step?.task, intent: (run.workflowId === 'inline-action' ? step?.input?.intent : '') || 'draft', chapterStateMode: run.modelRoutes?.chapterStateMode })
-      // The current manuscript/target is a required dependency even if no paragraph matched retrieval.
       const workspace = loadWorkspaceSnapshot(run.projectId)
       const chapter = workspace.chapters.find(item => item.id === run.chapterId)
+      const intent = (run.workflowId === 'inline-action' ? step?.input?.intent : '') || 'draft'
+      const sceneDependenciesOnly = run.executionMode === 'codex' && step &&
+        chapterWritingScenes({ task: step.task, intent, chapter }, run.modelRoutes?.agentProvider || 'codex', step).length > 0
+      const context = buildGenerationContext({ projectId: run.projectId, chapterId: run.chapterId, instruction: step?.input?.instruction || '', creativePackVersion: run.creativePack.version,
+        task: step?.task, intent, sceneDependenciesOnly, chapterStateMode: run.modelRoutes?.chapterStateMode })
       const planning = step?.input?.target ? inlinePlanningInput({ step, workspace, chapter: chapter || workspace.chapters[0], planningCenter: loadPlanningCenter(run.projectId) }) : null
       return createHash('sha256').update(JSON.stringify({ context: contextDependencyDigest(context), manuscript: chapter?.manuscript, target: step?.input?.target?.targetId,
         planning, draftDigest: step?.input?.target?.draftDigest })).digest('hex')

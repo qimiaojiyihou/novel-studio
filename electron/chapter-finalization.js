@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
+import { seedFinalizedForeshadows } from './knowledge-repository.js'
 import { checkManuscript } from './manuscript-checks.js'
 import { COMPACT_HANDOFF_MODE, correctStateEvidence, stateEvidenceIssues } from './chapter-handoff.js'
 
@@ -115,6 +116,7 @@ export function createFinalizationRepository(db, { now = () => new Date().toISOS
         .run(`knowledge-${record.id}`, record.project_id, chapter.id, JSON.stringify({ ...record.state,
           _handoff: { mode: record.handoff.mode, sourceDigest: record.source_digest, revisionId: record.revision_id,
             ...(record.handoff.authorAmendment ? { authorAmendment: record.handoff.authorAmendment } : {}) } }), JSON.stringify(record.reviewer), now(), now())
+      seedFinalizedForeshadows(db, chapter, record.state, `knowledge-${record.id}`, now())
       db.prepare("UPDATE chapters SET status = 'completed' WHERE id = ?").run(chapter.id)
       if (record.handoff.authorCorrections?.length && record.state_run_id) {
         const original = db.prepare("SELECT * FROM agent_candidates WHERE run_id=? AND status='pending' ORDER BY rowid DESC LIMIT 1").get(record.state_run_id)

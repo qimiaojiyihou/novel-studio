@@ -235,6 +235,11 @@ export function buildCreativeContext(db, input = {}) {
   function add(key, label, value, required = false, dependencyValue = value) {
     const text = `【${label}】\n${typeof value === 'string' ? value : JSON.stringify(value)}\n`
     if (budget !== null && usedChars + text.length > budget) {
+      // A scene-run digest needs the dependency, not the unsent whole-chapter text.
+      if (required && input.sceneDependenciesOnly) {
+        sources.push({ targetKey: key, digest: hash(dependencyValue), required })
+        return true
+      }
       if (required) throw new Error(`必需事实超出上下文预算（${budget}字符），请缩小当前创作范围：${label}`)
       omitted.push({ targetKey: key, reason: '上下文预算不足' }); return false
     }
